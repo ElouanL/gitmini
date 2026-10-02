@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-stash-branch"
+description = "Enables the stash_branch command without any pre-configured scope."
+commands.allow = ["stash_branch"]
+
+[[permission]]
+identifier = "deny-stash-branch"
+description = "Denies the stash_branch command without any pre-configured scope."
+commands.deny = ["stash_branch"]

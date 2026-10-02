@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-refs-list"
+description = "Enables the refs_list command without any pre-configured scope."
+commands.allow = ["refs_list"]
+
+[[permission]]
+identifier = "deny-refs-list"
+description = "Denies the refs_list command without any pre-configured scope."
+commands.deny = ["refs_list"]

@@ -1,0 +1,33 @@
+[workspace]
+resolver = "3"
+members = ["crates/gitmini-core", "crates/gitmini-bridge", "src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-only"
+
+# Development Profiles: Most ~40 test binaries link gix + tauri; without complete debugging information
+# `target/` remains of reasonable size (it exceeded 20 GB).
+[profile.dev]
+debug = "line-tables-only"
+[profile.dev.package."*"]
+debug = false
+[profile.test]
+debug = "line-tables-only"
+
+# Release profiles
+# `release` : installers. `panic = "abort"` : the src-tauri panic hook writes `crash.log` before the abort.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+opt-level = 3
+strip = true
+panic = "abort"
+
+# `release-perf`: perf CI (B12, binary measured conservatively).
+[profile.release-perf]
+inherits = "release"
+lto = "fat"
+codegen-units = 16

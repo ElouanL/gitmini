@@ -1,0 +1,5 @@
+gitmini is licensed under GPL-3.0-only. Dependencies retain their original licenses.
+
+The E2E-only fonts are Inter and Roboto Mono, distributed under the SIL Open Font License 1.1 by their respective authors. Their license files are provided by the @fontsource/inter and @fontsource/roboto-mono packages. These fonts are used only by the test build.
+
+Production dependencies are checked against deny.toml by cargo-deny and scripts/ci-license-check.mjs. Consult the dependency packages for full license texts and notices.

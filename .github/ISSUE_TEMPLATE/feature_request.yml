@@ -1,0 +1,10 @@
+name: Feature request
+description: Suggest an improvement to gitmini.
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem and proposed behavior
+      description: Explain the workflow and what would improve it.
+    validations:
+      required: true

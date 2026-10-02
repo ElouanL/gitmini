@@ -1,0 +1,181 @@
+# Create a verified draft. Publish manually after the installation/update smoke checks in docs/releases.md.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing release tag, e.g. v0.1.0"
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+  NODE_VERSION: "24"
+  CARGO_TERM_COLOR: always
+  VITE_GITMINI_GITHUB_LOGIN: "0"
+  GITMINI_UPDATER_ENDPOINT: ${{ vars.GITMINI_UPDATER_ENDPOINT || format('https://github.com/{0}/releases/latest/download/latest.json', github.repository) }}
+  GITMINI_UPDATER_PUBKEY: ${{ vars.GITMINI_UPDATER_PUBKEY }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    env:
+      HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+    steps:
+      - name: Verify tag exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > /dev/null
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Validate version and updater identity
+        run: node scripts/updater-release.mjs check
+
+  build:
+    name: build (${{ matrix.id }})
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { id: macos-arm64, os: macos-14, args: "--target aarch64-apple-darwin", targets: aarch64-apple-darwin }
+          - { id: macos-x64, os: macos-14, args: "--target x86_64-apple-darwin", targets: x86_64-apple-darwin }
+          - { id: linux, os: ubuntu-22.04, args: "", targets: "" }
+          - { id: windows, os: windows-2022, args: "", targets: "" }
+    env:
+      HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Linux build prerequisites
+        if: runner.os == 'Linux'
+        run: bash scripts/ci-install-linux-deps.sh release
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.targets }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.id }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-binstall
+      - name: Install Tauri CLI
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: cargo binstall --no-confirm --locked tauri-cli --version '^2'
+      - name: Configure signed updater artifacts
+        run: node scripts/updater-release.mjs config
+      - name: Build installers and update the draft
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tauriScript: cargo tauri
+          tagName: ${{ env.TAG }}
+          releaseName: gitmini ${{ env.TAG }}
+          releaseBody: |
+            macOS: ad hoc signed `.dmg` installers for Apple Silicon and Intel, without notarization.
+            Windows: unsigned `.msi`. Linux: `.AppImage` and `.deb`.
+            Automatic updates are signed with the gitmini updater key. Verify downloads with `SHA256SUMS`.
+            See `docs/releases.md` for installation and verification instructions.
+          releaseDraft: true
+          prerelease: false
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: false
+          args: ${{ matrix.args }} --config "${{ env.GITMINI_RELEASE_CONFIG }}"
+
+  verify-macos:
+    needs: build
+    runs-on: macos-14
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Verify both macOS installers have valid ad hoc signatures
+        shell: bash
+        run: |
+          mkdir dl
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*.dmg' --dir dl
+          test "$(find dl -name '*.dmg' | wc -l | tr -d ' ')" = 2
+          for dmg in dl/*.dmg; do
+            mnt="$(mktemp -d)"
+            hdiutil attach "$dmg" -nobrowse -readonly -mountpoint "$mnt"
+            app="$(find "$mnt" -maxdepth 1 -name '*.app' -print -quit)"
+            test -n "$app"
+            codesign --verify --deep --strict --verbose=2 "$app"
+            codesign --display --verbose=4 "$app" 2>&1 | tee signature.txt
+            grep -q '^Signature=adhoc$' signature.txt
+            hdiutil detach "$mnt"
+          done
+
+  assets:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Download the draft assets
+        run: |
+          mkdir dl
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dl \
+            --pattern '*.dmg' --pattern '*.msi' --pattern '*.AppImage' --pattern '*.deb' \
+            --pattern '*.app.tar.gz' --pattern '*.sig' --pattern 'latest.json'
+          test "$(find dl -name '*.msi' | wc -l)" -eq 1
+          test "$(find dl -name '*.deb' | wc -l)" -eq 1
+      - name: Verify version, platform coverage, URLs and all updater signatures
+        run: node scripts/updater-release.mjs verify dl
+      - name: Generate and upload checksums
+        working-directory: dl
+        run: |
+          sha256sum -- * | sort -k2 > SHA256SUMS
+          sha256sum --check SHA256SUMS
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber SHA256SUMS
+
+  ready:
+    needs: [verify-macos, assets]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Draft ready for manual installation and update checks
+        run: echo "Draft $TAG verified. Follow docs/releases.md before publishing manually." >> "$GITHUB_STEP_SUMMARY"

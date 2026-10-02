@@ -1,0 +1,9 @@
+---
+source: crates/gitmini-core/tests/graph.rs
+expression: "golden(rows, Some(\"M\"), &[])"
+---
+M lane=0 color=0 edges=[↓0→0 c0, ↓0→1 c1]
+F2 lane=1 color=1 edges=[↑0→0 c0, ↑1→1 c1, ↓1→1 c1, ↓0→0 c0]
+B lane=0 color=0 edges=[↑0→0 c0, ↑1→1 c1, ↓0→0 c0, ↓1→1 c1]
+F1 lane=1 color=1 edges=[↑0→0 c0, ↑1→1 c1, ↓1→0 c0, ↓0→0 c0]
+A lane=0 color=0 edges=[↑0→0 c0]

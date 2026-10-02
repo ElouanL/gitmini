@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-repo-activate"
+description = "Enables the repo_activate command without any pre-configured scope."
+commands.allow = ["repo_activate"]
+
+[[permission]]
+identifier = "deny-repo-activate"
+description = "Denies the repo_activate command without any pre-configured scope."
+commands.deny = ["repo_activate"]

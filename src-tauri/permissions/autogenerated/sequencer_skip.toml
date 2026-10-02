@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-sequencer-skip"
+description = "Enables the sequencer_skip command without any pre-configured scope."
+commands.allow = ["sequencer_skip"]
+
+[[permission]]
+identifier = "deny-sequencer-skip"
+description = "Denies the sequencer_skip command without any pre-configured scope."
+commands.deny = ["sequencer_skip"]

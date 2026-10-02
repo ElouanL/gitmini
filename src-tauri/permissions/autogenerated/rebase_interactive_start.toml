@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-rebase-interactive-start"
+description = "Enables the rebase_interactive_start command without any pre-configured scope."
+commands.allow = ["rebase_interactive_start"]
+
+[[permission]]
+identifier = "deny-rebase-interactive-start"
+description = "Denies the rebase_interactive_start command without any pre-configured scope."
+commands.deny = ["rebase_interactive_start"]

@@ -1,0 +1,3 @@
+# Build context of ci/e2e.Dockerfile: Only the entrypoint is copied in the image (the repository is mounted on execution).
+*
+!ci/e2e-entrypoint.sh

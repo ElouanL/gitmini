@@ -1,0 +1,14 @@
+---
+source: crates/gitmini-core/tests/graph.rs
+expression: "fixture_golden(\"divergent\")"
+---
+b250056 lane=1 color=1 edges=[↓1→1 c1] parents=[9b0d5c7] refs=[feature-ff]
+9b0d5c7 lane=1 color=1 edges=[↑1→1 c1, ↓1→0 c0] parents=[dfe7953] refs=[]
+666dee4 lane=1 color=2 edges=[↑0→0 c0, ↓1→1 c2, ↓0→0 c0] parents=[ce45d70] refs=[feature]
+ce45d70 lane=1 color=2 edges=[↑0→0 c0, ↑1→1 c2, ↓1→1 c2, ↓0→0 c0] parents=[102a3af] refs=[]
+102a3af lane=1 color=2 edges=[↑0→0 c0, ↑1→1 c2, ↓1→1 c2, ↓0→0 c0] parents=[13902e3] refs=[]
+13902e3 lane=1 color=2 edges=[↑0→0 c0, ↑1→1 c2, ↓1→1 c2, ↓0→0 c0] parents=[bd3341c] refs=[]
+dfe7953 lane=0 color=0 edges=[↑0→0 c0, ↑1→1 c2, ↓0→0 c0, ↓1→1 c2] parents=[e375dcc] refs=[main*]
+e375dcc lane=0 color=0 edges=[↑0→0 c0, ↑1→1 c2, ↓0→0 c0, ↓1→1 c2] parents=[770b5e7] refs=[]
+770b5e7 lane=0 color=0 edges=[↑0→0 c0, ↑1→1 c2, ↓0→0 c0, ↓1→0 c2] parents=[bd3341c] refs=[]
+bd3341c lane=0 color=0 edges=[↑0→0 c0] parents=[] refs=[]

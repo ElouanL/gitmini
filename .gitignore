@@ -1,0 +1,14 @@
+/target
+/target-docker
+node_modules
+dist
+.svelte-kit
+*.log
+.DS_Store
+/src-tauri/target
+/src-tauri/gen
+/tests/e2e/.artifacts
+/tests/perf/results
+perf-results.json
+/.pnpm-store
+/.idea

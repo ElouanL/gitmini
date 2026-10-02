@@ -1,0 +1,10 @@
+---
+source: crates/gitmini-core/tests/graph.rs
+expression: "fixture_golden(\"stash-multi\")"
+---
+stash@{0} lane=1 color=1 edges=[↓1→0 c0 ~] parents=[6a63375] refs=[]
+stash@{1} lane=1 color=2 edges=[↑0→0 c0, ↓1→0 c0 ~, ↓0→0 c0] parents=[6a63375] refs=[]
+stash@{2} lane=1 color=3 edges=[↑0→0 c0, ↓1→0 c0 ~, ↓0→0 c0] parents=[6a63375] refs=[]
+6a63375 lane=0 color=0 edges=[↑0→0 c0, ↓0→0 c0] parents=[8057bf9] refs=[main*]
+8057bf9 lane=0 color=0 edges=[↑0→0 c0, ↓0→0 c0] parents=[f34b69c] refs=[]
+f34b69c lane=0 color=0 edges=[↑0→0 c0] parents=[] refs=[]

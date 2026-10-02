@@ -1,0 +1,70 @@
+[package]
+name = "gitmini-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait = "0.1.92"
+base64 = "0.23.1"
+gix = { version = "0.87.1", features = ["max-performance-safe", "status", "blob-diff", "revision"] }
+keyring = "4.2.0"
+libc = "0.2.190"
+lru = "0.18.5"
+notify = "8.2.0"
+regex = "1.13.1"
+# GitHub (10): Rustls with supplier `ring` (licences ISC/Apache-2.0; `aws-lc-sys` takes on the OpenSSL license,
+# missing deny.toml ) The supplier is installed by `github::api` .
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "system-proxy", "json", "form", "query"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+secrecy = "0.10.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+shlex = "2.0.1"
+specta = { version = "=2.0.0-rc.25", features = ["derive", "serde_json"] }
+specta-serde = "0.0.12"
+specta-typescript = "0.0.12"
+tempfile = "3.27.0"
+thiserror = "2.0.21"
+tokio = { version = "1.53.1", features = ["full"] }
+tokio-util = "0.7.19"
+tracing = "0.1.44"
+url = "2"
+uuid = { version = "1.26.1", features = ["v4"] }
+xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_Security"] }
+
+[dev-dependencies]
+# Mock GitHub integration tests (tests/common/github_mock.rs).
+bytes = "1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+insta = "1.48.0"
+pretty_assertions = "1.4.1"
+# `tokio::time::pause` (coalescence de status_get)
+tokio = { version = "1.53.1", features = ["test-util"] }
+# Informative graph benchmarks
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "log"
+harness = false
+
+# Informative reading benchmarks
+[[bench]]
+name = "read"
+harness = false
+
+# Benchmark informatif de `undo_peek` (PERF-15, )
+[[bench]]
+name = "undo"
+harness = false
+
+# Informative Benchmark of stash and cherry-pick preconditions (08, 09)
+[[bench]]
+name = "pick_stash"
+harness = false

@@ -1,0 +1,33 @@
+# B11 memory base: a minimum Tauri app, a major version and the same features as `src-tauri`
+# (tauri 2 + tauri-plugin-dialog, CSP/freezePrototype identical), which displays a static page.
+# `[workspace]` empty: this crate is not absorbed by the root workspace. Its `Cargo.lock` is initialized from
+# the workspace (startup.mjs) so that tauri, wry, etc. have the same versions as the measured application.
+[package]
+name = "hello-tauri"
+description = "Gitmini memory base (02 §1.4): minimum Tauri app, static page"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-only"
+publish = false
+
+[workspace]
+
+[features]
+# Embark `dist/` (which `cargo tauri build` activates on its own).
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+
+# Same settings as the `release-perf` profile of the workspace (Cargo.toml root).
+[profile.release]
+lto = "thin"
+codegen-units = 16
+opt-level = 3
+strip = true
+panic = "abort"

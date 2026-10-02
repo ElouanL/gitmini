@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <title>gitmini harness selftest</title>
+    <style>
+      body { font: 14px system-ui, sans-serif; margin: 0; padding: 16px; }
+      #graph { position: relative; width: 600px; height: 200px; border: 1px solid #888; margin: 12px 0; }
+      .row { position: absolute; left: 0; right: 0; height: 28px; border-bottom: 1px solid #ddd; }
+      .ref { position: absolute; height: 20px; padding: 0 8px; background: #cde; border: 1px solid #58a; cursor: grab; user-select: none; touch-action: none; }
+      #ghost { position: fixed; pointer-events: none; padding: 0 6px; background: #fd8; border: 1px solid #a80; display: none; }
+      #menu { position: fixed; background: #fff; border: 1px solid #444; display: none; padding: 4px; z-index: 10; }
+      #menu button, .ctx button { display: block; margin: 2px 0; }
+      .ctx { position: fixed; background: #fff; border: 1px solid #444; padding: 4px; z-index: 10; }
+      #target { display: inline-block; padding: 8px; background: #eee; }
+      #log { white-space: pre; font: 12px monospace; max-height: 120px; overflow: auto; }
+    </style>
+  </head>
+  <body>
+    <h1>autotest du harnais</h1>
+    <button data-testid="selftest-counter-btn" id="counter-btn">+1</button>
+    <span data-testid="selftest-counter" id="counter">0</span>
+    <input data-testid="selftest-input" id="input" />
+    <button data-testid="selftest-toast-btn" id="toast-btn">toast</button>
+    <span id="target" data-testid="selftest-target">clic droit ici</span>
+    <div id="graph" data-testid="graph-canvas"></div>
+    <div id="toasts"></div>
+    <div id="ghost"></div>
+    <div id="menu" data-testid="graph-drop-menu">
+      <button data-testid="graph-drop-menu-item-rebase">Rebaser</button>
+      <button data-testid="graph-drop-menu-item-merge">Merger</button>
+      <button data-testid="graph-drop-menu-item-cancel">Annuler</button>
+    </div>
+    <div id="log" data-testid="selftest-log"></div>
+    <script>
+      // False "application": a window bridge.__gitmini, a false graph with two reflissable labels (Pointer Events), a
+      // context menu and toasts. The identifiers are those of 01 §5.7 so that ui.ts / graph.ts apply.
+      const log = (line) => { const el = document.getElementById('log'); el.textContent += line + '\n'; };
+      const counts = { 'repo:changed': 0, 'op:progress': 0, 'op:state': 0 };
+      const lasts = { 'repo:changed': null, 'op:progress': null, 'op:state': null };
+      let pending = 0;
+
+      // ── pont de test ──
+      const graph = document.getElementById('graph');
+      const rows = [
+        { oid: 'a'.repeat(40), top: 0 },
+        { oid: 'b'.repeat(40), top: 28 },
+        { oid: 'c'.repeat(40), top: 56 },
+      ];
+      rows.forEach((r) => {
+        const el = document.createElement('div');
+        el.className = 'row'; el.style.top = r.top + 'px'; el.dataset.oid = r.oid; el.textContent = r.oid.slice(0, 7);
+        graph.appendChild(el);
+      });
+      const refs = [{ name: 'feature', left: 20, top: 100 }, { name: 'main', left: 300, top: 100 }];
+      refs.forEach((r) => {
+        const el = document.createElement('div');
+        el.className = 'ref'; el.dataset.ref = r.name; el.textContent = r.name;
+        el.style.left = r.left + 'px'; el.style.top = r.top + 'px';
+        graph.appendChild(el);
+      });
+      const rect = (el) => { const r = el.getBoundingClientRect(); return new DOMRect(r.x, r.y, r.width, r.height); };
+      window.__gitmini = {
+        graph: {
+          rowOf: (oid) => rows.findIndex((r) => r.oid === oid),
+          rowRect: (oid) => { const el = graph.querySelector('[data-oid="' + oid + '"]'); return el ? rect(el) : new DOMRect(0, 0, 0, 0); },
+          refRect: (name) => { const el = graph.querySelector('[data-ref="' + name + '"]'); return el ? rect(el) : new DOMRect(0, 0, 0, 0); },
+          visibleRange: () => ({ first: 0, last: rows.length - 1 }),
+          lanesOf: () => ({ lane: 0, color: 0 }),
+        },
+        events: { count: (n) => counts[n], last: (n) => lasts[n] },
+        perf: { marks: () => [], frames: () => [], reset: () => {} },
+        idle: () => new Promise((resolve) => { const check = () => (pending === 0 ? resolve() : setTimeout(check, 5)); check(); }),
+      };
+      const emit = (name, payload) => { counts[name]++; lasts[name] = payload; };
+
+      // - - counter: a 30 ms IPC command - -
+      document.getElementById('counter-btn').addEventListener('click', () => {
+        pending++;
+        setTimeout(() => {
+          const el = document.getElementById('counter');
+          el.textContent = String(Number(el.textContent) + 1);
+          emit('repo:changed', { repoId: 1, kinds: ['worktree'] });
+          pending--;
+        }, 30);
+      });
+
+      document.getElementById('toast-btn').addEventListener('click', () => {
+        const t = document.createElement('div');
+        t.dataset.testid = 'toast'; t.dataset.kind = 'error'; t.textContent = 'erreur de test';
+        document.getElementById('toasts').appendChild(t);
+      });
+
+      // ── menu contextuel ──
+      document.getElementById('target').addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        document.querySelectorAll('.ctx').forEach((n) => n.remove());
+        const m = document.createElement('div');
+        m.className = 'ctx'; m.dataset.testid = 'context-menu'; m.dataset.menu = 'wt-file';
+        m.style.left = e.clientX + 'px'; m.style.top = e.clientY + 'px';
+        for (const action of ['copy-path', 'open-external']) {
+          const b = document.createElement('button');
+          b.dataset.testid = 'context-menu-item-' + action; b.textContent = action;
+          b.addEventListener('click', () => { log('context:' + action); m.remove(); });
+          m.appendChild(b);
+        }
+        document.body.appendChild(m);
+      });
+
+      // - - - drag and drop by Pointer Events (never HTML5 DnD) - -
+      const ghost = document.getElementById('ghost');
+      const menu = document.getElementById('menu');
+      let drag = null;
+      const refUnder = (x, y) => { const el = document.elementsFromPoint(x, y).find((n) => n.classList && n.classList.contains('ref')); return el ? el.dataset.ref : null; };
+      graph.addEventListener('pointerdown', (e) => {
+        const el = e.target.closest && e.target.closest('.ref');
+        log('pointerdown button=' + e.button + ' buttons=' + e.buttons + ' type=' + e.pointerType + ' ctrl=' + e.ctrlKey + ' meta=' + e.metaKey);
+        if (!el || e.button !== 0) return;
+        drag = { ref: el.dataset.ref, moves: 0 };
+        try { el.setPointerCapture(e.pointerId); } catch (err) { log('capture refused: ' + err.name); }
+        ghost.textContent = drag.ref; ghost.style.display = 'block';
+      });
+      graph.addEventListener('pointermove', (e) => {
+        if (!drag) return;
+        drag.moves++;
+        ghost.style.left = e.clientX + 8 + 'px'; ghost.style.top = e.clientY + 8 + 'px';
+      });
+      graph.addEventListener('pointerup', (e) => {
+        log('pointerup button=' + e.button + ' buttons=' + e.buttons);
+        if (!drag) return;
+        const target = refUnder(e.clientX, e.clientY);
+        log('drop ' + drag.ref + ' -> ' + target + ' after ' + drag.moves + ' moves');
+        ghost.style.display = 'none';
+        if (target && target !== drag.ref) {
+          menu.dataset.from = drag.ref; menu.dataset.to = target;
+          menu.style.left = e.clientX + 'px'; menu.style.top = e.clientY + 'px'; menu.style.display = 'block';
+        }
+        drag = null;
+      });
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && drag) { log('drag cancelled by Escape'); ghost.style.display = 'none'; drag = null; }
+        else log('keydown ' + (e.ctrlKey ? 'Ctrl+' : '') + (e.metaKey ? 'Meta+' : '') + (e.shiftKey ? 'Shift+' : '') + e.key);
+      });
+      for (const item of menu.querySelectorAll('button')) {
+        item.addEventListener('click', () => { log('menu ' + item.dataset.testid + ' ' + menu.dataset.from + '->' + menu.dataset.to); menu.style.display = 'none'; });
+      }
+      document.getElementById('input').addEventListener('input', (e) => log('input=' + e.target.value));
+      // selection of lines (Mod+click)
+      graph.addEventListener('click', (e) => {
+        const row = e.target.closest && e.target.closest('.row');
+        if (row) log('row ' + row.dataset.oid.slice(0, 7) + ' ctrl=' + e.ctrlKey + ' meta=' + e.metaKey + ' shift=' + e.shiftKey);
+      });
+    </script>
+  </body>
+</html>

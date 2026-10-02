@@ -1,0 +1,31 @@
+/* Light / dark themes (03 "Light / dark themes"). Original palette; no color is written in hard elsewhere.
+   `data-theme` is installed on <html> by the store `app` ("system" is solved in light/dark). */
+:root {
+  color-scheme: light;
+  --bg: #ffffff; --bg-elev: #f6f7f9; --bg-sunken: #eef0f3; --fg: #1d2129; --fg-muted: #5c6370;
+  --border: #e1e4e8; --accent: #2a63c7; --accent-fg: #ffffff; --danger: #c7222d; --danger-fg: #ffffff;
+  --warn: #8d5d18; --success: #187633; --info: #2a63c7;
+  --row-hover: #eef2f8; --row-selected: #dbe7fd;
+  --diff-add-bg: #e6ffec; --diff-del-bg: #ffebe9;
+  --lane-0: #2f6fde; --lane-1: #d1242f; --lane-2: #1a7f37; --lane-3: #8250df;
+  --lane-4: #bf8700; --lane-5: #0a7c86; --lane-6: #cf2f8b; --lane-7: #6e7781;
+  --overlay: rgb(20 24 31 / 45%); --shadow: 0 6px 24px rgb(20 24 31 / 18%), 0 1px 3px rgb(20 24 31 / 12%);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
+
+  --row-height: 28px; --toolbar-height: 44px; --radius: 6px; --radius-sm: 4px;
+  --font-ui: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace;
+  --z-banner: 20; --z-drawer: 30; --z-menu: 1000; --z-dialog: 1100; --z-toast: 1200;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #16181d; --bg-elev: #1e2128; --bg-sunken: #12141a; --fg: #e6e8eb; --fg-muted: #9aa1ab;
+  --border: #2c313a; --accent: #5e9dff; --accent-fg: #0f1115; --danger: #ff6e6e; --danger-fg: #1a0b0b;
+  --warn: #e3b341; --success: #3fb950; --info: #5e9dff;
+  --row-hover: #222631; --row-selected: #233456;
+  --diff-add-bg: #12301c; --diff-del-bg: #3a1618;
+  --lane-0: #5b9bff; --lane-1: #ff6b6b; --lane-2: #3fb950; --lane-3: #b58cff;
+  --lane-4: #e3b341; --lane-5: #39c5cf; --lane-6: #f778ba; --lane-7: #8b949e;
+  --overlay: rgb(0 0 0 / 55%); --shadow: 0 6px 24px rgb(0 0 0 / 55%), 0 1px 3px rgb(0 0 0 / 40%);
+}

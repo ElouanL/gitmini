@@ -1,0 +1,138 @@
+/* Styles of the graph (04). CSS global file with `gr-` prefix: the line pool is absolutely built (render/pool.ts), the
+   Svelte scoped styles do not apply. No hard color: theme.css variables only. */
+.gr-root { position: relative; display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg); }
+.gr-root [hidden] { display: none !important; }
+
+.gr-head {
+  display: grid; flex: none; height: 24px; align-items: center; border-bottom: 1px solid var(--border);
+  grid-template-columns: var(--c-refs, 180px) var(--c-graph, 48px) minmax(0, 1fr) var(--c-author, 140px) var(--c-date, 120px) var(--c-sha, 70px);
+  font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--fg-muted);
+  user-select: none; background: var(--bg-elev);
+}
+.gr-head > span { min-width: 0; padding: 0 8px; overflow: hidden; white-space: nowrap; }
+
+.gr-viewport { position: relative; flex: 1; min-height: 0; overflow-x: hidden; overflow-y: auto; scrollbar-gutter: stable; }
+.gr-viewport:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); border-radius: 0; }
+.gr-sizer { position: relative; width: 100%; }
+.gr-stage { position: sticky; top: 0; width: 100%; overflow: hidden; contain: layout paint; }
+.gr-canvas { position: absolute; top: 0; left: 0; pointer-events: none; }
+.gr-rows { position: absolute; top: 0; left: 0; width: 100%; height: 0; }
+/* No `will-change` here: promoting the layer of the lines in compound layer explodes the times of raster software (Xvfb, WebKitGTK without GPU)
+   each line rewrite (pics from 100 to 800 ms measured); a repaint of ~50 lines costs a few ms. */
+
+/* Lines (pool).Transparent background: selection strips / overview / results drawn by Canvas, SOUS the lanes. */
+.gr-row {
+  position: absolute; top: 0; left: 0; width: 100%; height: var(--row-height, 28px); align-items: center;
+  display: grid; user-select: none; font-size: 13px; line-height: 28px;
+  grid-template-columns: var(--c-refs, 180px) var(--c-graph, 48px) minmax(0, 1fr) var(--c-author, 140px) var(--c-date, 120px) var(--c-sha, 70px);
+}
+.gr-c { position: relative; display: flex; align-items: center; min-width: 0; height: 100%; padding: 0 8px; overflow: hidden; white-space: nowrap; }
+.gr-c-graph { padding: 0; }
+.gr-c-date { color: var(--fg-muted); font-size: 12px; }
+.gr-c-sha { font-family: var(--font-mono); font-size: 12px; color: var(--fg-muted); }
+.gr-msg { overflow: hidden; text-overflow: ellipsis; }
+.gr-author { overflow: hidden; text-overflow: ellipsis; }
+.gr-row[data-dim='true'] .gr-c-msg,
+.gr-row[data-dim='true'] .gr-c-author,
+.gr-row[data-dim='true'] .gr-c-date,
+.gr-row[data-dim='true'] .gr-c-sha { opacity: 0.75; }
+.gr-row[data-kind='wip'] .gr-msg { font-style: italic; color: var(--fg-muted); }
+.gr-row[data-kind='stash'] .gr-msg { color: var(--fg-muted); }
+.gr-row[data-loaded='false'] .gr-c-msg::before,
+.gr-row[data-loaded='false'] .gr-c-author::before {
+  content: ''; display: block; height: 8px; border-radius: 4px; background: var(--bg-sunken); width: 55%;
+}
+.gr-row[data-loaded='false'] .gr-c-author::before { width: 70%; }
+.gr-row[data-loaded='false'] .gr-c-msg > *,
+.gr-row[data-loaded='false'] .gr-avatar { display: none; }
+.gr-marker { position: absolute; inset: 0; z-index: 2; }
+.gr-shallow { position: absolute; top: 15px; font-size: 12px; line-height: 12px; color: var(--fg-muted); pointer-events: none; }
+
+/* Masked columns (near zone): width 0 without margin, cell remains in grid */
+.gr-root[data-no-author] .gr-c-author, .gr-root[data-no-date] .gr-c-date, .gr-root[data-no-sha] .gr-c-sha { padding: 0; visibility: hidden; }
+.gr-root[data-no-author] .gr-head > :nth-child(4), .gr-root[data-no-date] .gr-head > :nth-child(5), .gr-root[data-no-sha] .gr-head > :nth-child(6) { padding: 0; visibility: hidden; }
+
+/* WIP row badges */
+.gr-badges { display: inline-flex; gap: 6px; margin-left: 8px; font-style: normal; }
+.gr-badge { font-size: 11px; line-height: 16px; padding: 0 6px; border-radius: 8px; background: var(--bg-sunken); color: var(--fg-muted); font-style: normal; }
+.gr-badge-danger { background: var(--danger); color: var(--danger-fg); font-weight: 600; }
+
+/* Author tablet: initials on a color derived from the email hash */
+.gr-avatar {
+  display: inline-flex; flex: none; align-items: center; justify-content: center; width: 18px; height: 18px; margin-right: 6px;
+  border-radius: 50%; font-size: 9px; font-weight: 700; line-height: 1; color: var(--bg); background: var(--c, var(--lane-7));
+}
+
+/* Color of the lane worn by `data-color` (labels, pellets) */
+[data-color='0'] { --c: var(--lane-0); }
+[data-color='1'] { --c: var(--lane-1); }
+[data-color='2'] { --c: var(--lane-2); }
+[data-color='3'] { --c: var(--lane-3); }
+[data-color='4'] { --c: var(--lane-4); }
+[data-color='5'] { --c: var(--lane-5); }
+[data-color='6'] { --c: var(--lane-6); }
+[data-color='7'] { --c: var(--lane-7); }
+
+/* Étiquettes de refs */
+.gr-pill { display: inline-flex; flex: 0 1 auto; align-items: stretch; min-width: 0; max-width: 100%; height: 18px; margin-right: 4px; overflow: hidden; border-radius: 9px; font-size: 11px; line-height: 18px; }
+.gr-ref {
+  display: inline-flex; align-items: center; gap: 3px; min-width: 0; padding: 0 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  cursor: default;
+}
+.gr-ref { border-radius: 9px; }
+.gr-pill[data-merged='true'] > .gr-ref:first-child { border-radius: 9px 0 0 9px; }
+.gr-pill[data-merged='true'] > .gr-ref:last-child { border-radius: 0 9px 9px 0; }
+.gr-ref[data-drag-source='true'] { cursor: grab; touch-action: none; }
+.gr-ref[data-ref-kind='local'], .gr-ref[data-ref-kind='head'] { background: var(--c, var(--lane-7)); color: var(--bg); }
+.gr-ref[data-ref-kind='remote'] { color: var(--fg); box-shadow: inset 0 0 0 1px var(--c, var(--lane-7)); background: transparent; }
+.gr-pill[data-merged='true'] .gr-ref[data-ref-kind='remote'] { background: var(--bg-elev); }
+.gr-ref[data-ref-kind='tag'] { color: var(--fg-muted); background: var(--bg-elev); box-shadow: inset 0 0 0 1px var(--border); }
+.gr-ref[data-head='true'] { font-weight: 700; }
+.gr-ref[data-head='true']::before {
+  content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 1.5px var(--bg);
+}
+.gr-pill-sep { display: inline-flex; align-items: center; padding: 0 2px; font-size: 10px; color: var(--bg); background: var(--c, var(--lane-7)); }
+.gr-ref-icon { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.gr-overflow { flex: none; padding: 0 6px; border-radius: 9px; font-size: 11px; line-height: 18px; color: var(--fg-muted); background: var(--bg-sunken); cursor: default; }
+.gr-ref[data-drop-target='true'], [data-testid='sidebar-branch-item'][data-drop-target='true'], [data-testid='sidebar-remote-branch-item'][data-drop-target='true'] {
+  outline: 2px solid var(--accent); outline-offset: -1px;
+}
+html[data-gr-drag-blocked] .gr-ref[data-drag-source='true'],
+html[data-gr-drag-blocked] [data-testid='sidebar-branch-item'],
+html[data-gr-drag-blocked] [data-testid='sidebar-remote-branch-item'] { cursor: not-allowed; }
+
+/* Truncation degraded (> 12 lanes): Infobule area on right edge of Graphe column */
+.gr-lane-fade { position: absolute; top: 0; bottom: 0; width: 24px; z-index: 1; pointer-events: none; }
+
+.gr-empty { position: absolute; left: 0; right: 0; padding: 32px 16px; text-align: center; color: var(--fg-muted); }
+.gr-loading {
+  position: absolute; top: 8px; right: 14px; z-index: 3; display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px;
+  border: 1px solid var(--border); border-radius: 12px; background: var(--bg-elev); color: var(--fg-muted); font-size: 12px; box-shadow: var(--shadow);
+}
+
+/* Recherche */
+.gr-search { display: flex; flex: none; align-items: center; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--border); background: var(--bg-elev); }
+.gr-search .input { flex: 1; min-width: 120px; }
+.gr-search .input[data-empty-result='true'] { border-color: var(--danger); }
+.gr-search-count { min-width: 64px; text-align: center; font-variant-numeric: tabular-nums; font-size: 12px; }
+.gr-flip { display: inline-flex; transform: rotate(180deg); }
+
+/* repository Menu (slide-drop) */
+.gr-drop-menu {
+  position: fixed; z-index: var(--z-menu, 1000); display: flex; flex-direction: column; min-width: 240px; max-width: 360px; padding: 4px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-elev); box-shadow: var(--shadow);
+}
+.gr-drop-menu button {
+  display: block; padding: 6px 10px; border: 0; border-radius: var(--radius-sm); background: transparent; text-align: left; color: var(--fg);
+}
+.gr-drop-menu button:hover:not(:disabled), .gr-drop-menu button:focus-visible { background: var(--row-hover); box-shadow: none; }
+.gr-drop-menu button:disabled { color: var(--fg-muted); opacity: 0.6; cursor: default; }
+.gr-drop-empty { padding: 6px 10px; font-size: 12px; color: var(--fg-muted); }
+
+/* Slip and Drop Ghost */
+.gr-ghost {
+  position: fixed; top: 0; left: 0; z-index: calc(var(--z-menu, 1000) + 1); max-width: 260px; padding: 2px 10px; overflow: hidden;
+  border-radius: 10px; font-size: 12px; white-space: nowrap; text-overflow: ellipsis; pointer-events: none;
+  background: var(--accent); color: var(--accent-fg); box-shadow: var(--shadow); will-change: transform;
+}
+html.gr-dragging, html.gr-dragging * { cursor: grabbing !important; user-select: none !important; }

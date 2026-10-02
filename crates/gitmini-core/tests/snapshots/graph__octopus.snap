@@ -1,0 +1,18 @@
+---
+source: crates/gitmini-core/tests/graph.rs
+expression: "golden(rows, Some(\"OCT\"), &[])"
+---
+OCT lane=0 color=0 edges=[↓0→0 c0, ↓0→1 c1, ↓0→2 c2, ↓0→3 c3]
+m3 lane=0 color=0 edges=[↑0→0 c0, ↑1→1 c1, ↑2→2 c2, ↑3→3 c3, ↓0→0 c0, ↓1→1 c1, ↓2→2 c2, ↓3→3 c3]
+c1 lane=3 color=3 edges=[↑0→0 c0, ↑1→1 c1, ↑2→2 c2, ↑3→3 c3, ↓3→0 c0, ↓0→0 c0, ↓1→1 c1, ↓2→2 c2]
+b2 lane=2 color=2 edges=[↑0→0 c0, ↑1→1 c1, ↑2→2 c2, ↓2→2 c2, ↓0→0 c0, ↓1→1 c1]
+a1 lane=1 color=1 edges=[↑0→0 c0, ↑1→1 c1, ↑2→2 c2, ↓1→0 c0, ↓0→0 c0, ↓2→2 c2]
+b1 lane=2 color=2 edges=[↑0→0 c0, ↑2→2 c2, ↓2→0 c0, ↓0→0 c0]
+m2x lane=0 color=0 edges=[↑0→0 c0, ↓0→0 c0, ↓0→1 c4]
+y2 lane=0 color=0 edges=[↑0→0 c0, ↑1→1 c4, ↓0→0 c0, ↓1→1 c4]
+m2 lane=1 color=4 edges=[↑0→0 c0, ↑1→1 c4, ↓1→1 c4, ↓0→0 c0]
+y1 lane=0 color=0 edges=[↑0→0 c0, ↑1→1 c4, ↓0→0 c0, ↓1→0 c4]
+mx lane=0 color=0 edges=[↑0→0 c0, ↓0→0 c0, ↓0→1 c5]
+x1 lane=0 color=0 edges=[↑0→0 c0, ↑1→1 c5, ↓0→0 c0, ↓1→1 c5]
+m1 lane=1 color=5 edges=[↑0→0 c0, ↑1→1 c5, ↓1→0 c0, ↓0→0 c0]
+init lane=0 color=0 edges=[↑0→0 c0]

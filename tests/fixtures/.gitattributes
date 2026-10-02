@@ -1,0 +1,6 @@
+# Les scripts de fixtures sont exécutés par bash : toujours des fins de ligne LF, même sur un checkout Windows
+# (core.autocrlf=true transformerait « \n » en « \r\n » et casserait chaque ligne : « command not found\r »).
+*.sh text eol=lf
+*.py text eol=lf
+*.json text eol=lf
+*.md text eol=lf

@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "types": ["node", "mocha", "@wdio/globals/types", "@wdio/mocha-framework"],
+    "strict": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "allowJs": true,
+    "checkJs": false,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": [
+    "*.ts",
+    "helpers/**/*.ts",
+    "specs/**/*.ts",
+    "selftest/**/*.ts",
+    "../support/**/*.ts",
+    "../perf/**/*.ts"
+  ],
+  "exclude": ["node_modules", ".artifacts"]
+}

@@ -1,0 +1,33 @@
+// Icons (gray 24×24, stroke) drawn for gitmini. One single line per icon: `<Icon name="…" />`.
+export const ICONS = {
+  fetch: 'M20 11a8 8 0 0 0-14.5-4.5L4 8 M4 4v4h4 M4 13a8 8 0 0 0 14.5 4.5L20 16 M20 20v-4h-4',
+  pull: 'M12 4v12 M7 11l5 5 5-5 M5 20h14',
+  push: 'M12 20V8 M7 13l5-5 5 5 M5 4h14',
+  branch: 'M6 3v12 M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0z M21 6a3 3 0 1 1-6 0 3 3 0 0 1 6 0z M18 9a9 9 0 0 1-9 9',
+  stash: 'M3 8l9-5 9 5v9l-9 5-9-5z M3 8l9 5 9-5 M12 13v9',
+  pop: 'M4 14h16v6H4z M12 3v8 M8.5 6.5L12 3l3.5 3.5',
+  search: 'M11 4a7 7 0 1 1 0 14 7 7 0 0 1 0-14z M16 16l5 5',
+  palette: 'M4 5h16v14H4z M7 10l3 2-3 2 M12 15h5',
+  user: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M4 21a8 8 0 0 1 16 0',
+  settings: 'M4 7h9 M17 7h3 M15 5v4 M4 12h3 M11 12h9 M9 10v4 M4 17h9 M17 17h3 M15 15v4',
+  undo: 'M9 14L4 9l5-5 M4 9h10a6 6 0 0 1 0 12h-3',
+  history: 'M3 12a9 9 0 1 0 3-6.7L3 8 M3 3v5h5 M12 7v5l3 2',
+  'chevron-down': 'M6 9l6 6 6-6',
+  'chevron-right': 'M9 6l6 6-6 6',
+  folder: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
+  plus: 'M12 5v14 M5 12h14',
+  x: 'M6 6l12 12 M18 6L6 18',
+  check: 'M5 12l5 5 9-10',
+  tag: 'M3 12V4h8l10 10-8 8z M7.5 8.5h.01',
+  cloud: 'M7 18a4 4 0 0 1-.5-7.97A6 6 0 0 1 18 9.5 4.25 4.25 0 0 1 17.5 18z',
+  'panel-left': 'M3 5h18v14H3z M9 5v14',
+  'panel-right': 'M3 5h18v14H3z M15 5v14',
+  alert: 'M12 3l10 18H2z M12 10v5 M12 18h.01',
+  info: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z M12 11v5 M12 8h.01',
+  copy: 'M9 9h11v11H9z M5 15V4h11',
+  stop: 'M7 7h10v10H7z',
+  commit: 'M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z M3 12h6 M15 12h6',
+  merge: 'M6 3v12 M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0z M21 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0z M6 9a9 9 0 0 0 9 9',
+} as const;
+
+export type IconName = keyof typeof ICONS;

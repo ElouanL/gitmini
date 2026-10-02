@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-rebase-todo-preview"
+description = "Enables the rebase_todo_preview command without any pre-configured scope."
+commands.allow = ["rebase_todo_preview"]
+
+[[permission]]
+identifier = "deny-rebase-todo-preview"
+description = "Denies the rebase_todo_preview command without any pre-configured scope."
+commands.deny = ["rebase_todo_preview"]

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-log-search"
+description = "Enables the log_search command without any pre-configured scope."
+commands.allow = ["log_search"]
+
+[[permission]]
+identifier = "deny-log-search"
+description = "Denies the log_search command without any pre-configured scope."
+commands.deny = ["log_search"]

@@ -1,0 +1,489 @@
+# Nightly (-performance.md §7.4): planned or launched by hand, non-blocking.
+#   - complete e2e with git 2.30.9 (compiled) and git `next` (compiled, cached by SHA);
+#   - lightly measurements of 02: PERF-09, 10, 11, 14, 18, commit-graph variant without PERF-02, LINUX column;
+#   - Windows perf (PERF-01, 04, 14) and Windows e2e complete;
+#   - miri on the parsing;
+#   - failure: automatic exit (label `nightly-failure`).
+# Only network exception of the project: the first fill of the linux.git cache, never in PR.
+name: nightly
+
+on:
+  schedule:
+    - cron: "17 1 * * *"
+  workflow_dispatch:
+    inputs:
+      git-next-sha:
+        description: "SHA git/git `next` to test (default: branch head)"
+        required: false
+        type: string
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  VITE_GITMINI_GITHUB_LOGIN: "1"
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+  NODE_VERSION: "24"
+  XVFB_ARGS: -screen 0 1280x800x24
+
+jobs:
+  fixtures:
+    name: fixtures
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/cache@v4
+        with:
+          path: target/fixtures
+          key: fixtures-${{ hashFiles('tests/fixtures/**') }}
+      - run: node tests/fixtures/build.mjs --check
+
+  # - - complete Linux e2e: a build, then git {2.30.9, next} × 4 shards
+  build-linux:
+    name: build-linux
+    needs: fixtures
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/ci-install-linux-deps.sh build
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: e2e-linux
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-binstall
+      - name: "tauri-cli (pre-compiled binar, otherwise compilation)"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: cargo binstall --no-confirm --locked tauri-cli --version '^2'
+      - name: Cache de tauri-driver
+        id: driver-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/tauri-driver
+          key: tauri-driver-${{ runner.os }}-v1
+      - name: tauri-driver
+        if: steps.driver-cache.outputs.cache-hit != 'true'
+        run: cargo install tauri-driver --locked
+      - name: Build e2e (debug, --features e2e)
+        run: cargo tauri build --debug --features e2e --no-bundle
+      - run: cp "$HOME/.cargo/bin/tauri-driver" target/debug/tauri-driver
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gitmini-e2e-linux
+          path: |
+            target/debug/gitmini
+            target/debug/tauri-driver
+          if-no-files-found: error
+          retention-days: 1
+
+  e2e-linux:
+    name: e2e-linux (git ${{ matrix.git }}, shard ${{ matrix.shard }}/4)
+    needs: build-linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        git: ["2.30.9", next]
+        shard: [1, 2, 3, 4]
+    env:
+      GITMINI_BINARY: ${{ github.workspace }}/target/debug/gitmini
+      GITMINI_E2E_ARTIFACTS: ${{ github.workspace }}/tests/e2e/.artifacts
+      GITMINI_TEST_SEED: ${{ github.run_id }}
+      RUST_LOG: gitmini=debug
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/ci-install-linux-deps.sh e2e-runtime git-build
+      # `next`: the SHA (manual input, otherwise branch head) freezes the build and serves as a cache key.
+      - name: SHA de git next
+        id: git-ref
+        env:
+          INPUT_SHA: ${{ inputs.git-next-sha }}
+        run: |
+          if [ "${{ matrix.git }}" = next ]; then
+            sha="${INPUT_SHA:-$(git ls-remote https://github.com/git/git refs/heads/next | cut -f1)}"
+          else
+            sha=""
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "git ${{ matrix.git }} ${sha}"
+      - uses: actions/cache@v4
+        with:
+          path: ~/git-${{ matrix.git }}
+          key: git-${{ matrix.git }}-${{ steps.git-ref.outputs.sha }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-git-from-source.sh') }}
+      - name: Compiler git ${{ matrix.git }}
+        env:
+          GIT_SHA: ${{ steps.git-ref.outputs.sha }}
+        run: |
+          bash scripts/install-git-from-source.sh "${{ matrix.git }}" "$HOME/git-${{ matrix.git }}" "$GIT_SHA"
+          echo "$HOME/git-${{ matrix.git }}/bin" >> "$GITHUB_PATH"
+      - name: Version de git
+        run: |
+          git --version
+          if [ "${{ matrix.git }}" = "2.30.9" ]; then test "$(git --version)" = "git version 2.30.9"; fi
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: tests/e2e/pnpm-lock.yaml
+      - uses: actions/download-artifact@v4
+        with:
+          name: gitmini-e2e-linux
+          path: target/debug
+      - name: "Install binaries"
+        run: |
+          chmod +x target/debug/gitmini target/debug/tauri-driver
+          sudo install -m 0755 target/debug/tauri-driver /usr/local/bin/tauri-driver
+      - uses: actions/cache/restore@v4
+        with:
+          path: target/fixtures
+          key: fixtures-${{ hashFiles('tests/fixtures/**') }}
+      - run: node tests/fixtures/build.mjs
+      - run: pnpm --dir tests/e2e install --frozen-lockfile
+      - name: "Outgoing firewall (loopback only for testing)"
+        run: |
+          sudo bash scripts/firewall-linux.sh on
+          bash scripts/firewall-linux.sh verify
+      - name: E2E (git ${{ matrix.git }}, shard ${{ matrix.shard }}/4)
+        env:
+          GITMINI_E2E_VIDEO: ${{ runner.temp }}/gitmini-video/git-${{ matrix.git }}-shard-${{ matrix.shard }}.mp4
+        run: |
+          echo "GITMINI_TEST_SEED=$GITMINI_TEST_SEED"
+          bash scripts/ci-run-offline.sh \
+            xvfb-run -a -s "$XVFB_ARGS" \
+            bash scripts/ci-e2e-run.sh wdio.conf.ts --shard ${{ matrix.shard }}/4
+      - name: "Ghost processes"
+        if: always()
+        run: node scripts/check-ghosts.mjs --binary "${{ env.GITMINI_BINARY }}"
+      - name: "Failure artifacts"
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-e2e-linux-git-${{ matrix.git }}-shard-${{ matrix.shard }}
+          path: |
+            tests/e2e/.artifacts
+            ${{ runner.temp }}/gitmini-video
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # ── perf Linux : mesures nightly de FX-100K et colonne LINUX
+  perf-linux:
+    name: perf-linux
+    needs: fixtures
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GITMINI_E2E_ARTIFACTS: ${{ github.workspace }}/tests/e2e/.artifacts
+      GITMINI_PERF_NIGHTLY: "1" # PERF-09, 10, 11, 14, 18 et variante sans commit-graph de PERF-02
+      GITMINI_PERF_LINUX: "1" # colonne LINUX de 02 §1.3
+      GITMINI_LINUX_REPO: ${{ github.workspace }}/target/linux
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/ci-install-linux-deps.sh build e2e-runtime
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: perf
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: |
+            pnpm-lock.yaml
+            tests/e2e/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir tests/e2e install --frozen-lockfile
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-binstall
+      - name: "tauri-cli (pre-compiled binar, otherwise compilation)"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: cargo binstall --no-confirm --locked tauri-cli --version '^2'
+      - name: Cache de tauri-driver
+        id: driver-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/tauri-driver
+          key: tauri-driver-${{ runner.os }}-v1
+      - name: tauri-driver
+        if: steps.driver-cache.outputs.cache-hit != 'true'
+        run: cargo install tauri-driver --locked
+      - uses: actions/cache/restore@v4
+        with:
+          path: target/fixtures
+          key: fixtures-${{ hashFiles('tests/fixtures/**') }}
+      - run: node tests/fixtures/build.mjs
+      # linux.git (tag v6.6, complete clone): restored from the Action cache, filled at the first passage (network).
+      # Explicit backup just after the clone: the cache survives even if a measure fails afterwards.
+      - name: Cache de linux.git
+        id: linux-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: target/linux
+          key: linux-git-v6.6-v1
+      - name: linux.git @ v6.6
+        run: bash scripts/ci-prepare-linux-repo.sh target/linux v6.6
+      - name: Sauvegarder le cache de linux.git
+        if: steps.linux-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: target/linux
+          key: linux-git-v6.6-v1
+      - name: Build release-perf (--features e2e)
+        run: cargo tauri build --features e2e --no-bundle -- --profile release-perf
+      - name: PERF-01 et PERF-04
+        run: xvfb-run -a -s "$XVFB_ARGS" node tests/perf/startup.mjs --binary target/release-perf/gitmini
+      - name: Nightly WDIO measurements
+        env:
+          GITMINI_BINARY: ${{ github.workspace }}/target/release-perf/gitmini
+        run: xvfb-run -a -s "$XVFB_ARGS" pnpm --dir tests/e2e exec wdio run wdio.perf.conf.ts
+      - name: PERF-05
+        run: node scripts/check-binary-size.mjs target/release-perf/gitmini --max-mb 15
+      - name: Rapport
+        run: node tests/perf/report.mjs --markdown tests/perf/results/summary.md --check-blocking
+      - name: "Summary of the job"
+        if: always()
+        run: |
+          [ -f tests/perf/results/summary.md ] && cat tests/perf/results/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-perf-linux-results
+          path: tests/perf/results/
+          if-no-files-found: warn
+          retention-days: 14
+
+  # - Windows: complete e2e then measurements PERF-01, 04, 14
+  build-windows:
+    name: build-windows
+    needs: fixtures
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: nightly-windows
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-binstall
+      - name: "tauri-cli (pre-compiled binar, otherwise compilation)"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: cargo binstall --no-confirm --locked tauri-cli --version '^2'
+      - name: Cache de tauri-driver
+        id: driver-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/tauri-driver.exe
+          key: tauri-driver-${{ runner.os }}-v1
+      - name: tauri-driver
+        if: steps.driver-cache.outputs.cache-hit != 'true'
+        run: cargo install tauri-driver --locked
+      - name: Build e2e (debug, --features e2e)
+        run: cargo tauri build --debug --features e2e --no-bundle
+      - name: Build release-perf (--features e2e)
+        run: cargo tauri build --features e2e --no-bundle -- --profile release-perf
+      - run: cp "$HOME/.cargo/bin/tauri-driver.exe" target/debug/tauri-driver.exe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nightly-windows-binaries
+          path: |
+            target/debug/gitmini.exe
+            target/debug/tauri-driver.exe
+            target/release-perf/gitmini.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  e2e-windows:
+    name: e2e-windows (shard ${{ matrix.shard }}/2)
+    needs: build-windows
+    runs-on: windows-2022
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    defaults:
+      run:
+        shell: bash
+    env:
+      GITMINI_BINARY: ${{ github.workspace }}/target/debug/gitmini.exe
+      GITMINI_E2E_ARTIFACTS: ${{ github.workspace }}/tests/e2e/.artifacts
+      GITMINI_TEST_SEED: ${{ github.run_id }}
+      GITMINI_E2E_SKIP_LINUX_ONLY: "1"
+      RUST_LOG: gitmini=debug
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: tests/e2e/pnpm-lock.yaml
+      - uses: actions/download-artifact@v4
+        with:
+          name: nightly-windows-binaries
+          path: target
+      - name: Add tauri-driver to PATH
+        run: echo "$GITHUB_WORKSPACE/target/debug" >> "$GITHUB_PATH"
+      - name: "msedgedriver (version of runtime WebView2)"
+        shell: pwsh
+        run: ./scripts/install-msedgedriver.ps1
+      - run: node tests/fixtures/build.mjs
+      - run: pnpm --dir tests/e2e install --frozen-lockfile
+      - name: E2E (shard ${{ matrix.shard }}/2)
+        run: pnpm --dir tests/e2e exec wdio run wdio.conf.ts --shard ${{ matrix.shard }}/2
+      - name: "Ghost processes"
+        if: always()
+        run: node scripts/check-ghosts.mjs --binary "${{ env.GITMINI_BINARY }}"
+      - name: "Failure artifacts"
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-e2e-windows-shard-${{ matrix.shard }}
+          path: tests/e2e/.artifacts
+          if-no-files-found: ignore
+          retention-days: 14
+
+  perf-windows:
+    name: perf-windows (PERF-01, 04, 14)
+    needs: build-windows
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    env:
+      GITMINI_BINARY: ${{ github.workspace }}/target/release-perf/gitmini.exe
+      GITMINI_E2E_ARTIFACTS: ${{ github.workspace }}/tests/e2e/.artifacts
+      GITMINI_PERF_NIGHTLY: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: tests/e2e/pnpm-lock.yaml
+      - uses: actions/download-artifact@v4
+        with:
+          name: nightly-windows-binaries
+          path: target
+      - run: echo "$GITHUB_WORKSPACE/target/debug" >> "$GITHUB_PATH"
+      - name: "msedgedriver (version of runtime WebView2)"
+        shell: pwsh
+        run: ./scripts/install-msedgedriver.ps1
+      - run: node tests/fixtures/build.mjs
+      - run: pnpm --dir tests/e2e install --frozen-lockfile
+      - name: "PERF-01 and PERF-04 (without WebDriver)"
+        run: node tests/perf/startup.mjs --binary target/release-perf/gitmini.exe
+      - name: PERF-14 (WDIO)
+        run: pnpm --dir tests/e2e exec wdio run wdio.perf.conf.ts --mochaOpts.grep PERF-14
+      - name: Rapport
+        run: node tests/perf/report.mjs --markdown tests/perf/results/summary.md --check-blocking
+      - name: "Summary of the job"
+        if: always()
+        run: |
+          [ -f tests/perf/results/summary.md ] && cat tests/perf/results/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nightly-perf-windows-results
+          path: tests/perf/results/
+          if-no-files-found: warn
+          retention-days: 14
+
+  miri:
+    name: miri
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      MIRIFLAGS: -Zmiri-disable-isolation
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/ci-install-linux-deps.sh build
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: miri
+      - run: mkdir -p dist && echo "<!doctype html>" > dist/index.html
+      - run: cargo +nightly miri setup
+      - name: miri (opstate, lanes, todo de rebase, table stderr → AppError)
+        run: cargo +nightly miri test -p gitmini-core --lib -- read::opstate read::graph write::todo write::errors
+
+  report:
+    name: report
+    if: always() && contains(needs.*.result, 'failure')
+    needs: [fixtures, e2e-linux, perf-linux, e2e-windows, perf-windows, miri]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: "Open or update the outcome"
+        uses: actions/github-script@v7
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const label = 'nightly-failure';
+            const needs = JSON.parse(process.env.NEEDS);
+            const failed = Object.entries(needs).filter(([, v]) => v.result === 'failure').map(([k]) => k);
+            const url = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const body = [
+              `Nightly run on ${new Date().toISOString().slice(0, 10)} failed: ${failed.map((j) => `\`${j}\``).join(', ')}.`,
+              '',
+              `Run: ${url}`,
+              '',
+              'Artifacts (screenshots, logs, repository archive, video, perf-results) are attached to the run for 14 days.',
+            ].join('\n');
+            try {
+              await github.rest.issues.getLabel({ owner, repo, name: label });
+            } catch {
+              await github.rest.issues.createLabel({ owner, repo, name: label, color: 'b60205', description: 'Job failure nightly' });
+            }
+            const open = await github.paginate(github.rest.issues.listForRepo, { owner, repo, labels: label, state: 'open', per_page: 10 });
+            if (open.length > 0) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: open[0].number, body });
+            } else {
+              await github.rest.issues.create({ owner, repo, title: 'Nightly failed', labels: [label], body });
+            }

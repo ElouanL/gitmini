@@ -1,0 +1,19 @@
+---
+source: crates/gitmini-core/tests/graph.rs
+expression: "fixture_golden(\"octopus\")"
+---
+f1e3118 lane=1 color=1 edges=[] parents=[] refs=[gh-pages]
+c261829 lane=0 color=0 edges=[↓0→0 c0, ↓0→1 c2, ↓0→2 c3, ↓0→3 c4] parents=[33d0db8, 326b75a, d0f715e, a03b91e] refs=[main*]
+33d0db8 lane=0 color=0 edges=[↑0→0 c0, ↑1→1 c2, ↑2→2 c3, ↑3→3 c4, ↓0→0 c0, ↓1→1 c2, ↓2→2 c3, ↓3→3 c4] parents=[471d027] refs=[]
+a03b91e lane=3 color=4 edges=[↑0→0 c0, ↑1→1 c2, ↑2→2 c3, ↑3→3 c4, ↓3→0 c0, ↓0→0 c0, ↓1→1 c2, ↓2→2 c3] parents=[471d027] refs=[c]
+d0f715e lane=2 color=3 edges=[↑0→0 c0, ↑1→1 c2, ↑2→2 c3, ↓2→2 c3, ↓0→0 c0, ↓1→1 c2] parents=[f0a14bf] refs=[b]
+f0a14bf lane=2 color=3 edges=[↑0→0 c0, ↑1→1 c2, ↑2→2 c3, ↓2→0 c0, ↓0→0 c0, ↓1→1 c2] parents=[471d027] refs=[]
+326b75a lane=1 color=2 edges=[↑0→0 c0, ↑1→1 c2, ↓1→0 c0, ↓0→0 c0] parents=[471d027] refs=[a]
+471d027 lane=0 color=0 edges=[↑0→0 c0, ↓0→0 c0, ↓0→1 c5] parents=[08fa66b, 9932c08] refs=[]
+9932c08 lane=1 color=5 edges=[↑0→0 c0, ↑1→1 c5, ↓1→1 c5, ↓0→0 c0] parents=[b9dfeca] refs=[feat-y]
+b9dfeca lane=1 color=5 edges=[↑0→0 c0, ↑1→1 c5, ↓1→1 c5, ↓0→0 c0] parents=[89369c1] refs=[]
+08fa66b lane=0 color=0 edges=[↑0→0 c0, ↑1→1 c5, ↓0→0 c0, ↓1→0 c5] parents=[89369c1] refs=[]
+89369c1 lane=0 color=0 edges=[↑0→0 c0, ↓0→0 c0, ↓0→1 c6] parents=[3272a88, 40755b6] refs=[]
+40755b6 lane=1 color=6 edges=[↑0→0 c0, ↑1→1 c6, ↓1→1 c6, ↓0→0 c0] parents=[06b2554] refs=[feat-x]
+3272a88 lane=0 color=0 edges=[↑0→0 c0, ↑1→1 c6, ↓0→0 c0, ↓1→0 c6] parents=[06b2554] refs=[]
+06b2554 lane=0 color=0 edges=[↑0→0 c0] parents=[] refs=[]

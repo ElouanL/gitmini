@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-rebase-skip"
+description = "Enables the rebase_skip command without any pre-configured scope."
+commands.allow = ["rebase_skip"]
+
+[[permission]]
+identifier = "deny-rebase-skip"
+description = "Denies the rebase_skip command without any pre-configured scope."
+commands.deny = ["rebase_skip"]

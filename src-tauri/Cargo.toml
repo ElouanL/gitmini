@@ -1,0 +1,48 @@
+[package]
+name = "gitmini"
+description = "gitmini : client Git graphique (colle Tauri autour de gitmini-core)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "gitmini_lib"
+path = "src/lib.rs"
+
+[[bin]]
+name = "gitmini"
+path = "src/main.rs"
+
+[features]
+# Build de test (, 13) : variables GITMINI_* de test lues par gitmini-core, `AppInfo.e2e = true`,
+# The front then loads `test-bridge.ts` (window._gitmini). Without this feature, these variables are ignored.
+e2e = []
+# Embarks the frontend (`dist/`) instead of loading `devUrl`: `cargo tauri build` activates it on its own; to pass
+# by hand for a direct `cargo build --release -p gitmini`.
+custom-protocol = ["tauri/custom-protocol"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+gitmini-core = { path = "../crates/gitmini-core" }
+# No plugin fs / shell / opener; `dialog` only for `dialog:allow-open`.
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tokio = { version = "1.53.1", features = ["rt"] }
+tracing = "0.1.44"
+tracing-chrome = "0.7.2"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["env-filter", "fmt", "registry", "std"] }
+minisign-verify = "0.2"
+tauri-plugin-updater = { version = "~2.12.0", default-features = false, features = ["rustls-tls"] }
+base64 = "0.23"
+tempfile = "3"
+
+[dev-dependencies]
+minisign = "0.9"
+tauri = { version = "2", features = ["test"] }

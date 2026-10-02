@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-reflog-list"
+description = "Enables the reflog_list command without any pre-configured scope."
+commands.allow = ["reflog_list"]
+
+[[permission]]
+identifier = "deny-reflog-list"
+description = "Denies the reflog_list command without any pre-configured scope."
+commands.deny = ["reflog_list"]

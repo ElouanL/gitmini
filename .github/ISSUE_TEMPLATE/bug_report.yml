@@ -1,0 +1,17 @@
+name: Bug report
+description: Report a reproducible problem in gitmini.
+body:
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: gitmini version, operating system and Git version.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include expected and actual behavior. Use a disposable repository and remove credentials from logs.
+    validations:
+      required: true

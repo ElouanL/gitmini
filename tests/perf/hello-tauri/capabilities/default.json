@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "Description": "Same event and dialog permissions as the measured application (src-tauri/capabilities/default.json), without command.",
+  "windows": ["main"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten", "core:event:allow-emit", "dialog:allow-open"]
+}

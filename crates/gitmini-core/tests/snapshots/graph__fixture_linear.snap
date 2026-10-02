@@ -1,0 +1,14 @@
+---
+source: crates/gitmini-core/tests/graph.rs
+expression: "fixture_golden(\"linear\")"
+---
+f9a1ea5 lane=0 color=0 edges=[↓0→0 c0] parents=[b3bb799] refs=[main*]
+b3bb799 lane=0 color=0 edges=[↑0→0 c0, ↓0→0 c0] parents=[f88f10b] refs=[]
+f88f10b lane=0 color=0 edges=[↑0→0 c0, ↓0→0 c0] parents=[d265b88] refs=[]
+d265b88 lane=0 color=0 edges=[↑0→0 c0, ↓0→0 c0] parents=[46800ad] refs=[]
+46800ad lane=0 color=0 edges=[↑0→0 c0, ↓0→0 c0] parents=[dba5113] refs=[]
+dba5113 lane=0 color=0 edges=[↑0→0 c0, ↓0→0 c0] parents=[7049fb8] refs=[v1.0]
+7049fb8 lane=0 color=0 edges=[↑0→0 c0, ↓0→0 c0] parents=[be3b500] refs=[]
+be3b500 lane=0 color=0 edges=[↑0→0 c0, ↓0→0 c0] parents=[238b5f3] refs=[]
+238b5f3 lane=0 color=0 edges=[↑0→0 c0, ↓0→0 c0] parents=[48f4763] refs=[]
+48f4763 lane=0 color=0 edges=[↑0→0 c0] parents=[] refs=[]

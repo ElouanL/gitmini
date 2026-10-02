@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-merge-continue"
+description = "Enables the merge_continue command without any pre-configured scope."
+commands.allow = ["merge_continue"]
+
+[[permission]]
+identifier = "deny-merge-continue"
+description = "Denies the merge_continue command without any pre-configured scope."
+commands.deny = ["merge_continue"]

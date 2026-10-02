@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-sequencer-abort"
+description = "Enables the sequencer_abort command without any pre-configured scope."
+commands.allow = ["sequencer_abort"]
+
+[[permission]]
+identifier = "deny-sequencer-abort"
+description = "Denies the sequencer_abort command without any pre-configured scope."
+commands.deny = ["sequencer_abort"]
