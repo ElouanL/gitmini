@@ -105,13 +105,13 @@ jobs:
           releaseName: gitmini ${{ env.TAG }}
           releaseBody: |
             macOS: ad hoc signed `.dmg` installers for Apple Silicon and Intel, without notarization.
-            Windows: unsigned `.msi`. Linux: `.AppImage` and `.deb`.
+            Windows: unsigned per-user `.exe` installer (no administrator rights needed). Linux: `.AppImage` and `.deb`.
             Automatic updates are signed with the gitmini updater key. Verify downloads with `SHA256SUMS`.
             See `docs/releases.md` for installation and verification instructions.
           releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
-          updaterJsonPreferNsis: false
+          updaterJsonPreferNsis: true
           args: ${{ matrix.args }} --config "${{ env.GITMINI_RELEASE_CONFIG }}"
 
   verify-macos:
@@ -159,9 +159,9 @@ jobs:
         run: |
           mkdir dl
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dl \
-            --pattern '*.dmg' --pattern '*.msi' --pattern '*.AppImage' --pattern '*.deb' \
+            --pattern '*.dmg' --pattern '*-setup.exe' --pattern '*.AppImage' --pattern '*.deb' \
             --pattern '*.app.tar.gz' --pattern '*.sig' --pattern 'latest.json'
-          test "$(find dl -name '*.msi' | wc -l)" -eq 1
+          test "$(find dl -name '*-setup.exe' | wc -l)" -eq 1
           test "$(find dl -name '*.deb' | wc -l)" -eq 1
       - name: Verify version, platform coverage, URLs and all updater signatures
         run: node scripts/updater-release.mjs verify dl

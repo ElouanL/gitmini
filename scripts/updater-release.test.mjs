@@ -54,7 +54,7 @@ test('manifest validates every signed platform and rejects missing, mismatched o
   try {
     const key = signer();
     const platforms = {};
-    for (const [target, suffix] of [['darwin-aarch64', '.app.tar.gz'], ['darwin-x86_64', '.app.tar.gz'], ['windows-x86_64', '.msi'], ['linux-x86_64', '.AppImage']]) {
+    for (const [target, suffix] of [['darwin-aarch64', '.app.tar.gz'], ['darwin-x86_64', '.app.tar.gz'], ['windows-x86_64', '.exe'], ['linux-x86_64', '.AppImage']]) {
       const name = target + suffix;
       const bytes = Buffer.from(target);
       const signature = key.sign(bytes);
@@ -70,12 +70,12 @@ test('manifest validates every signed platform and rejects missing, mismatched o
     assert.throws(() => check({ ...manifest, platforms: { ...platforms, 'linux-x86_64': { ...platforms['linux-x86_64'], url: 'https://example.com/app.AppImage' } } }), /this release/);
     for (const version of ['0.0.1', null]) {
       const signature = key.sign(Buffer.from('windows-x86_64'), version);
-      writeFileSync(join(dir, 'windows-x86_64.msi.sig'), signature);
+      writeFileSync(join(dir, 'windows-x86_64.exe.sig'), signature);
       assert.throws(() => check({ ...manifest, platforms: { ...platforms,
         'windows-x86_64': { ...platforms['windows-x86_64'], signature } } }), /must cover the built version/);
     }
-    writeFileSync(join(dir, 'windows-x86_64.msi.sig'), platforms['windows-x86_64'].signature);
-    writeFileSync(join(dir, 'windows-x86_64.msi'), 'corrupt');
+    writeFileSync(join(dir, 'windows-x86_64.exe.sig'), platforms['windows-x86_64'].signature);
+    writeFileSync(join(dir, 'windows-x86_64.exe'), 'corrupt');
     assert.throws(() => check(manifest), /signature/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -88,7 +88,7 @@ test('manifest verifies installer-specific entries produced by tauri-action, inc
     for (const [target, installer, suffix] of [
       ['darwin-aarch64', 'app', '.app.tar.gz'],
       ['darwin-x86_64', 'app', '.app.tar.gz'],
-      ['windows-x86_64', 'msi', '.msi'],
+      ['windows-x86_64', 'nsis', '.exe'],
       ['linux-x86_64', 'appimage', '.AppImage'],
       ['linux-x86_64', 'deb', '.deb'],
     ]) {

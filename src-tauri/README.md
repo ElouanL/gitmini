@@ -15,6 +15,6 @@ Install the platform's Tauri prerequisites and Tauri CLI 2. `cargo tauri build` 
 
 ## Release configuration
 
-macOS initially uses ad hoc signing. Windows installers have no Authenticode signature. Signed updater packages use `TAURI_SIGNING_PRIVATE_KEY`; the embedded public key and HTTPS endpoint come from the release configuration. See [release setup](../docs/releases.md).
+macOS initially uses ad hoc signing. The Windows NSIS installer is per-user (no administrator rights) and has no Authenticode signature. Signed updater packages use `TAURI_SIGNING_PRIVATE_KEY`; the embedded public key and HTTPS endpoint come from the release configuration. See [release setup](../docs/releases.md).
 
 `VITE_GITMINI_GITHUB_LOGIN` is off by default. When explicitly enabled for a production build, supply `GITMINI_GITHUB_CLIENT_ID` at compilation. `GITMINI_REQUIRE_CLIENT_ID=1` makes that requirement explicit; it does not apply while the login flag is disabled. GitHub E2E tests use their local mock instead of the production OAuth service.

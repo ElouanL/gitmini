@@ -94,7 +94,7 @@ export function validateManifest(manifest, directory, version, pubkey, repo, tag
     assert(name && name === basename(name) && !name.includes('\\') && !name.includes('\0'), 'Invalid asset name');
     // tauri-action includes both platform defaults and installer-specific entries.
     const suffix = /^darwin-(aarch64|x86_64)(-app)?$/.test(target) ? '.app.tar.gz'
-      : /^windows-x86_64(-msi)?$/.test(target) ? '.msi'
+      : /^windows-x86_64(-nsis)?$/.test(target) ? '.exe'
       : /^linux-x86_64(-appimage)?$/.test(target) ? '.AppImage'
       : target === 'linux-x86_64-deb' ? '.deb' : undefined;
     assert(suffix && name.endsWith(suffix), `Unexpected artifact type: ${target}`);

@@ -6,7 +6,7 @@ Release builds are produced from an existing `vX.Y.Z` tag. The workspace and roo
 
 macOS uses an ad hoc signature (`bundle.macOS.signingIdentity = "-"`), without a paid Apple account or notarization. Test both Apple Silicon and Intel packages where available. The first launch needs explicit authorization in **System Settings → Privacy & Security**.
 
-Windows MSI packages initially have no Authenticode signature. Linux packages include SHA256 checksums. Updater packages on every supported platform are signed with the same persistent Tauri key; this signature authenticates updates independently of operating-system code signing.
+The Windows installer is an NSIS `-setup.exe` configured with `installMode = "currentUser"`: it installs under `%LOCALAPPDATA%\Programs`, needs no administrator rights, and its updates do not need elevation either. It initially has no Authenticode signature. Linux packages include SHA256 checksums. Updater packages on every supported platform are signed with the same persistent Tauri key; this signature authenticates updates independently of operating-system code signing.
 
 ## One-time updater setup
 
@@ -33,7 +33,7 @@ The release workflow requires the updater key and public-key configuration. Ordi
 
 ## Build and verify
 
-Push the existing version tag or dispatch the `release` workflow with its name. The workflow creates a **draft**, builds macOS ARM64/x64 DMGs and updater archives, Windows x64 MSI, and Linux x64 AppImage/DEB. It verifies the platform matrix, package signatures, signed versions, asset URLs and SHA256 checksums. Failed jobs leave the release unpublished.
+Push the existing version tag or dispatch the `release` workflow with its name. The workflow creates a **draft**, builds macOS ARM64/x64 DMGs and updater archives, Windows x64 NSIS installer, and Linux x64 AppImage/DEB. It verifies the platform matrix, package signatures, signed versions, asset URLs and SHA256 checksums. Failed jobs leave the release unpublished.
 
 Run these smoke tests before publishing:
 
@@ -42,6 +42,7 @@ Run these smoke tests before publishing:
 - Exercise history, staging, commit, fetch and a second repository tab.
 - Test an update between two different versions signed with the same updater key through a controlled HTTPS test endpoint. Confirm installation/restart succeeds and repository data and saved settings remain intact.
 - Confirm a modified update package is rejected. Test available Windows and Linux packages too.
+- On Windows, install from a standard (non-administrator) account: there must be no UAC prompt, and an update between two versions must also run without one.
 
 The existing updater unit/integration tests cover malformed manifests, incorrect keys, altered packages, signed-version mismatches and unsafe restart states; they complement actual installation testing.
 
@@ -53,4 +54,4 @@ When preparing an intermediate test release, use an explicit HTTPS test endpoint
 
 ## Future signing
 
-Developer ID/notarization on macOS and a Windows signing provider can be added later without changing the Tauri updater key. They are intentionally not prerequisites for the initial release.
+The planned Windows provider is SignPath Foundation; see the [code signing policy](code-signing-policy.md). Because Authenticode signing changes the installer's bytes, the updater `.sig` must be generated after SignPath returns the signed installer. Developer ID/notarization on macOS and a Windows signing provider can be added later without changing the Tauri updater key. They are intentionally not prerequisites for the initial release.

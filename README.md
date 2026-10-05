@@ -14,9 +14,9 @@ GitHub account sign-in is currently disabled. Cloning and configuring remotes by
 
 ## Install
 
-Download an installer from this repository's **Releases** page: DMG for macOS (Apple Silicon or Intel), MSI for Windows, or AppImage/DEB for Linux. Git 2.30 or newer must be installed and available in `PATH`.
+Download an installer from this repository's **Releases** page: DMG for macOS (Apple Silicon or Intel), `-setup.exe` for Windows, or AppImage/DEB for Linux. Git 2.30 or newer must be installed and available in `PATH`.
 
-The initial macOS builds use an ad hoc signature and are not notarized. After the first launch attempt, authorize the application in **System Settings → Privacy & Security → Open Anyway**. Windows installers initially have no Authenticode signature. Check the release's `SHA256SUMS` before installing.
+The initial macOS builds use an ad hoc signature and are not notarized. After the first launch attempt, authorize the application in **System Settings → Privacy & Security → Open Anyway**. The Windows installer installs for the current user only and needs no administrator rights, but it initially has no Authenticode signature: SmartScreen may show "Windows protected your PC" (**More info → Run anyway**). Check the release's `SHA256SUMS` before installing. See the [code signing policy](docs/code-signing-policy.md).
 
 Automatic updates use a separate cryptographic signature. They are supported by the macOS, Windows and Linux AppImage builds; DEB installations are updated manually or through a package manager.
 

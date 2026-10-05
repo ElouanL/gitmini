@@ -32,7 +32,7 @@
     "targets": [
       "app",
       "dmg",
-      "msi",
+      "nsis",
       "deb",
       "appimage"
     ],
@@ -54,6 +54,11 @@
       }
     },
     "createUpdaterArtifacts": false,
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
     "macOS": {
       "signingIdentity": "-"
     }
