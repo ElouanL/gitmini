@@ -1760,7 +1760,8 @@ fn progress_events_are_throttled_to_10hz_per_op() {
         a.emit(u.clone());
         b.emit(u);
         sent += 1;
-        std::thread::sleep(Duration::from_millis(2));
+        // no sleep: on a loaded or coarse-timer runner `sleep(2 ms)` yields far fewer than 100 updates in 450 ms
+        std::thread::yield_now();
     }
     let elapsed_ms = t0.elapsed().as_millis() as usize;
     assert!(sent > 100, "gust : {sent} updated by transmitter");

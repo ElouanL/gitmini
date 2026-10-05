@@ -25,6 +25,7 @@ export function createMockTransport(): Transport {
   let status = scenario === 'empty' ? makeStatus({ files: [], upstream: null, ahead: null, behind: null }) : makeStatus();
   const recents = makeRecents();
   const repoIds = new Map<string, number>();
+  const initialized = new Set<string>(); // folders `repo_init` has turned into repositories
 
   const emit = <N extends EventName>(name: N, payload: EventMap[N]) => {
     for (const l of listeners.get(name) ?? []) l(payload);
@@ -61,6 +62,13 @@ export function createMockTransport(): Transport {
       if (path.includes('bare')) throw err('NOT_A_REPO', "Bare depot", { path, reason: 'bare' });
       if (path.includes('sha256')) throw err('UNSUPPORTED_REPO_FORMAT', 'SHA-256 non pris en charge', { path, reason: 'sha256' });
       if (path.includes('dubious')) throw err('NOT_A_REPO', "Owner not safe", { path, reason: 'dubious-ownership' });
+      if (path.includes('plain') && !initialized.has(path)) throw err('NOT_A_REPO', "Not a repository", { path });
+      return repoInfo(path);
+    },
+    repo_init: async (a) => {
+      const path = String(a.path);
+      await sleep(60);
+      initialized.add(path);
       return repoInfo(path);
     },
     repo_close: () => null,

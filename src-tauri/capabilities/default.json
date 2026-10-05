@@ -73,6 +73,7 @@
     "allow-github-repos",
     "allow-github-open-pr",
     "allow-repo-clone",
+    "allow-repo-init",
     "allow-undo-last",
     "allow-op-cancel",
     "allow-app-update-status",

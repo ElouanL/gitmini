@@ -61,6 +61,7 @@ github_logout
 github_repos
 github_open_pr
 repo_clone
+repo_init
 undo_last
 op_cancel
 app_update_status
