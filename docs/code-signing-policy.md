@@ -18,15 +18,15 @@ Nothing else is signed with the SignPath Foundation certificate. In particular:
 - Linux packages are published with `SHA256SUMS` and are not Authenticode-signed.
 - Automatic updates are authenticated by a separate, project-owned Tauri (Minisign) key. That key is unrelated to the SignPath certificate. For Windows, the update signature is computed over the final installer **after** it has been signed by SignPath, so the installer users download and the one the updater verifies are the same file.
 
-Only binaries built from this repository are signed. No third-party or pre-built binaries are submitted, and signed files carry the product name `gitmini` and a version equal to the release tag without its leading `v`.
+Only binaries built from this repository are signed. No third-party or pre-built binaries are submitted. The SignPath artifact configuration ([`.signpath/artifact-configuration.xml`](../.signpath/artifact-configuration.xml)) accepts only an installer named for the release and enforces the product name `gitmini` and a product version equal to the release tag without its leading `v`.
 
 ## How a signed release is built
 
 1. A maintainer pushes a `vX.Y.Z` tag. The workspace and npm versions must match the tag; the `release` workflow refuses to run otherwise (`scripts/updater-release.mjs check`).
 2. [`.github/workflows/release.yml`](../.github/workflows/release.yml) builds the installers on GitHub-hosted runners from that tag's source, with no manual build step and no locally built binaries.
-3. The workflow uploads the unsigned Windows installer as a GitHub Actions artifact and submits it to SignPath through the official SignPath GitHub Action. SignPath verifies the origin (repository, commit and workflow run) of the artifact through its GitHub trusted build system integration, so only an artifact built by this repository's workflow can be signed.
+3. The Windows build uploads the unsigned installer as a GitHub Actions artifact, and the workflow submits it to SignPath through the official SignPath GitHub Action. SignPath verifies the origin (repository, commit and workflow run) of the artifact through its GitHub trusted build system integration, so only an artifact built by this repository's workflow can be signed.
 4. An approver manually approves each signing request in SignPath (see below). The signed installer is returned to the workflow.
-5. The workflow re-signs the installer for the updater, regenerates the update manifest, publishes everything to a **draft** release and verifies the platform matrix, signatures, asset URLs and SHA256 checksums (`scripts/updater-release.mjs verify`).
+5. The workflow checks that the returned installer has a valid, timestamped Authenticode signature, re-signs it for the updater and replaces the installer and its update manifest entries in the **draft** release. It then verifies the platform matrix, signatures, asset URLs and SHA256 checksums (`scripts/updater-release.mjs verify`).
 6. A maintainer runs the installation and update smoke tests in [`docs/releases.md`](releases.md) and publishes the draft manually.
 
 The signing private key is held by SignPath and is never available to this project or its CI.

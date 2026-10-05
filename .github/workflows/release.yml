@@ -105,7 +105,8 @@ jobs:
           releaseName: gitmini ${{ env.TAG }}
           releaseBody: |
             macOS: ad hoc signed `.dmg` installers for Apple Silicon and Intel, without notarization.
-            Windows: unsigned per-user `.exe` installer (no administrator rights needed). Linux: `.AppImage` and `.deb`.
+            Windows: per-user `-setup.exe` installer (no administrator rights needed). Linux: `.AppImage` and `.deb`.
+            See `docs/code-signing-policy.md` for the signature status of the Windows installer.
             Automatic updates are signed with the gitmini updater key. Verify downloads with `SHA256SUMS`.
             See `docs/releases.md` for installation and verification instructions.
           releaseDraft: true
@@ -113,6 +114,91 @@ jobs:
           includeUpdaterJson: true
           updaterJsonPreferNsis: true
           args: ${{ matrix.args }} --config "${{ env.GITMINI_RELEASE_CONFIG }}"
+      # SignPath verifies that the artifact comes from this workflow run, so it is uploaded here, by the build.
+      - name: Keep the unsigned Windows installer for SignPath
+        if: matrix.id == 'windows' && vars.SIGNPATH_ORGANIZATION_ID != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: unsigned-windows-installer
+          path: target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  # Optional: runs only when SignPath is configured (docs/releases.md). The build job leaves an unsigned installer
+  # and a manifest in the draft; this job replaces them with the Authenticode-signed installer, its new updater
+  # signature and the matching manifest entry. Without SignPath, the unsigned installer is published as is.
+  sign-windows:
+    name: sign (windows)
+    needs: build
+    if: vars.SIGNPATH_ORGANIZATION_ID != ''
+    runs-on: windows-2022
+    timeout-minutes: 150
+    permissions:
+      actions: read
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Find the unsigned installer artifact of this run
+        id: unsigned
+        run: |
+          ids="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.name == "unsigned-windows-installer") | .id')"
+          test "$(printf '%s\n' "$ids" | grep -c .)" -eq 1
+          echo "id=$ids" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+      # Each request waits for a manual approval in SignPath (docs/code-signing-policy.md).
+      - name: Submit the installer to SignPath
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: ${{ steps.unsigned.outputs.id }}
+          parameters: |
+            version: "${{ steps.unsigned.outputs.version }}"
+          wait-for-completion-timeout-in-seconds: 7200
+          output-artifact-directory: signed
+      - name: Verify the Authenticode signature
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem signed -Filter '*-setup.exe')
+          if ($installers.Count -ne 1) { throw "Expected one signed installer, found $($installers.Count)" }
+          $signature = Get-AuthenticodeSignature $installers[0].FullName
+          if ($signature.Status -ne 'Valid') { throw "Authenticode status: $($signature.Status)" }
+          if (-not $signature.TimeStamperCertificate) { throw 'The signature has no trusted timestamp' }
+          "$($installers[0].Name) signed by $($signature.SignerCertificate.Subject)"
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-binstall
+      - name: Install Tauri CLI
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: cargo binstall --no-confirm --locked tauri-cli --version '^2'
+      # The updater signature covers the installer's bytes, so it is recomputed after Authenticode signing.
+      - name: Re-sign for the updater and replace the draft assets
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          installer="$(ls signed/*-setup.exe)"
+          cargo tauri signer sign --app-version "${{ steps.unsigned.outputs.version }}" "$installer"
+          mkdir manifest
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir manifest
+          node scripts/updater-release.mjs resign manifest/latest.json "$installer"
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "$installer" "$installer.sig" manifest/latest.json
 
   verify-macos:
     needs: build
@@ -141,7 +227,8 @@ jobs:
           done
 
   assets:
-    needs: build
+    needs: [build, sign-windows]
+    if: ${{ !cancelled() && needs.build.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.sign-windows.result) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -173,9 +260,13 @@ jobs:
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber SHA256SUMS
 
   ready:
-    needs: [verify-macos, assets]
+    needs: [verify-macos, sign-windows, assets]
+    if: ${{ !cancelled() && needs.verify-macos.result == 'success' && needs.assets.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Draft ready for manual installation and update checks
-        run: echo "Draft $TAG verified. Follow docs/releases.md before publishing manually." >> "$GITHUB_STEP_SUMMARY"
+        env:
+          WINDOWS_SIGNING: ${{ needs.sign-windows.result == 'success' && 'signed through SignPath' || 'NOT signed (SignPath is not configured)' }}
+        run: |
+          echo "Draft $TAG verified. Windows installer: $WINDOWS_SIGNING. Follow docs/releases.md before publishing manually." >> "$GITHUB_STEP_SUMMARY"

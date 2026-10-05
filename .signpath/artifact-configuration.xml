@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SignPath artifact configuration for the Windows installer (see docs/releases.md and docs/code-signing-policy.md).
+  Kept here for review; paste it into the SignPath project as its artifact configuration.
+  The "version" parameter is passed by the release workflow (tag without its leading "v").
+  The path and the product metadata are enforced by SignPath, so only an installer named and versioned for this
+  release can be signed.
+-->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" default-value="0.0.0" />
+  </parameters>
+  <zip-file>
+    <pe-file path="gitmini_${version}_x64-setup.exe" max-matches="1" product-name="gitmini" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

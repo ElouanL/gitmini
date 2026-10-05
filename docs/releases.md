@@ -27,13 +27,13 @@ Configure GitHub Actions:
 | Variable | `GITMINI_UPDATER_PUBKEY` | Contents of the public `.pub` file |
 | Optional variable | `GITMINI_UPDATER_ENDPOINT` | Custom HTTPS update endpoint |
 
-By default, the workflow uses `https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json`. GitHub sign-in is disabled and does not require an OAuth client ID. No Apple, Windows or GPG signing secrets are required.
+By default, the workflow uses `https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json`. GitHub sign-in is disabled and does not require an OAuth client ID. No Apple or GPG signing secrets are required, and Windows signing is optional (see [Windows signing with SignPath](#windows-signing-with-signpath)).
 
 The release workflow requires the updater key and public-key configuration. Ordinary local development and installer builds may leave the updater unconfigured.
 
 ## Build and verify
 
-Push the existing version tag or dispatch the `release` workflow with its name. The workflow creates a **draft**, builds macOS ARM64/x64 DMGs and updater archives, Windows x64 NSIS installer, and Linux x64 AppImage/DEB. It verifies the platform matrix, package signatures, signed versions, asset URLs and SHA256 checksums. Failed jobs leave the release unpublished.
+Push the existing version tag or dispatch the `release` workflow with its name. The workflow creates a **draft**, builds macOS ARM64/x64 DMGs and updater archives, Windows x64 NSIS installer, and Linux x64 AppImage/DEB. It verifies the platform matrix, package signatures, signed versions, asset URLs and SHA256 checksums. Failed jobs leave the release unpublished. When SignPath is configured, the `sign-windows` job also replaces the Windows installer with its Authenticode-signed version before the checks run.
 
 Run these smoke tests before publishing:
 
@@ -46,6 +46,29 @@ Run these smoke tests before publishing:
 
 The existing updater unit/integration tests cover malformed manifests, incorrect keys, altered packages, signed-version mismatches and unsafe restart states; they complement actual installation testing.
 
+## Windows signing with SignPath
+
+The `sign-windows` job runs only when the repository variable `SIGNPATH_ORGANIZATION_ID` is set; otherwise the unsigned installer is published as is and the `ready` job summary says so. It is meant for the free SignPath Foundation program described in the [code signing policy](code-signing-policy.md).
+
+After SignPath approves the project, create a project, a signing policy and an artifact configuration in SignPath, paste [`.signpath/artifact-configuration.xml`](../.signpath/artifact-configuration.xml) as the artifact configuration, add the **GitHub.com** trusted build system to the project and install the SignPath GitHub App on the repository. Then configure GitHub Actions:
+
+| Kind | Name | Value |
+| --- | --- | --- |
+| Secret | `SIGNPATH_API_TOKEN` | API token of a SignPath user allowed to submit to the signing policy |
+| Variable | `SIGNPATH_ORGANIZATION_ID` | SignPath organization ID (enables the job) |
+| Variable | `SIGNPATH_PROJECT_SLUG` | SignPath project slug |
+| Variable | `SIGNPATH_SIGNING_POLICY_SLUG` | Signing policy used for releases |
+| Variable | `SIGNPATH_ARTIFACT_CONFIGURATION_SLUG` | Slug of the pasted artifact configuration |
+
+For each release the workflow:
+
+1. Uploads the unsigned installer from the Windows build as the `unsigned-windows-installer` artifact, so SignPath can verify that it comes from this workflow run.
+2. Submits it to SignPath and waits up to two hours for the manual approval described in the code signing policy.
+3. Verifies that the returned installer has a valid, timestamped Authenticode signature.
+4. Signs it again with the Tauri updater key (`--app-version` bound to the release), because the updater signature covers the installer's bytes, and replaces the installer, its `.sig` and the matching `latest.json` entries in the draft (`scripts/updater-release.mjs resign`).
+
+The `assets` job then verifies the final manifest and signatures exactly as for an unsigned release. If a step fails, re-run the failed jobs: the sign job starts again from the unsigned artifact.
+
 ## Publish
 
 Publish the verified draft manually in GitHub Releases and mark it as **Latest**. This exposes `latest.json` at the stable endpoint. Keep release notes in English and disclose the initial platform signing policy. Attach the matching tag's source and retain all updater packages and `.sig` files.
@@ -54,4 +77,4 @@ When preparing an intermediate test release, use an explicit HTTPS test endpoint
 
 ## Future signing
 
-The planned Windows provider is SignPath Foundation; see the [code signing policy](code-signing-policy.md). Because Authenticode signing changes the installer's bytes, the updater `.sig` must be generated after SignPath returns the signed installer. Developer ID/notarization on macOS and a Windows signing provider can be added later without changing the Tauri updater key. They are intentionally not prerequisites for the initial release.
+Windows signing through SignPath Foundation is wired in the workflow but needs the approved SignPath project above. Developer ID/notarization on macOS and a Windows signing provider can be added later without changing the Tauri updater key. They are intentionally not prerequisites for the initial release.

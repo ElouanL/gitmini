@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { configuration, publicKey, verifySignature, validateManifest } from './updater-release.mjs';
+import { configuration, publicKey, replaceSignature, verifySignature, validateManifest } from './updater-release.mjs';
 
 function signer() {
   const pair = generateKeyPairSync('ed25519');
@@ -113,5 +113,42 @@ test('manifest verifies installer-specific entries produced by tauri-action, inc
     assert.throws(() => check({ ...manifest, platforms: withoutArm }), /Missing updater platform: darwin-aarch64/);
     writeFileSync(join(dir, 'linux-x86_64.deb'), 'corrupt');
     assert.throws(() => check(manifest), /Invalid artifact signature/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('re-signing an Authenticode-signed installer updates every manifest entry for that asset and nothing else', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gitmini-updater-resign-'));
+  try {
+    const key = signer();
+    const name = 'gitmini_0.1.0_x64-setup.exe';
+    const url = (file) => 'https://github.com/test/gitmini/releases/download/v0.1.0/' + file;
+    const unsigned = key.sign(Buffer.from('unsigned installer'));
+    const entry = { url: url(name), signature: unsigned };
+    const other = { url: url('gitmini_0.1.0_amd64.AppImage'), signature: 'untouched' };
+    const manifest = { version: '0.1.0', platforms: {
+      'windows-x86_64': { ...entry }, 'windows-x86_64-nsis': { ...entry }, 'linux-x86_64': { ...other },
+    } };
+    const signed = Buffer.from('installer after Authenticode signing');
+    const signature = key.sign(signed);
+    replaceSignature(manifest, name, signature + '\n');
+    assert.equal(manifest.platforms['windows-x86_64'].signature, signature);
+    assert.equal(manifest.platforms['windows-x86_64-nsis'].signature, signature);
+    assert.equal(manifest.platforms['linux-x86_64'].signature, 'untouched');
+    assert.throws(() => replaceSignature(manifest, 'other-setup.exe', signature), /No updater platform refers to other-setup\.exe/);
+    // The updated manifest passes the same verification as a release built in one step.
+    for (const [target, file, bytes] of [
+      ['darwin-aarch64', 'a.app.tar.gz', 'a'], ['darwin-x86_64', 'b.app.tar.gz', 'b'], ['linux-x86_64', 'c.AppImage', 'c'],
+    ]) {
+      const sig = key.sign(Buffer.from(bytes));
+      writeFileSync(join(dir, file), bytes);
+      writeFileSync(join(dir, file + '.sig'), sig + '\n');
+      manifest.platforms[target] = { url: url(file), signature: sig };
+    }
+    writeFileSync(join(dir, name), signed);
+    writeFileSync(join(dir, name + '.sig'), signature + '\n');
+    validateManifest(manifest, dir, '0.1.0', key.pubkey, 'test/gitmini', 'v0.1.0');
+    // A stale signature (computed before Authenticode signing) is rejected.
+    manifest.platforms['windows-x86_64'].signature = unsigned;
+    assert.throws(() => validateManifest(manifest, dir, '0.1.0', key.pubkey, 'test/gitmini', 'v0.1.0'), /differs from the asset/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

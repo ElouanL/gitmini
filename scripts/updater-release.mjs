@@ -106,8 +106,21 @@ export function validateManifest(manifest, directory, version, pubkey, repo, tag
   }
 }
 
+// Authenticode signing rewrites the installer, so its Minisign signature must be recomputed and the manifest updated.
+export function replaceSignature(manifest, installerName, signature) {
+  let replaced = 0;
+  for (const platform of Object.values(manifest.platforms ?? {})) {
+    if (typeof platform?.url !== 'string') continue;
+    if (decodeURIComponent(new URL(platform.url).pathname.split('/').pop()) !== installerName) continue;
+    platform.signature = signature.trim();
+    replaced += 1;
+  }
+  assert(replaced > 0, `No updater platform refers to ${installerName}`);
+  return manifest;
+}
+
 function main() {
-  const [mode, directory] = process.argv.slice(2);
+  const [mode, directory, installer] = process.argv.slice(2);
   const env = process.env;
   if (mode === 'check' || mode === 'config') {
     const version = releaseVersion();
@@ -127,7 +140,19 @@ function main() {
     validateManifest(JSON.parse(readFileSync(join(directory, 'latest.json'), 'utf8')),
       directory, version, env.GITMINI_UPDATER_PUBKEY?.trim(), env.GITHUB_REPOSITORY, env.TAG);
     console.log('Updater manifest and all artifact signatures verified');
-  } else throw new Error('Usage: updater-release.mjs <check|config|verify [asset-directory]>');
+  } else if (mode === 'resign') {
+    assert(directory && installer, 'Usage: updater-release.mjs resign <latest.json> <installer>');
+    const pubkey = env.GITMINI_UPDATER_PUBKEY?.trim();
+    assert(pubkey, 'GITMINI_UPDATER_PUBKEY is required');
+    const signature = readFileSync(`${installer}.sig`, 'utf8');
+    const comment = verifySignature(readFileSync(installer), signature, pubkey);
+    const signedVersion = comment.split('\t').find((field) => field.startsWith('version:'))?.slice('version:'.length);
+    assert(signedVersion?.replace(/^v/, '') === releaseVersion(), 'The new signature must cover the built version');
+    const manifest = JSON.parse(readFileSync(directory, 'utf8'));
+    replaceSignature(manifest, basename(installer), signature);
+    writeFileSync(directory, `${JSON.stringify(manifest, null, 2)}\n`);
+    console.log(`Updated the manifest signature for ${basename(installer)}`);
+  } else throw new Error('Usage: updater-release.mjs <check|config|verify [asset-directory]|resign <latest.json> <installer>>');
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
