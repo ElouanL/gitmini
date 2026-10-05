@@ -1283,6 +1283,16 @@ async fn open_external_file_refuses_paths_outside_the_workdir() {
     }
     assert!(rec.calls().is_empty());
     // a link that remains under the workdir is followed up to its canonical target
+    // (the editor command is pinned: the default opener differs per OS and only gets the parent folder on Linux)
+    settings_set(
+        state,
+        SettingsSetArgs {
+            key: "editor.command".into(),
+            value: json!("code -g {path}"),
+        },
+    )
+    .await
+    .unwrap();
     open_external(state, external(id, file_target("link-in", None)))
         .await
         .unwrap();
