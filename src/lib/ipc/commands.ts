@@ -1,4 +1,4 @@
-// A wrapper typed by common IPC command (65 of ). The desktop adds updater.ts .
+// A wrapper typed by common IPC command (66 of ). The desktop adds updater.ts .
 //
 // Conventions :
 // - `commands.<camelCase>` for the `snake_case` command of the contract (`stage_paths` → `commands.stagePaths`);
@@ -75,7 +75,7 @@ async function call<T>(command: string, args: object = {}): Promise<T> {
   }
 }
 
-// "The 65 joint orders
+// "The 66 joint orders
 export const commands = {
   // Application, repository, settings
   appInfo: () => call<AppInfo>('app_info'),
@@ -183,6 +183,7 @@ export const commands = {
   githubRepos: (a: { page: number; perPage: number }) => call<GithubReposResult>('github_repos', a),
   githubOpenPr: (a: { repoId: RepoId; branch: string }) => call<{ url: string }>('github_open_pr', a),
   repoClone: (a: { opId: OpId; url: string; dest: string }) => call<RepoInfo>('repo_clone', a),
+  repoInit: (a: { path: string }) => call<RepoInfo>('repo_init', a),
 
   // Undo and operations
   undoLast: (a: { repoId: RepoId; entryId: string; expectedHead: Oid | null }) => call<WriteResult>('undo_last', a),
@@ -214,6 +215,6 @@ export const COMMAND_NAMES = {
   remoteFetch: 'remote_fetch', remotePull: 'remote_pull', remotePush: 'remote_push', remoteAdd: 'remote_add',
   remoteRemove: 'remote_remove',
   githubStatus: 'github_status', githubLoginStart: 'github_login_start', githubLoginPoll: 'github_login_poll',
-  githubLogout: 'github_logout', githubRepos: 'github_repos', githubOpenPr: 'github_open_pr', repoClone: 'repo_clone',
+  githubLogout: 'github_logout', githubRepos: 'github_repos', githubOpenPr: 'github_open_pr', repoClone: 'repo_clone', repoInit: 'repo_init',
   undoLast: 'undo_last', opCancel: 'op_cancel',
 } as const satisfies Record<CommandKey, string>;

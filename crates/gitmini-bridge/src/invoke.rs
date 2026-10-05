@@ -215,7 +215,7 @@ mod tests {
                 .iter()
                 .filter(|c| is_known_command(c))
                 .count(),
-            65
+            66
         );
     }
 }

@@ -1,10 +1,11 @@
-//! repository : `repo_open`, `repo_close`, `repo_recent_list`, `repo_clone` .
+//! repository : `repo_open`, `repo_close`, `repo_recent_list`, `repo_clone`, `repo_init`.
 //! Open repositoriess are followed in `OpenRepos` to be released when the window closes, and the title
 //! native of the window (`<repository> — gitmini`) is placed here, Rust side: the front does not have permission `core:window`.
 use gitmini_core::AppError;
 use gitmini_core::repo::{RepoActivateArgs, RepoCloseArgs, RepoOpenArgs};
 use gitmini_core::types::{RecentRepo, RepoInfo};
 use gitmini_core::write::clone::RepoCloneArgs;
+use gitmini_core::write::init::RepoInitArgs;
 use tauri::{Runtime, State, WebviewWindow};
 
 use super::{Args, Core, OpenRepos, call, set_window_title};
@@ -59,6 +60,23 @@ pub async fn repo_clone<R: Runtime>(
     let info = call(
         "repo_clone",
         gitmini_core::write::clone::repo_clone(&state, args.0),
+    )
+    .await?;
+    open.insert(info.id);
+    Ok(info)
+}
+
+/// `git init` in a plain folder, then opens it like `repo_open`.
+#[tauri::command]
+pub async fn repo_init<R: Runtime>(
+    _window: WebviewWindow<R>,
+    state: Core<'_>,
+    open: State<'_, OpenRepos>,
+    args: Args<RepoInitArgs>,
+) -> Result<RepoInfo, AppError> {
+    let info = call(
+        "repo_init",
+        gitmini_core::write::init::repo_init(&state, args.0),
     )
     .await?;
     open.insert(info.id);

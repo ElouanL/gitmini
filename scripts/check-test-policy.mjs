@@ -11,6 +11,7 @@ const conditionalSkips = new Set([
   'tests/e2e/helpers/runners.test.ts',
   'tests/e2e/selftest/specs/st-06.linear.e2e.ts',
   'tests/e2e/selftest/specs/st-07.linear.e2e.ts',
+  'tests/e2e/specs/ui-12.empty.e2e.ts',
 ]);
 
 export function inspectSource(file, source) {

@@ -1,9 +1,9 @@
 // `confirmAction`: generic confirmation dialog `confirm-dialog[data-action][data-danger]` (03 "Toasts and confirmation").
-// `action` belongs to the closed list of: `discard`, `force-push`, `remote-remove`, `op-abort`.
+// `action` belongs to the closed list of: `discard`, `force-push`, `remote-remove`, `op-abort`, `repo-init`.
 import { activeSession, type Session } from '../stores/session.svelte';
 import { openDialog } from './registry';
 
-export type ConfirmActionId = 'discard' | 'force-push' | 'remote-remove' | 'op-abort';
+export type ConfirmActionId = 'discard' | 'force-push' | 'remote-remove' | 'op-abort' | 'repo-init';
 
 export interface ConfirmOptions {
   action: ConfirmActionId;

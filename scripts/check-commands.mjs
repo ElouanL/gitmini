@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (p) => readFileSync(join(root, p), 'utf8');
-const EXPECTED = 69; // 65 shared Git commands + 4 desktop updater commands (§5.8).
+const EXPECTED = 70; // 66 shared Git commands + 4 desktop updater commands (§5.8).
 
 // commands.txt is the reviewed IPC contract, shared with the build script.
 const entries = read('src-tauri/commands.txt').trim().split(/\r?\n/).map((line) => line.trim());

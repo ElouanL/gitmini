@@ -32,6 +32,16 @@ export function recentEntry(path: string, name: string): { path: string; name: s
   return { path, name, lastOpened: '2026-09-01T10:00:00Z' };
 }
 
+/**
+ * Makes the folder picker answer `path` (web mode): outside Tauri `pickFolder` falls back to `window.prompt`.
+ * The native Tauri dialog cannot be driven by WebDriver.
+ */
+export async function stubFolderPicker(path: string): Promise<void> {
+  await browser.execute((p: string) => {
+    window.prompt = () => p;
+  }, path);
+}
+
 /** `data-testid` of the focus element (`null` if none). */
 export async function activeTestId(): Promise<string | null> {
   return browser.execute(() => document.activeElement?.getAttribute('data-testid') ?? null);

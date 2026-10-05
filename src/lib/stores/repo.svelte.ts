@@ -2,6 +2,7 @@
 import { commands } from '../ipc/commands';
 import type { ErrorCode, HeadInfo, RecentRepo, RepoInfo } from '../ipc/types';
 import type { TabsSetting } from '../ipc/settings-types';
+import { confirmAction } from '../dialogs/confirm';
 import { closeAllDialogs } from '../dialogs/registry';
 import { dialogStack } from '../dialogs/stack.svelte';
 import { reportError } from '../errors/report';
@@ -58,13 +59,15 @@ class RepoStore extends RepoView {
   restoring = $state(false);
   #title = Promise.resolve();
   #lastOpenedPath: string | null = null;
+  /** Set by `open(..., { offerInit })` when the folder exists but is not a repository. */
+  #plainFolder: string | null = null;
 
   async refreshRecents(): Promise<void> {
     try { this.recents = await commands.repoRecentList(); }
     catch (e) { reportError(e, { command: 'repo_recent_list', quiet: true }); }
   }
 
-  async open(path: string, opts: { activate?: boolean; restoring?: boolean } = {}): Promise<boolean> {
+  async open(path: string, opts: { activate?: boolean; restoring?: boolean; offerInit?: boolean } = {}): Promise<boolean> {
     if (this.opening) return false;
     this.#lastOpenedPath = null;
     const existing = this.tabs.find((tab) => tab.info?.workdir === path);
@@ -87,6 +90,10 @@ class RepoStore extends RepoView {
       reportError(e, {
         command: 'repo_open', quiet: opts.restoring,
         onError: (er) => {
+          if (opts.offerInit && er.code === 'NOT_A_REPO' && !er.details?.reason) {
+            this.#plainFolder = path;
+            return true;
+          }
           if (!OPEN_ERROR_CODES.has(er.code) || (er.code === 'NOT_FOUND' && er.details?.what !== 'path')) return false;
           this.openError = {
             code: er.code, reason: typeof er.details?.reason === 'string' ? er.details.reason : null,
@@ -99,6 +106,37 @@ class RepoStore extends RepoView {
       await this.refreshRecents();
       return false;
     } finally { this.opening = false; }
+  }
+
+  /** `git init` in a plain folder, then adopts it as a new tab. */
+  async init(path: string): Promise<boolean> {
+    if (this.opening) return false;
+    this.opening = true;
+    this.attempted = true;
+    this.openError = null;
+    try {
+      const info = await commands.repoInit({ path });
+      this.#lastOpenedPath = info.workdir;
+      this.adopt(info);
+      return true;
+    } catch (e) {
+      reportError(e, { command: 'repo_init' });
+      return false;
+    } finally { this.opening = false; }
+  }
+
+  /** Folder picker flow: a folder that is not a repository is offered `git init` instead of an error. */
+  async openOrInit(path: string): Promise<boolean> {
+    this.#plainFolder = null;
+    if (await this.open(path, { offerInit: true })) return true;
+    if (this.#plainFolder !== path) return false;
+    const confirmed = await confirmAction({
+      action: 'repo-init',
+      title: t('repo.init.title'),
+      message: t('repo.init.message', { path }),
+      confirmLabel: t('repo.init.confirm'),
+    });
+    return confirmed && this.init(path);
   }
 
   /** Clone returns an already-open handle; adding it must not close any other tab. */
@@ -245,6 +283,7 @@ class RepoStore extends RepoView {
     this.opening = false;
     this.attempted = false;
     this.restoring = false;
+    this.#plainFolder = null;
     this.recents = [];
   }
 }

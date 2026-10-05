@@ -21,7 +21,7 @@ const blocked = (kind: Parameters<ActionContext['op']['blockReason']>[0]) => (ct
 export function openRepoFromPicker(): Promise<void> {
   return pickFolder(t('welcome.pickTitle')).then(async (path) => {
     if (!path) return;
-    await repo.open(path);
+    await repo.openOrInit(path);
   });
 }
 
