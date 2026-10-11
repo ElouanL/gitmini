@@ -3,6 +3,9 @@
 //! Shared by `tests/graph.rs`, `tests/log.rs` and `benches/log.rs` (`#[path]`).
 #![allow(dead_code)]
 
+#[path = "../common/git_paths.rs"]
+mod git_paths;
+
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -48,7 +51,10 @@ fn git_command(dir: &Path) -> Command {
 
 /// Standard output of `git <args>` (without the last line jump); fails the test if git fails.
 pub fn git(dir: &Path, args: &[&str]) -> String {
-    let out = git_command(dir).args(args).output().expect("lancer git");
+    let out = git_command(dir)
+        .args(args.iter().map(|arg| git_paths::argument(arg)))
+        .output()
+        .expect("lancer git");
     assert!(
         out.status.success(),
         "git {args:?} failed: {}\n{}",
@@ -455,6 +461,7 @@ pub fn page_args(repo: &RepoHandle) -> LogPageArgs {
         start_row: None,
         around_oid: None,
         limit: None,
+        max_visible_lane: None,
     }
 }
 

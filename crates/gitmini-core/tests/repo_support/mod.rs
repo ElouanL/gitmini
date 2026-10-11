@@ -3,6 +3,9 @@
 //! Independent of `tests/common/mod.rs` (fixations) and `tests/read_support`.
 #![allow(dead_code)]
 
+#[path = "../common/git_paths.rs"]
+pub mod git_paths;
+
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, Once};
@@ -76,7 +79,9 @@ pub fn init() {
 
 pub fn command_in(dir: &Path, args: &[&str]) -> Command {
     let mut c = Command::new(git_program());
-    c.arg("-C").arg(dir).args(args);
+    c.arg("-C")
+        .arg(git_paths::argument(&dir.to_string_lossy()))
+        .args(args.iter().map(|arg| git_paths::argument(arg)));
     c.env("GIT_CONFIG_GLOBAL", global_gitconfig())
         .env("GIT_CONFIG_SYSTEM", system_gitconfig())
         .env("LC_ALL", "C")

@@ -107,6 +107,7 @@ fn page(repo: &Arc<RepoHandle>, start: Option<u32>, limit: u32) -> usize {
         start_row: start,
         around_oid: None,
         limit: Some(limit),
+        max_visible_lane: None,
     };
     log::log_page_blocking(repo, &a).unwrap().rows.len()
 }
@@ -206,6 +207,7 @@ fn benches(c: &mut Criterion) {
             start_row: Some(rows as u32 / 3),
             around_oid: None,
             limit: Some(1),
+            max_visible_lane: None,
         };
         log::log_page_blocking(&repo, &a).unwrap().rows[0]
             .oid

@@ -18,6 +18,8 @@ Reads use `gix` and caches. Writes use the Git CLI through the core write runner
 
 Rust types are exported with Specta into `src/lib/ipc/types.ts`. Run `just gen-types` after changing them. Frontend invocations and event subscriptions live in `src/lib/ipc`.
 
+The graph keeps at most six pages of 500 rows. Its `log_page` requests pass `maxVisibleLane` to omit edge segments wholly outside the displayed graph columns. Connections into visible columns remain present; commit metadata, pagination and the full lane count are preserved. Callers that omit this optional argument receive all edge segments.
+
 ## UI and messages
 
 Actions, menus, dialogs and panels use small registries. Feature domains register their behavior; larger views load lazily. All application-authored UI messages use the English catalogs through `src/i18n/index.ts`. Backend errors contain stable codes and details plus an English display message.

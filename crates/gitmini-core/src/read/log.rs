@@ -1574,6 +1574,9 @@ pub struct LogPageArgs {
     pub start_row: Option<u32>,
     pub around_oid: Option<Oid>,
     pub limit: Option<u32>,
+    /// Inclusive last rendered lane; omit to return every edge. Crossings into
+    /// the visible region remain present, and row/width metadata is unchanged.
+    pub max_visible_lane: Option<u32>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Type, PartialEq, Eq)]
@@ -1677,7 +1680,12 @@ fn stale(expected: u64, actual: u64) -> AppError {
 }
 
 /// Extract the requested page from the index (under the reading lock) or ask to wait for lines.
-fn try_collect(g: &GraphIndex, target: &Target, limit: usize) -> AppResult<Outcome> {
+fn try_collect(
+    g: &GraphIndex,
+    target: &Target,
+    limit: usize,
+    max_visible_lane: Option<u32>,
+) -> AppResult<Outcome> {
     if g.epoch == 0 {
         // never built and never asked: the index has been released (`repo_close`)
         return if g.requested {
@@ -1739,8 +1747,15 @@ fn try_collect(g: &GraphIndex, target: &Target, limit: usize) -> AppResult<Outco
                 Some(&mut edges),
             );
             debug_assert_eq!(placed.lane, g.rows.lane[r]);
-            let mut flat = Vec::with_capacity(edges.len() * 4);
+            let visible = |e: &graph::Edge| {
+                max_visible_lane
+                    .is_none_or(|last| u32::from(e.from) <= last || u32::from(e.to) <= last)
+            };
+            let mut flat = Vec::with_capacity(edges.iter().filter(|e| visible(e)).count() * 4);
             for e in &edges {
+                if !visible(e) {
+                    continue;
+                }
                 e.push_flat(&mut flat);
             }
             rows.push(RowData {
@@ -1833,7 +1848,7 @@ pub fn log_page_blocking(repo: &Arc<RepoHandle>, args: &LogPageArgs) -> AppResul
         };
         let outcome = {
             let g = repo.graph.read().unwrap();
-            try_collect(&g, &target, limit)?
+            try_collect(&g, &target, limit, args.max_visible_lane)?
         };
         match outcome {
             Outcome::Ready(s) => break s,

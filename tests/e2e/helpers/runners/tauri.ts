@@ -61,6 +61,10 @@ export class TauriRunner implements AppRunner {
       abortIf: () => (this.driver?.hasExited() ? `tauri-driver stopped (see ${logFile})` : null),
     });
 
+    // EdgeDriver treats application arguments as switches. Use an explicit
+    // repository option so a Windows path survives its switch normalization.
+    const appArgs = session.args.map((arg) => this.platform === 'win32' && !arg.startsWith('-') ? `--repo=${arg}` : arg);
+
     return {
       capabilities: {
         hostname: '127.0.0.1',
@@ -68,7 +72,7 @@ export class TauriRunner implements AppRunner {
         // No BiDi negotiation (webSocketUrl): tauri-driver / WebKitWebDriver does not, and `reloadSession(caps)`
         // repart de ces capabilities
         'wdio:enforceWebDriverClassic': true,
-        'tauri:options': { application: binary, args: session.args },
+        'tauri:options': { application: binary, args: appArgs },
       },
     };
   }

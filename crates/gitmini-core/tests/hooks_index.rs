@@ -101,6 +101,7 @@ async fn stage_07_the_commit_msg_hook_receives_the_message_that_was_typed() {
 }
 
 #[tokio::test]
+#[cfg(unix)]
 async fn stage_07_a_non_executable_hook_is_not_launched() {
     let fx = Fx::load("linear");
     fx.write("new.txt", "n\n");

@@ -118,10 +118,15 @@ fn cd_of(rec: &SpawnRecord) -> Option<&str> {
 
 /// Git launches in `dir` (runner's diary, filtered by folder: tests run in parallel).
 fn spawns(dir: &Path) -> Vec<SpawnRecord> {
-    let d = dir.to_string_lossy();
+    let d = dir.canonicalize().expect("repository exists");
     spawn_journal()
         .into_iter()
-        .filter(|r| cd_of(r) == Some(d.as_ref()))
+        .filter(|r| {
+            cd_of(r)
+                .and_then(|path| Path::new(path).canonicalize().ok())
+                .as_ref()
+                == Some(&d)
+        })
         .collect()
 }
 
@@ -1787,6 +1792,7 @@ fn progress_events_are_throttled_to_10hz_per_op() {
 /// A false `ssh` at the head of the `PATH` logs its arguments: proves the real effect of `GIT_SSH_COMMAND`
 /// (`-o BatchMode=yes -o ConnectTimeout=15`) and that the user's `core.sshCommand` is never overwritten.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[cfg(unix)]
 async fn rm_12_ssh_runs_in_batch_mode_unless_the_user_defines_core_ssh_command() {
     let fx = Fx::load("with-remote");
     let bin = fx.root.join("fakebin");

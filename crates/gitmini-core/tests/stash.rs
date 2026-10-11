@@ -411,26 +411,31 @@ async fn st_07_save_selected_paths_only_lists_those_paths() {
 #[tokio::test]
 async fn st_07_paths_are_literal_and_nul_separated() {
     // a file named `*.txt` next to a `other.txt`: the path is literal, never a glob
+    let literal = if cfg!(windows) {
+        "[o]ther.txt"
+    } else {
+        "*.txt"
+    };
     let t = Env::scratch_repo();
-    t.write("*.txt", "joker\n");
+    t.write(literal, "joker\n");
     t.write("other.txt", "other\n");
     t.write("dir avec espace/é.txt", "x\n");
     t.git(["add", "-A"]);
     t.git(["commit", "-q", "-m", "init"]);
-    t.write("*.txt", "modified joker\n");
+    t.write(literal, "modified joker\n");
     t.write("other.txt", "other modified\n");
     t.write("dir avec espace/é.txt", "x modified\n");
     let o = t.open().await;
 
     stash_save(
         &o.state,
-        save_args(&o, None, false, false, Some(&["*.txt"])),
+        save_args(&o, None, false, false, Some(&[literal])),
     )
     .await
     .unwrap();
     assert_eq!(
         t.git(["stash", "show", "--name-only", "stash@{0}"]),
-        "*.txt",
+        literal,
         "no glob : the path is literal"
     );
     assert!(

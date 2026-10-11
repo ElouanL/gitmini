@@ -14,11 +14,15 @@ pub mod perf;
 pub mod sink;
 pub mod updater;
 
-/// First argument of the command line: `gitmini [<repository-path>]` (, `AppInfo.initialPath`).
+/// Repository argument: `gitmini [<repository-path> | --repo=<repository-path>]`.
 /// The options (`-psn_…` macOS, unknown flags) are not paths.
 pub fn initial_path(args: impl IntoIterator<Item = String>) -> Option<String> {
-    args.into_iter()
-        .find(|a| !a.is_empty() && !a.starts_with('-'))
+    args.into_iter().find_map(|arg| {
+        if let Some(path) = arg.strip_prefix("--repo=") {
+            return (!path.is_empty()).then(|| path.to_owned());
+        }
+        (!arg.is_empty() && !arg.starts_with('-')).then_some(arg)
+    })
 }
 
 /// Context Tauri generated from `tauri.conf.json` and `capabilities/` (one expansion of `generate_context!`:
@@ -191,5 +195,13 @@ mod tests {
         );
         assert_eq!(initial_path(args(&[])), None);
         assert_eq!(initial_path(args(&["--verbose"])), None);
+        assert_eq!(
+            initial_path(args(&[r"--repo=C:\work repo", "--verbose"])),
+            Some(r"C:\work repo".into())
+        );
+        assert_eq!(
+            initial_path(args(&["--repo=", "/tmp/repo"])),
+            Some("/tmp/repo".into())
+        );
     }
 }

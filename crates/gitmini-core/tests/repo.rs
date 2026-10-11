@@ -269,7 +269,10 @@ async fn open_is_fast_never_waits_for_the_disk_and_spawns_no_git() {
         "repo_recent_list awaits writing in progress"
     );
     assert_eq!(recents.len(), 1);
-    assert_eq!(recents[0].path, fx.repo().to_string_lossy());
+    assert_eq!(
+        Path::new(&recents[0].path).canonicalize().unwrap(),
+        fx.repo().canonicalize().unwrap()
+    );
     blocker.join().unwrap();
 }
 

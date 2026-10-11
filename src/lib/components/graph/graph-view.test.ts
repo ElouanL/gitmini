@@ -187,7 +187,7 @@ describe('virtualisation (GRAPH-04)', () => {
     await settle();
     const calls = fake.callsOf('log_page');
     expect(calls).toHaveLength(1);
-    expect(calls[0]!.args).toEqual({ repoId: 1, cursor: '1:500' });
+    expect(calls[0]!.args).toEqual({ repoId: 1, cursor: '1:500', maxVisibleLane: 12 });
     expect(graph.pages.map((p) => p.start)).toEqual([0, 500]);
   });
 

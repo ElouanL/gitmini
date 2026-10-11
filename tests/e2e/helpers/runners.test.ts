@@ -76,6 +76,10 @@ process.on('SIGTERM', () => process.exit(0));
       // a restart keeps the same port (WDIO has stored it)
       await runner.stop();
       assert.equal(isAlive(seen.pid), false, "tauri-driver is stopped");
+      const windows = new TauriRunner('tauri', 'win32');
+      const winStarted = await windows.start(session);
+      assert.deepEqual(winStarted.capabilities['tauri:options'], { application: process.execPath, args: [`--repo=${session.repo}`] });
+      await windows.stop();
       session.env.PATH = join(base, 'no-programs');
       const again = await runner.start(session);
       assert.equal(again.capabilities.port, port);

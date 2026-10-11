@@ -14,7 +14,7 @@ import { t } from '$i18n/index';
 import { captureAnchor, restoreAnchor, type Anchor } from './model/anchor';
 import { formatGraphDate, avatarColor, initials } from './model/format';
 import {
-  PAGE_LIMIT, ROW_H, columnLayout, estimateRowCount, hiddenLanes, pageStep, poolSize, rowWindow, scrollMapping, scrollToVrow,
+  MAX_LANE_COLS, PAGE_LIMIT, ROW_H, columnLayout, estimateRowCount, hiddenLanes, pageStep, poolSize, rowWindow, scrollMapping, scrollToVrow,
   vrowAtY, type ColumnLayout, type RowWindow,
 } from './model/geometry';
 import { layoutLabels } from './model/labels';
@@ -534,7 +534,7 @@ export class GraphController {
           : req.kind === 'startRow'
             ? { repoId, cursor: null, startRow: req.startRow, limit: req.limit }
             : { repoId, cursor: req.cursor };
-      const page = await commands.logPage(args);
+      const page = await commands.logPage({ ...args, maxVisibleLane: MAX_LANE_COLS });
       if (!this.#scope.session.isCurrent(gen) || !this.#mounted) return false;
       if (page.rows.length === 0) {
         this.#scope.graph.noteMeta(page);
@@ -651,13 +651,13 @@ export class GraphController {
     this.#requests.refresh++;
     try {
       try {
-        page = await commands.logPage({ repoId, cursor: null, ...(anchor.oid && !anchor.top ? { aroundOid: anchor.oid } : {}) });
+        page = await commands.logPage({ repoId, cursor: null, maxVisibleLane: MAX_LANE_COLS, ...(anchor.oid && !anchor.top ? { aroundOid: anchor.oid } : {}) });
       } catch (e) {
         if (!(isAppError(e) && e.code === 'NOT_FOUND' && anchor.oid)) throw e;
         // The commit can no longer be reached: first page, empty selection (04 "In error cases").
         this.#scope.graph.clearSelection();
         anchor = { oid: null, offset: 0, top: true };
-        page = await commands.logPage({ repoId, cursor: null });
+        page = await commands.logPage({ repoId, cursor: null, maxVisibleLane: MAX_LANE_COLS });
       }
     } catch (e) {
       // A failed rereading keeps the old page displayed; the error is reported (NOT_FOUND workdir → dedicated screen, without toast).
@@ -696,8 +696,8 @@ export class GraphController {
     if (repoId === null) throw new Error("No repository open");
     this.#requests[req.kind === 'cursor' ? 'cursor' : 'startRow']++;
     return req.kind === 'cursor'
-      ? commands.logPage({ repoId, cursor: req.cursor })
-      : commands.logPage({ repoId, cursor: null, startRow: req.startRow, limit: req.limit });
+      ? commands.logPage({ repoId, cursor: req.cursor, maxVisibleLane: MAX_LANE_COLS })
+      : commands.logPage({ repoId, cursor: null, startRow: req.startRow, limit: req.limit, maxVisibleLane: MAX_LANE_COLS });
   }
 
   #centerRow(): number {

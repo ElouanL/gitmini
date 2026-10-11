@@ -29,6 +29,7 @@ panic = "abort"
 # Size-optimize the Tauri command glue; repository reads keep their speed profile.
 [profile.release.package.gitmini]
 opt-level = "s"
+strip = "symbols"
 
 # `release-perf`: perf CI (B12, binary measured conservatively).
 [profile.release-perf]

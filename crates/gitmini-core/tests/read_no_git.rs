@@ -81,7 +81,8 @@ async fn sec_01_no_read_command_spawns_git() {
                 cursor: None,
                 start_row: None,
                 around_oid: None,
-                limit: None
+                limit: None,
+                max_visible_lane: None
             }
         )
         .await
@@ -98,7 +99,8 @@ async fn sec_01_no_read_command_spawns_git() {
                 cursor: None,
                 start_row: None,
                 around_oid: Some(head.clone()),
-                limit: Some(50)
+                limit: Some(50),
+                max_visible_lane: None
             }
         )
         .await

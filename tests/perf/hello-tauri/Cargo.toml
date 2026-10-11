@@ -34,6 +34,7 @@ panic = "abort"
 
 [profile.release.package.hello-tauri]
 opt-level = "s"
+strip = "symbols"
 
 [profile.release-perf]
 inherits = "release"

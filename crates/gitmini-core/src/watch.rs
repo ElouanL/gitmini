@@ -566,7 +566,12 @@ impl Worker {
         let is_dir = match kind {
             EventKind::Create(CreateKind::Folder) | EventKind::Remove(RemoveKind::Folder) => true,
             EventKind::Create(CreateKind::File) | EventKind::Remove(RemoveKind::File) => false,
-            _ => std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir()),
+            // ReadDirectoryChangesW reports deletions as Remove(Any); after a
+            // removal metadata no longer exists, but our watch set knows folders.
+            _ => {
+                self.watched.lock().unwrap().contains(path)
+                    || std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir())
+            }
         };
         if self.ignore.is_ignored(rel, is_dir) {
             return false;

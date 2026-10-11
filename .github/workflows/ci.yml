@@ -345,6 +345,7 @@ jobs:
         run: node scripts/check-binary-size.mjs target/release-perf/gitmini --max-mb 15
       # Merge the measurements, print the measurement / budget table, fail if PERF-01 to 05 exceeds its absolute budget.
       - name: Rapport (budgets bloquants)
+        if: always()
         run: node tests/perf/report.mjs --markdown tests/perf/results/summary.md --check-blocking
       - name: "Summary of the job"
         if: always()

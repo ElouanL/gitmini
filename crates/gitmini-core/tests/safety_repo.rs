@@ -691,13 +691,21 @@ fn safe_06_sanitize_process_env_removes_repo_variables() {
     // without cleaning, `git` would target the other repository: this is what the function prevents
     let leaked = std::process::Command::new(git_program())
         .args(["-C", ours.to_str().unwrap(), "rev-parse", "--show-toplevel"])
-        .env("GIT_DIR", other.join(".git"))
-        .env("GIT_WORK_TREE", &other)
+        .env(
+            "GIT_DIR",
+            git_paths::argument(&other.join(".git").to_string_lossy()),
+        )
+        .env(
+            "GIT_WORK_TREE",
+            git_paths::argument(&other.to_string_lossy()),
+        )
         .output()
         .unwrap();
     assert_eq!(
-        String::from_utf8_lossy(&leaked.stdout).trim(),
-        other.to_string_lossy(),
+        Path::new(String::from_utf8_lossy(&leaked.stdout).trim())
+            .canonicalize()
+            .unwrap(),
+        other.canonicalize().unwrap(),
         "la fuite existe bien"
     );
 }

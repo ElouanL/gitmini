@@ -7,6 +7,7 @@ import { reportError } from '../errors/report';
 import { isAppError } from '../ipc/transport';
 import { perfMark } from '../perf';
 import { evictFarthest, mergePage, sortPages } from '../components/graph/model/pages';
+import { MAX_LANE_COLS } from '../components/graph/model/geometry';
 import { scopedStore, type Session } from './session.svelte';
 
 export type Oid = string;
@@ -136,7 +137,7 @@ export class GraphStore {
     const gen = this.owner.gen;
     this.loading = true;
     try {
-      const page = await commands.logPage({ repoId, cursor: null });
+      const page = await commands.logPage({ repoId, cursor: null, maxVisibleLane: MAX_LANE_COLS });
       if (this.owner.isCurrent(gen)) this.setPages([page]);
     } catch (e) {
       if (!this.owner.isCurrent(gen)) return;
@@ -166,7 +167,7 @@ export class GraphStore {
     const sel = this.selection;
     const aroundOid = sel.kind === 'commits' ? sel.anchor : sel.kind === 'stash' ? sel.oid : undefined;
     try {
-      const page = await commands.logPage({ repoId, cursor: null, ...(aroundOid ? { aroundOid } : {}) });
+      const page = await commands.logPage({ repoId, cursor: null, maxVisibleLane: MAX_LANE_COLS, ...(aroundOid ? { aroundOid } : {}) });
       if (this.owner.isCurrent(gen)) this.setPages([page]);
     } catch (e) {
       if (!this.owner.isCurrent(gen)) return;
@@ -254,7 +255,7 @@ export class GraphStore {
       if (repoId === null) return;
       const gen = this.owner.gen;
       try {
-        const page = await commands.logPage({ repoId, cursor: null, aroundOid: oid });
+        const page = await commands.logPage({ repoId, cursor: null, aroundOid: oid, maxVisibleLane: MAX_LANE_COLS });
         if (!this.owner.isCurrent(gen)) return;
         this.setPages([page]);
       } catch (e) {
