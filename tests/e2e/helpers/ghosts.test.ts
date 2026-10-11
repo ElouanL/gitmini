@@ -86,10 +86,12 @@ describe("findGhosts (13 §9.2: no git/gitmini process survives)", () => {
 });
 
 describe("scripts/check-ghosts.mjs (real processes)", () => {
-  const dirs: string[] = [];
+  const isolatedArtifacts = mkdtempSync(join(tmpdir(), 'gitmini-ghosts-isolated-'));
+  const dirs: string[] = [isolatedArtifacts];
   after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 
-  const check = (...args: string[]) => spawnSync(process.execPath, [join(root, 'scripts', 'check-ghosts.mjs'), ...args], { encoding: 'utf8' });
+  // Never inspect or stop processes belonging to a concurrent E2E run in the workspace.
+  const check = (...args: string[]) => spawnSync(process.execPath, [join(root, 'scripts', 'check-ghosts.mjs'), '--artifacts', isolatedArtifacts, ...args], { encoding: 'utf8' });
 
   it("exits 1 and lists the process while it lives, --kill stops it, then exits 0", async () => {
     const marker = `gitmini-e2e-selftest${process.pid}`;
