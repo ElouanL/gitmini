@@ -461,6 +461,9 @@ jobs:
       GITMINI_E2E_ARTIFACTS: ${{ github.workspace }}/tests/e2e/.artifacts
       GITMINI_TEST_SEED: ${{ github.run_id }}
       GITMINI_E2E_SKIP_LINUX_ONLY: "1" # excludes scenarios marked "Linux" (, §9.1)
+      # The hosted desktop is 1024 px wide. Keep the desktop scenarios above the
+      # 1200 CSS-pixel breakpoint instead of opening the overlapping narrow panel.
+      WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--force-device-scale-factor=0.8"
       RUST_LOG: gitmini=debug
     steps:
       - uses: actions/checkout@v4

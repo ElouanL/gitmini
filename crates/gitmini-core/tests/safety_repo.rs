@@ -9,7 +9,9 @@ use gitmini_core::ErrorCode;
 use gitmini_core::events::ChangeKindEv;
 use gitmini_core::ops::{OpCancelArgs, op_cancel};
 use gitmini_core::state::{GitInfo, MIN_GIT, WriteSpec, parse_git_version};
-use gitmini_core::types::{GitError, OpKind, RepoOpState};
+#[cfg(unix)]
+use gitmini_core::types::GitError;
+use gitmini_core::types::{OpKind, RepoOpState};
 use serde_json::Value;
 
 use repo_support::*;

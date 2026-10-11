@@ -141,8 +141,7 @@ async fn br_11_linked_worktree_opens_with_distinct_git_and_common_dirs() {
     assert_ne!(info.git_dir, info.common_dir);
     assert_eq!(info.common_dir, main.join(".git").to_string_lossy());
     assert!(
-        info.git_dir
-            .starts_with(&format!("{}/worktrees/", info.common_dir)),
+        Path::new(&info.git_dir).starts_with(Path::new(&info.common_dir).join("worktrees")),
         "{}",
         info.git_dir
     );
@@ -635,8 +634,8 @@ fn thread_repo_reloads_in_a_linked_worktree() {
     let repo = h.thread_repo();
     assert_eq!(repo.remote_names().len(), 1);
     assert_eq!(h.config_reload_count(), 1);
-    assert_eq!(repo.git_dir(), h.git_dir.as_path());
-    assert_eq!(repo.workdir(), Some(linked.as_path()));
+    assert_eq!(repo.git_dir().canonicalize().unwrap(), h.git_dir);
+    assert_eq!(repo.workdir().unwrap().canonicalize().unwrap(), linked);
     assert_eq!(head_info_branch(&repo), Some("feat".to_string()));
 }
 

@@ -6,6 +6,7 @@
 // same instance lookless of the module load.
 
 import { browser } from '@wdio/globals';
+import { rmSync } from 'node:fs';
 import { createSession, disposeSession } from './session';
 import type { AppRunner, Session } from './types';
 
@@ -84,6 +85,9 @@ export async function restartApp(opts: RestartOptions = {}): Promise<Session> {
   }
 
   if (runner.mode === 'tauri' || runner.mode === 'perf') {
+    // PERF-02 relaunches the same fixture several times. Each launch needs fresh
+    // marks; otherwise firstMark keeps returning the first launch's duration.
+    if (runner.mode === 'perf' && session.perfTraceFile) rmSync(session.perfTraceFile, { force: true });
     const started = await runner.start(session);
     await browser.reloadSession(started.capabilities as WebdriverIO.Capabilities);
   } else {

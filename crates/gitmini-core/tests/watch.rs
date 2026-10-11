@@ -409,7 +409,11 @@ async fn rob_12_linked_worktree_watches_the_common_dir() {
 
     // modification de <common_dir>/refs/heads/* → exactement { refs }
     let oid = git(&main, &["rev-parse", "HEAD"]);
-    std::fs::write(o.repo.common_dir.join("refs/heads/zzz"), format!("{oid}\n")).unwrap();
+    // Publish one complete ref, like Git does, instead of creating then writing
+    // the watched file (separate notifications on ReadDirectoryChangesW).
+    let next_ref = root.join("next-ref");
+    std::fs::write(&next_ref, format!("{oid}\n")).unwrap();
+    std::fs::rename(next_ref, o.repo.common_dir.join("refs/heads/zzz")).unwrap();
     wait_changed(&o.app.sink, 1).await;
     assert_eq!(kinds_after_settle(&o.app.sink).await, k(&[Refs]));
     assert_eq!(o.app.sink.count("repo:changed"), 1);
