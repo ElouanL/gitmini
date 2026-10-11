@@ -30,6 +30,7 @@ it("ROB-06 — 500 files created in gust: ≤ 3 repo:changed, 500 not tracked as
   expect(received).toBeLessThanOrEqual(3);
 
   // fluidity: no frame > 100 ms during gust
+  await until(async () => (await perfFrames()).length > 0, { message: 'frame monitor sampled the WIP interaction' });
   const frames = await perfFrames();
   expect(frames.length).toBeGreaterThan(0);
   expect(Math.max(...frames)).toBeLessThanOrEqual(100);

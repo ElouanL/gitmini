@@ -107,6 +107,8 @@ jobs:
         git: ["2.30.9", next]
         shard: [1, 2, 3, 4]
     env:
+      WEBKIT_DISABLE_COMPOSITING_MODE: "1"
+      WEBKIT_DISABLE_DMABUF_RENDERER: "1"
       GITMINI_BINARY: ${{ github.workspace }}/target/debug/gitmini
       GITMINI_E2E_ARTIFACTS: ${{ github.workspace }}/tests/e2e/.artifacts
       GITMINI_TEST_SEED: ${{ github.run_id }}
@@ -195,6 +197,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
+      WEBKIT_DISABLE_COMPOSITING_MODE: "1"
+      WEBKIT_DISABLE_DMABUF_RENDERER: "1"
       GITMINI_E2E_ARTIFACTS: ${{ github.workspace }}/tests/e2e/.artifacts
       GITMINI_PERF_NIGHTLY: "1" # PERF-09, 10, 11, 14, 18 et variante sans commit-graph de PERF-02
       GITMINI_PERF_LINUX: "1" # colonne LINUX de 02 §1.3

@@ -27,7 +27,7 @@
 //    the actual entrance.
 
 // `browser` is the overall injection by WebdriverIO (see ui.ts).
-import { Key, MOD } from './ui';
+import { Key, MOD, waitForTestId } from './ui';
 
 export interface Rect {
   x: number;
@@ -191,6 +191,9 @@ export async function clickAt(point: Point, opts: ClickOptions = {}): Promise<vo
 
 /** Click on the line of a commit (`opts.mod`: `Mod+clic`, `opts.button: 'right'`: context menu). */
 export async function clickRow(oid: string, opts: ClickOptions = {}): Promise<void> {
+  // Backend idle can resolve before the canvas and recycled DOM rows have been painted.
+  // A native click must target the row of the current render, including after refresh/abort.
+  await waitForTestId('graph-row', { attrs: { oid, loaded: true } });
   await clickAt(await rowCenter(oid), opts);
 }
 

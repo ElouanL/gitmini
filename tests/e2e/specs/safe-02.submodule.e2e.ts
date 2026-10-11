@@ -2,7 +2,7 @@
 import { expect } from '@wdio/globals';
 import { currentSession } from '../helpers';
 import { currentBranch } from '../../support/git-state';
-import { appReady, byTid, click, doubleClick, idle, isShown, waitForTestId } from '../../support/ui';
+import { appReady, click, doubleClick, idle, isShown, textOf, waitForTestId } from '../../support/ui';
 
 it("SAFE-02 — submodule read-only", async () => {
   const { repo } = currentSession();
@@ -23,5 +23,5 @@ it("SAFE-02 — submodule read-only", async () => {
   await idle();
   expect(currentBranch(repo)).toBe('feature');
   expect(await isShown('toast[data-kind=error]')).toBe(false);
-  expect(await byTid('toolbar-current-branch').getText()).toContain('feature');
+  expect(await textOf('toolbar-current-branch')).toContain('feature');
 });

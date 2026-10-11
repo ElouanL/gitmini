@@ -2,9 +2,9 @@
 import { expect } from '@wdio/globals';
 import { currentSession } from '../helpers';
 import { git } from '../../support/git-state';
-import { appReady, byTid, until } from '../../support/ui';
+import { appReady, textOf, until } from '../../support/ui';
 
-const itemText = (ref: string) => byTid('sidebar-branch-item', { ref }).getText();
+const itemText = (ref: string) => textOf('sidebar-branch-item', { ref });
 
 describe('BR-05 — Branches : ahead / behind', () => {
   it("BR-05 — hand displays ▼2 then ↑1 ▼2 after a local commit; feature (without upstream) does not display a counter", async () => {

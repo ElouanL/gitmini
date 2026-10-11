@@ -22,6 +22,7 @@ describe("GRAPH-04 — Graph: pagination and virtualization", () => {
     await appReady();
     await until(async () => (await bridge('total')) === 100_000, { message: "full index (100 000 lines)", timeout: 20_000 });
     const pool = await bridge('poolSize');
+    await until(async () => (await countOf('graph-row')) === pool, { message: 'graph row pool rendered' });
     expect(await countOf('graph-row')).toBe(pool);
 
     // Mutation observer: scrolling does not create or remove any nodes from the viewport.

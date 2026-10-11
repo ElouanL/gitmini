@@ -128,6 +128,7 @@ async fn opstate_rbc_06_commit_made_empty_by_resolution_is_stopped_empty() {
 }
 
 #[tokio::test]
+#[cfg(unix)]
 async fn opstate_rbc_06_exec_failure_is_stopped_blocked_and_exec_lines_are_ignored() {
     let t = TestRepo::init();
     t.commit_file("f.txt", "0\n", "base");
@@ -200,6 +201,7 @@ async fn opstate_merge_message_without_known_form_falls_back_to_the_oid() {
 }
 
 #[tokio::test]
+#[cfg(unix)]
 async fn opstate_merge_refused_by_pre_merge_commit_hook_has_no_conflicted_paths() {
     let t = TestRepo::init();
     t.commit_file("a.txt", "a\n", "base");

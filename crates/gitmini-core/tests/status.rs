@@ -48,6 +48,7 @@ fn dirty_repo() -> TestRepo {
     t.git(&["add", "both.txt"]);
     t.write("both.txt", "a\nB\nC\n"); // partially staged
     t.git(&["rm", "-q", "rm.txt"]); // indexed deletion
+    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(
@@ -102,11 +103,14 @@ async fn stage_01_status_matches_git_porcelain_v2_on_a_dirty_worktree() {
         !f.iter().any(|x| x.path == "old.txt"),
         "the source of the renamation is not listed except"
     );
-    let run = file(f, "run.sh");
-    assert_eq!(
-        (run.old_mode, run.new_mode),
-        (Some(0o100644), Some(0o100755))
-    );
+    #[cfg(unix)]
+    {
+        let run = file(f, "run.sh");
+        assert_eq!(
+            (run.old_mode, run.new_mode),
+            (Some(0o100644), Some(0o100755))
+        );
+    }
     // not tracked listed one by one (-uall), Unicode path and with space included
     for p in ["untracked.txt", "dir avec espace/é.txt", "sub/deep/x.txt"] {
         assert_eq!(file(f, p).unstaged, Some(ChangeKind::Untracked), "{p}");
@@ -285,6 +289,7 @@ async fn stage_01_each_conflict_kind_matches_git() {
 }
 
 #[tokio::test]
+#[cfg(unix)]
 async fn status_typechange_and_intent_to_add() {
     let t = TestRepo::init();
     t.commit_file("f.txt", "contenu\n", "c1");
@@ -412,6 +417,7 @@ async fn br_11_status_in_a_linked_worktree() {
 }
 
 #[tokio::test]
+#[cfg(unix)]
 async fn safe_06_non_utf8_path_is_listed_with_a_replacement_char_and_marked() {
     use std::os::unix::ffi::OsStrExt;
     let t = TestRepo::init();
@@ -720,7 +726,7 @@ async fn stage_05_all_unstaged_paths_is_not_capped_like_the_status() {
 }
 
 #[tokio::test]
-async fn stage_05_all_unstaged_paths_excludes_submodules_conflicts_and_non_utf8() {
+async fn stage_05_all_unstaged_paths_excludes_submodules_and_conflicts() {
     // submodule staggered (fixed): Excluded
     let fx = Fixture::load("submodule");
     let o = open_at(fx.repo()).await;
@@ -741,7 +747,11 @@ async fn stage_05_all_unstaged_paths_excludes_submodules_conflicts_and_non_utf8(
         all_unstaged_paths(&o.repo).await.unwrap(),
         vec!["plain.txt".to_string()]
     );
+}
 
+#[tokio::test]
+#[cfg(unix)]
+async fn stage_05_all_unstaged_paths_excludes_non_utf8() {
     // path no UTF-8 (index entry without file: otherwise APFS refuses name): excluded
     use std::os::unix::ffi::OsStrExt;
     let u = TestRepo::init();

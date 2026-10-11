@@ -214,7 +214,7 @@ export async function typeInto(id: string, text: string, opts: { clear?: boolean
 export async function textOf(id: string, attrs?: Attrs): Promise<string> {
   const element = await waitForTestId(id, { attrs });
   // WebKitWebDriver's getText can return an empty string for visible clipped/flex text.
-  return browser.execute((el: HTMLElement) => el.innerText, element as unknown as HTMLElement);
+  return browser.execute((el: HTMLElement) => el.innerText.trim(), element as unknown as HTMLElement);
 }
 
 export async function attrOf(id: string, name: string, attrs?: Attrs): Promise<string | null> {

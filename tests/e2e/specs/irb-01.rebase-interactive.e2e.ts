@@ -43,6 +43,8 @@ describe("IRB-01 — Interactive rebase: squash, fixup, reordering, reword", () 
 
     // 1. "fixup! A" → fixup, slipped just under A.
     await (await inRow(FX, 'rebase-todo-action-select')).selectByAttribute('value', 'fixup');
+    // Selecting fixup inserts a message field; wait for that layout before measuring the drag handle.
+    await (await inRow(FX, 'rebase-todo-message-input')).waitForDisplayed();
     await dragRow(FX, A, 'below');
     await until(async () => (await order()).join() === [A, FX, B, C, D].join(), { message: "the fixup should be on A" });
 

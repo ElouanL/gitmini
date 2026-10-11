@@ -219,6 +219,9 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     env:
+      # Xvfb has no GPU; avoid WebKit's accelerated renderer and its software GL startup.
+      WEBKIT_DISABLE_COMPOSITING_MODE: "1"
+      WEBKIT_DISABLE_DMABUF_RENDERER: "1"
       GITMINI_BINARY: ${{ github.workspace }}/target/debug/gitmini
       GITMINI_E2E_ARTIFACTS: ${{ github.workspace }}/tests/e2e/.artifacts
       GITMINI_TEST_SEED: ${{ github.run_id }}
@@ -287,6 +290,8 @@ jobs:
       contents: read
       pull-requests: write # commentaire du tableau mesure / budget
     env:
+      WEBKIT_DISABLE_COMPOSITING_MODE: "1"
+      WEBKIT_DISABLE_DMABUF_RENDERER: "1"
       GITMINI_E2E_ARTIFACTS: ${{ github.workspace }}/tests/e2e/.artifacts
     steps:
       - uses: actions/checkout@v4
@@ -477,6 +482,21 @@ jobs:
       - name: Fixtures
         run: node tests/fixtures/build.mjs
       - run: pnpm --dir tests/e2e install --frozen-lockfile
+      - name: Native startup diagnostics
+        shell: pwsh
+        run: |
+          $diag = Join-Path $env:RUNNER_TEMP 'gitmini-startup'
+          New-Item -ItemType Directory -Force $diag | Out-Null
+          $env:GITMINI_PERF_TRACE = Join-Path $diag 'perf-trace.jsonl'
+          $app = Start-Process -FilePath $env:GITMINI_BINARY -PassThru -RedirectStandardOutput (Join-Path $diag 'stdout.log') -RedirectStandardError (Join-Path $diag 'stderr.log')
+          if ($app.WaitForExit(5000)) {
+            Write-Host "Native startup exited: $($app.ExitCode)"
+          } else {
+            Write-Host 'Native startup process remained running'
+            Stop-Process -Id $app.Id -Force
+          }
+          Get-ChildItem $diag -File | ForEach-Object { Write-Host $_.Name; Get-Content $_.FullName }
+          Remove-Item Env:GITMINI_PERF_TRACE
       - name: E2E (shard ${{ matrix.shard }}/2)
         run: |
           echo "GITMINI_TEST_SEED=$GITMINI_TEST_SEED"
@@ -489,7 +509,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: e2e-windows-shard-${{ matrix.shard }}
-          path: tests/e2e/.artifacts
+          path: |
+            tests/e2e/.artifacts
+            ${{ runner.temp }}/gitmini-startup
           if-no-files-found: ignore
           include-hidden-files: true
           retention-days: 14

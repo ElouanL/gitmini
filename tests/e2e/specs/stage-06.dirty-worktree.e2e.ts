@@ -19,6 +19,8 @@ it("STAGE-06 — commit-submit-btn disabled without index or summary, active whe
 
   // A staged file but no summary: disabled.
   const stage = (await $(`${tid('wt-unstaged-item', { path: 'mod.txt' })} ${tid('wt-stage-file-btn')}`)) as unknown as WebdriverIO.Element;
+  await stage.scrollIntoView({ block: 'center' });
+  await stage.moveTo();
   await stage.waitForClickable({ timeout: 10_000 });
   await stage.click();
   await idle();

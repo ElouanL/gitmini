@@ -997,26 +997,46 @@ async fn st_submodule_paths_are_refused_and_a_shifted_submodule_is_ignored() {
     }
     assert_eq!(spawned(&o).len(), before, "rejected before any git process");
     t.assert_stash_len(0);
+    let submodule_head = t.git_in(&t.repo().join("lib"), ["rev-parse", "HEAD"]);
+    let gitlink = t.git(["ls-files", "--stage", "lib"]);
 
-    // Without `paths`, the offset submodule does not block anything and is not stashed
+    // Git 2.30 may record the gitlink in stash metadata; neither save nor pop may change
+    // the superproject's index entry or the submodule checkout.
     let saved = stash_save(&o.state, save_args(&o, None, false, false, None))
         .await
         .unwrap()
         .created
         .unwrap();
     assert_eq!(
-        t.git(["stash", "show", "--name-only", "stash@{0}"]),
+        t.git([
+            "diff",
+            "--name-only",
+            "stash@{0}^",
+            "stash@{0}",
+            "--",
+            "f.txt"
+        ]),
         "f.txt"
     );
     assert!(
         t.git(["status", "--porcelain"]).contains(" M lib"),
         "the submodule offset remains"
     );
+    assert_eq!(t.git(["ls-files", "--stage", "lib"]), gitlink);
+    assert_eq!(
+        t.git_in(&t.repo().join("lib"), ["rev-parse", "HEAD"]),
+        submodule_head
+    );
     let popped = stash_pop(&o.state, apply_args(&o, &saved.oid, 0, false))
         .await
         .unwrap();
     assert!(popped.dropped && popped.conflicts.is_empty());
     assert!(t.read_file("f.txt").contains("(modified)"));
+    assert_eq!(t.git(["ls-files", "--stage", "lib"]), gitlink);
+    assert_eq!(
+        t.git_in(&t.repo().join("lib"), ["rev-parse", "HEAD"]),
+        submodule_head
+    );
 }
 
 /// `git stash branch`: the branch is created and extracted **before** the application; if the application is refused, the
