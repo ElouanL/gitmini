@@ -3,7 +3,7 @@
   "productName": "hello-tauri",
   "identifier": "dev.gitmini.hello",
   "build": {
-    "frontendDist": "./dist"
+    "frontendDist": "./web"
   },
   "app": {
     "withGlobalTauri": false,

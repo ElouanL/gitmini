@@ -1,9 +1,28 @@
 import assert from 'node:assert/strict';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, it } from 'node:test';
-import { appBinary, appConfigDir, artifactsBase, artifactsRoot, bridgeBinary, distDir, e2eDir, root, tauriIdentifier } from './paths';
+import { appBinary, appConfigDir, artifactsBase, artifactsRoot, bridgeBinary, distDir, e2eDir, nativeDriverBinary, root, tauriDriverBinary, tauriIdentifier } from './paths';
 
 describe('chemins', () => {
+  it('drivers are resolved from the harness PATH before scenarios hide Git', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gitmini-driver-path-'));
+    try {
+      const tauri = process.platform === 'win32' ? 'tauri-driver.exe' : 'tauri-driver';
+      for (const name of [tauri, 'WebKitWebDriver', 'msedgedriver.exe']) {
+        const file = join(dir, name);
+        writeFileSync(file, 'driver');
+        chmodSync(file, 0o755);
+      }
+      const env = { PATH: dir, CARGO_HOME: join(dir, 'no-cargo') };
+      assert.equal(tauriDriverBinary(env), join(dir, tauri));
+      assert.equal(nativeDriverBinary('linux', env), join(dir, 'WebKitWebDriver'));
+      assert.equal(nativeDriverBinary('win32', env), join(dir, 'msedgedriver.exe'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it("the configuration folder follows the rules of Tauri by OS", () => {
     const id = 'dev.gitmini.desktop';
     assert.equal(appConfigDir({ HOME: '/h', XDG_CONFIG_HOME: '/h/.config' }, 'linux', id), `/h/.config/${id}`);

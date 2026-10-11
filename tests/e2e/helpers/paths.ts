@@ -8,9 +8,9 @@
 //                       `run-<id>/` (GITMINI_E2E_RUN_DIR, installed by config.ts): several `wdio run` can rotate at the same time
 //                       on the same machine (agents, terminals) without crashing
 
-import { existsSync, readFileSync } from 'node:fs';
+import { accessSync, constants, existsSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
+import { delimiter, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { repoRoot } from '../../support/fixture';
 import type { Mode } from './types';
@@ -55,9 +55,26 @@ export function distDir(env: NodeJS.ProcessEnv = process.env): string {
 
 /** `tauri-driver`: GITMINI_TAURI_DRIVER, otherwise `~/.cargo/bin/tauri-driver` if it exists, otherwise the PATH. */
 export function tauriDriverBinary(env: NodeJS.ProcessEnv = process.env): string {
-  if (env.GITMINI_TAURI_DRIVER) return env.GITMINI_TAURI_DRIVER;
+  if (env.GITMINI_TAURI_DRIVER) return resolveExecutable(env.GITMINI_TAURI_DRIVER, env);
   const cargo = join(env.CARGO_HOME ?? join(homedir(), '.cargo'), 'bin', exe('tauri-driver'));
-  return existsSync(cargo) ? cargo : 'tauri-driver';
+  return existsSync(cargo) ? cargo : resolveExecutable(exe('tauri-driver'), env);
+}
+
+/** Resolve drivers with the harness PATH before a scenario replaces the application's PATH. */
+export function resolveExecutable(name: string, env: NodeJS.ProcessEnv = process.env): string {
+  if (isAbsolute(name) || name.includes('/') || name.includes('\\')) return resolve(name);
+  for (const dir of (env.PATH ?? '').split(delimiter)) {
+    const candidate = resolve(dir, name);
+    try {
+      accessSync(candidate, constants.X_OK);
+      if (statSync(candidate).isFile()) return candidate;
+    } catch { /* Keep searching the harness PATH. */ }
+  }
+  return name;
+}
+
+export function nativeDriverBinary(platform: NodeJS.Platform = process.platform, env: NodeJS.ProcessEnv = process.env): string {
+  return resolveExecutable(env.GITMINI_NATIVE_DRIVER ?? (platform === 'win32' ? 'msedgedriver.exe' : 'WebKitWebDriver'), env);
 }
 
 /** Application ID (`tauri.conf.json`), which names the configuration folder. */

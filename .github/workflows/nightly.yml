@@ -185,6 +185,7 @@ jobs:
             tests/e2e/.artifacts
             ${{ runner.temp }}/gitmini-video
           if-no-files-found: ignore
+          include-hidden-files: true
           retention-days: 14
 
   # ── perf Linux : mesures nightly de FX-100K et colonne LINUX
@@ -378,6 +379,7 @@ jobs:
           name: nightly-e2e-windows-shard-${{ matrix.shard }}
           path: tests/e2e/.artifacts
           if-no-files-found: ignore
+          include-hidden-files: true
           retention-days: 14
 
   perf-windows:

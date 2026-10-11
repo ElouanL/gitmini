@@ -216,7 +216,8 @@ async fn rm_01_fetch_all_with_prune_updates_and_removes_remote_branches() {
         "behind = 3"
     );
 
-    // exact command, LFS, translated progression, a repo:changed {refs}
+    // Exact command, LFS and repo:changed {refs}. Git 2.30 does not forward --progress to
+    // the child fetches launched by --all; progress is checked with a single remote below.
     let rec = find_spawn(&fx.repo, "fetch").expect("fetch launched");
     assert_eq!(
         logical(&rec),
@@ -239,21 +240,9 @@ async fn rm_01_fetch_all_with_prune_updates_and_removes_remote_branches() {
         "no token: no credential option.*"
     );
     let progress = app.sink.op_progress();
-    assert!(!progress.is_empty(), "op:progress issued");
     assert!(
         progress.iter().all(|p| p.label.starts_with("Fetch — ")),
         "{progress:?}"
-    );
-    assert!(
-        progress.iter().any(|p| [
-            "Reception",
-            "Counting objects",
-            "Compression",
-            "Delta resolution"
-        ]
-        .iter()
-        .any(|l| p.label.ends_with(l))),
-        "translated text: {progress:?}"
     );
     assert!(
         app.sink
@@ -266,6 +255,7 @@ async fn rm_01_fetch_all_with_prune_updates_and_removes_remote_branches() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn rm_01b_fetch_one_remote_without_prune_keeps_deleted_branch() {
     let fx = Fx::load("with-remote");
+    fx.other_commit_push("main", "progress.txt", "new objects", "origin: new objects");
     git(&fx.other, &["push", "-q", "origin", "--delete", "dev"]);
     let app = open(&fx).await;
     remote_fetch(&app.state, fetch_args(&app, Some("origin"), false))
@@ -281,11 +271,23 @@ async fn rm_01b_fetch_one_remote_without_prune_keeps_deleted_branch() {
         ["fetch", "--progress", "--no-recurse-submodules", "origin"]
     );
     let progress = app.sink.op_progress();
+    assert!(!progress.is_empty(), "single-remote fetch emits progress");
     assert!(
         progress
             .iter()
             .all(|p| p.label.starts_with("Fetch origin — ")),
         "{progress:?}"
+    );
+    assert!(
+        progress.iter().any(|p| [
+            "Reception",
+            "Counting objects",
+            "Compression",
+            "Delta resolution"
+        ]
+        .iter()
+        .any(|l| p.label.ends_with(l))),
+        "translated text: {progress:?}"
     );
 }
 

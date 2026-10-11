@@ -40,7 +40,7 @@ describe("Executors", () => {
     const fake = join(base, 'fake-tauri-driver');
     writeFileSync(
       fake,
-      `#!/usr/bin/env node
+      `#!${process.execPath}
 const { writeFileSync } = require('node:fs');
 const { createServer } = require('node:net');
 const i = process.argv.indexOf('--port');
@@ -76,6 +76,7 @@ process.on('SIGTERM', () => process.exit(0));
       // a restart keeps the same port (WDIO has stored it)
       await runner.stop();
       assert.equal(isAlive(seen.pid), false, "tauri-driver is stopped");
+      session.env.PATH = join(base, 'no-programs');
       const again = await runner.start(session);
       assert.equal(again.capabilities.port, port);
       await runner.stop();

@@ -1383,6 +1383,7 @@ async fn rbc_02_fixture_rebase_conflict_markers_view() {
     assert!(texts.iter().any(|t| t.starts_with(">>>>>>>")));
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn diff_never_reads_outside_the_worktree() {
     let t = TestRepo::init();
@@ -1412,6 +1413,7 @@ async fn diff_never_reads_outside_the_worktree() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn safe_06_non_utf8_index_entry_is_diffed_through_its_replacement_form() {
     use std::os::unix::ffi::OsStrExt;

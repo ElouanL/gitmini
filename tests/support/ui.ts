@@ -205,12 +205,16 @@ export async function typeInto(id: string, text: string, opts: { clear?: boolean
     await element.click();
     await browser.keys(text.split(''));
   } else {
-    await element.setValue(text);
+    await element.clearValue();
+    // WebKitWebDriver rejects an empty send-keys payload; clearing is sufficient in that case.
+    if (text) await element.addValue(text);
   }
 }
 
 export async function textOf(id: string, attrs?: Attrs): Promise<string> {
-  return (await waitForTestId(id, { attrs })).getText();
+  const element = await waitForTestId(id, { attrs });
+  // WebKitWebDriver's getText can return an empty string for visible clipped/flex text.
+  return browser.execute((el: HTMLElement) => el.innerText, element as unknown as HTMLElement);
 }
 
 export async function attrOf(id: string, name: string, attrs?: Attrs): Promise<string | null> {

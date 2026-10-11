@@ -7,7 +7,7 @@
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { appBinary, tauriDriverBinary } from '../paths';
+import { appBinary, nativeDriverBinary, tauriDriverBinary } from '../paths';
 import { freePort, waitForPort } from '../ports';
 import { type Spawned, spawnLogged, stopProcess } from '../proc';
 import type { AppRunner, Mode, Session } from '../types';
@@ -49,7 +49,7 @@ export class TauriRunner implements AppRunner {
     const { port, nativePort } = this.ports;
 
     const args = ['--port', String(port), '--native-port', String(nativePort)];
-    if (process.env.GITMINI_NATIVE_DRIVER) args.push('--native-driver', process.env.GITMINI_NATIVE_DRIVER);
+    args.push('--native-driver', nativeDriverBinary(this.platform));
     const logFile = join(session.logsDir, `tauri-driver-${Date.now()}.log`);
     this.logs.push(logFile);
     this.driver = spawnLogged(tauriDriverBinary(), args, { env: session.env, logFile, role: 'tauri-driver' });
