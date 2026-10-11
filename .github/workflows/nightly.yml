@@ -235,7 +235,7 @@ jobs:
         with:
           path: target/fixtures
           key: fixtures-${{ hashFiles('tests/fixtures/**') }}
-      - run: node tests/fixtures/build.mjs
+      - run: node tests/fixtures/build.mjs --all
       # linux.git (tag v6.6, complete clone): restored from the Action cache, filled at the first passage (network).
       # Explicit backup just after the clone: the cache survives even if a measure fails afterwards.
       - name: Cache de linux.git
@@ -408,7 +408,7 @@ jobs:
       - name: "msedgedriver (version of runtime WebView2)"
         shell: pwsh
         run: ./scripts/install-msedgedriver.ps1
-      - run: node tests/fixtures/build.mjs
+      - run: node tests/fixtures/build.mjs --all
       - run: pnpm --dir tests/e2e install --frozen-lockfile
       - name: "PERF-01 and PERF-04 (without WebDriver)"
         run: node tests/perf/startup.mjs --binary target/release-perf/gitmini.exe
@@ -434,6 +434,8 @@ jobs:
     timeout-minutes: 60
     env:
       MIRIFLAGS: -Zmiri-disable-isolation
+      # Avoid insta spawning cargo metadata, which uses socketpair unsupported by Miri.
+      INSTA_WORKSPACE_ROOT: ${{ github.workspace }}
     steps:
       - uses: actions/checkout@v4
       - run: bash scripts/ci-install-linux-deps.sh build

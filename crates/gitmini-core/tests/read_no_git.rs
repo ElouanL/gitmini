@@ -292,6 +292,7 @@ async fn sec_01_no_read_command_spawns_git() {
 
 /// The only subprocess allowed for playback: the user's `filter.<nom>.clean` driver, launched by gix
 /// Like `git status` does. It turns well (the marker proves it) and the runner still sees nothing.
+#[cfg(unix)]
 #[tokio::test]
 async fn sec_01_user_clean_filter_is_the_only_allowed_subprocess() {
     let t = TestRepo::init();

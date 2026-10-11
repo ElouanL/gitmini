@@ -195,12 +195,7 @@ async fn real_dirty_worktree_entry_not_uptodate_on_reset_keep() {
     fx.git(&["merge", "-q", "--no-ff", "-m", "merge", "feature"]);
     fx.write("feature1.txt", "modified after merge\n");
     let o = fx.open().await;
-    let (out, e) = provoke(
-        &o,
-        &["reset", "--keep", "--end-of-options", "HEAD~1"],
-        cmd("undo_last"),
-    )
-    .await;
+    let (out, e) = provoke(&o, &["reset", "--keep", "HEAD~1", "--"], cmd("undo_last")).await;
     assert!(
         out.stderr
             .contains("Entry 'feature1.txt' not uptodate. Cannot merge."),

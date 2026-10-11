@@ -3,7 +3,7 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
   workflow_dispatch:
 
@@ -325,7 +325,7 @@ jobs:
           path: target/fixtures
           key: fixtures-${{ hashFiles('tests/fixtures/**') }}
       - name: Fixtures
-        run: node tests/fixtures/build.mjs
+        run: node tests/fixtures/build.mjs --all
       # The arguments after `--` go to cargo: `cargo tauri build` does not have an option -- clean profile.
       - name: Build release-perf (--features e2e)
         run: cargo tauri build --features e2e --no-bundle -- --profile release-perf

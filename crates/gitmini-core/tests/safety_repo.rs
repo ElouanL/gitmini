@@ -197,6 +197,10 @@ async fn dropping_a_guard_without_finish_still_releases_and_emits() {
 async fn write_echo_is_decided_by_file_mtime_not_by_arrival_time() {
     init();
     let (_tmp, repo, o) = opened_repo().await;
+    // This test injects watcher kinds directly. Stop the real watcher so delayed filesystem
+    // events cannot add unrelated kinds to the write buffers asserted below.
+    drop(o.repo.watcher.lock().unwrap().take());
+    o.app.sink.clear();
     let h = &o.repo;
     let set = |l: &[ChangeKindEv]| l.iter().copied().collect::<std::collections::BTreeSet<_>>();
     std::fs::write(repo.join("gone.txt"), "x").unwrap();
