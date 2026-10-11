@@ -94,6 +94,7 @@ pub fn run() {
             );
             app.manage(state);
             perf::stamp("state-ready");
+            drop(_in_runtime);
 
             // `create: false` in tauri.conf.json: the window is built here for injection
             // `window.__gitminiPerfSink` before any script of the page when `GITMINI_PERF_TRACE` is set.
@@ -104,13 +105,35 @@ pub fn run() {
                 .first()
                 .cloned()
                 .ok_or("no windows in tauri.conf.json")?;
-            let mut window = WebviewWindowBuilder::from_config(app, &window_config)?;
             if let Some(perf) = &perf {
                 perf.listen(app);
-                window = window.initialization_script(perf::INIT_SCRIPT);
             }
-            window.build()?;
-            perf::stamp("window-built");
+            let handle = app.handle().clone();
+            let create_window = move || -> tauri::Result<()> {
+                let mut window = WebviewWindowBuilder::from_config(&handle, &window_config)?;
+                if perf.is_some() {
+                    window = window.initialization_script(perf::INIT_SCRIPT);
+                }
+                window.build()?;
+                perf::stamp("window-built");
+                Ok(())
+            };
+            // WebView2 creation needs the main event loop to process its completion
+            // callback. Queue construction from another thread so setup can return.
+            #[cfg(target_os = "windows")]
+            {
+                let handle = app.handle().clone();
+                std::thread::Builder::new()
+                    .name("main-window".into())
+                    .spawn(move || {
+                        if let Err(error) = create_window() {
+                            tracing::error!(%error, "Cannot create the main window");
+                            handle.exit(1);
+                        }
+                    })?;
+            }
+            #[cfg(not(target_os = "windows"))]
+            create_window()?;
             Ok(())
         })
         .on_window_event(on_window_event)

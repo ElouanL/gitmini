@@ -39,6 +39,7 @@ export const Key = {
   ArrowDown: '\uE015',
   Delete: '\uE017',
   F2: '\uE032',
+  F10: '\uE03A',
   Command: '\uE03D',
 } as const;
 
@@ -176,9 +177,6 @@ export async function clickInRow(rowId: string, path: string, buttonId: string):
 export async function rightClick(id: string, attrs?: Attrs): Promise<void> {
   const element = await waitForTestId(id, { attrs });
   await element.click({ button: 'right' });
-  // WebKit can leave the context-click button pressed after the menu opens. Reset
-  // the driver's input state so the next left-button gesture emits pointerdown.
-  await browser.releaseActions();
 }
 
 /** "Right click on X → `context-menu-item-<action>`": Opens the `id` menu and clicks the entry. */
@@ -270,6 +268,7 @@ const KEY_NAMES: Record<string, string> = {
   home: Key.Home,
   end: Key.End,
   f2: Key.F2,
+  f10: Key.F10,
 };
 
 const MODIFIERS: Record<string, string> = {

@@ -26,8 +26,14 @@ tauri-plugin-dialog = "2"
 
 # Same settings as the `release-perf` profile of the workspace (Cargo.toml root).
 [profile.release]
-lto = "thin"
+lto = "fat"
 codegen-units = 16
 opt-level = 3
 strip = true
 panic = "abort"
+
+[profile.release.package.hello-tauri]
+opt-level = "s"
+
+[profile.release-perf]
+inherits = "release"

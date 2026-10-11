@@ -17,7 +17,7 @@ const skip = process.platform === 'win32' ? "false binary = scripts to shebang" 
 const tmp = () => mkdtempSync(join(tmpdir(), 'gitmini-perf-test-'));
 
 /** Binning false: writes `app-ready` after `readyMs`, then (if a repository is given) first-paint and index-complete; throws a child. */
-function fakeApp(dir, name, { readyMs = 120, repoMarks = true, crash = false, noMark = false, leakFile } = {}) {
+function fakeApp(dir, name, { readyMs = 120, repoMarks = true, crash = false, noMark = false, leakFile, launchFile } = {}) {
   const file = join(dir, name);
   writeFileSync(
     file,
@@ -28,6 +28,7 @@ const trace = process.env.GITMINI_PERF_TRACE;
 const mark = (name) => fs.appendFileSync(trace, JSON.stringify({ kind: 'mark', name, t: Date.now() }) + '\\n');
 if (${JSON.stringify(crash)}) { console.error('boum'); process.exit(3); }
 const child = spawn('sleep', ['60'], { stdio: 'ignore' }); // « WebView »
+${launchFile ? `fs.appendFileSync(${JSON.stringify(launchFile)}, JSON.stringify({ home: process.env.HOME, cache: process.env.XDG_CACHE_HOME, trace }) + '\\n');` : ''}
 ${leakFile ? `fs.writeFileSync(${JSON.stringify(leakFile)}, JSON.stringify({ pid: process.pid, child: child.pid, home: process.env.HOME, cfg: process.env.XDG_CONFIG_HOME, notrace: process.env.GITMINI_TEST_MODE, git: process.env.GIT_DIR ?? null, args: process.argv.slice(2) }));` : ''}
 if (!${JSON.stringify(noMark)}) setTimeout(() => mark('gitmini:app-ready'), ${readyMs});
 if (process.argv.length > 2 && ${JSON.stringify(repoMarks)}) {
@@ -80,7 +81,8 @@ test("startup.mjs: PERF-01 = median of launches after heating, without repositor
   const dir = tmp();
   try {
     const leak = join(dir, 'leak.json');
-    const bin = fakeApp(dir, 'gitmini', { readyMs: 150, leakFile: leak });
+    const launches = join(dir, 'launches.jsonl');
+    const bin = fakeApp(dir, 'gitmini', { readyMs: 150, leakFile: leak, launchFile: launches });
     const out = join(dir, 'startup.json');
     const r = run(['--binary', bin, '--runs', '3', '--warmup', '1', '--skip-memory', '--out', out]);
     assert.equal(r.status, 0, r.stderr + r.stdout);
@@ -98,6 +100,12 @@ test("startup.mjs: PERF-01 = median of launches after heating, without repositor
     assert.deepEqual(seen.args, [], "PERF-01: no repository (Home)");
     assert.match(seen.home, /gitmini-perf-.*[\\/]home$/);
     assert.equal(seen.notrace, '1');
+    const profiles = readFileSync(launches, 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+    assert.equal(profiles.length, 4, 'one warmup and three measured launches');
+    assert.equal(new Set(profiles.map((p) => p.home)).size, 1, 'hot starts reuse the warmed isolated home');
+    assert.equal(new Set(profiles.map((p) => p.cache)).size, 1, 'WebView cache is reused after warmup');
+    assert.equal(new Set(profiles.map((p) => p.trace)).size, 4, 'each launch has an independent trace');
+    assert.ok(!existsSync(seen.home), 'the shared isolated profile is cleaned up after measurement');
     // no process (including child "WebView") survives
     assert.throws(() => process.kill(seen.pid, 0), /ESRCH/);
     assert.throws(() => process.kill(seen.child, 0), /ESRCH/);

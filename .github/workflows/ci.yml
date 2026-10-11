@@ -157,7 +157,7 @@ jobs:
         run: node tests/fixtures/build.mjs --check
       # Contents of `just test` (the recipe exports a PATH POSIX, unusable as it is on Windows).
       - name: nextest
-        run: cargo nextest run --workspace
+        run: cargo nextest run --workspace --no-fail-fast
       - name: doctests
         run: cargo test --workspace --doc
 
@@ -493,7 +493,7 @@ jobs:
             Write-Host "Native startup exited: $($app.ExitCode)"
           } else {
             Write-Host 'Native startup process remained running'
-            Stop-Process -Id $app.Id -Force
+            $app.Kill($true)
           }
           Get-ChildItem $diag -File | ForEach-Object { Write-Host $_.Name; Get-Content $_.FullName }
           Remove-Item Env:GITMINI_PERF_TRACE

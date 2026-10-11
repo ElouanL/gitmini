@@ -836,9 +836,15 @@ fn apply_cached(t: &TestRepo, patch: &str, reverse: bool) {
 #[tokio::test]
 async fn stage_02_hunk_to_patch_handles_crlf_noeol_spaces_quotes_and_untracked() {
     let t = TestRepo::init();
+    // Windows forbids double quotes in filenames; an apostrophe remains valid there.
+    let quoted = if cfg!(unix) {
+        "q\"uote.txt"
+    } else {
+        "q'uote.txt"
+    };
     t.commit_file("crlf.txt", &"l\r\n".repeat(30), "crlf");
     t.commit_file("dir avec espace/é.txt", &numbered(30), "unicode");
-    t.commit_file("q\"uote.txt", &numbered(30), "quote");
+    t.commit_file(quoted, &numbered(30), "quote");
     t.commit_file("noeol.txt", "a\nb\nc", "noeol");
     t.write(
         "crlf.txt",
@@ -848,19 +854,11 @@ async fn stage_02_hunk_to_patch_handles_crlf_noeol_spaces_quotes_and_untracked()
         "dir avec espace/é.txt",
         &numbered(30).replace("line 15\n", "QUINZE\n"),
     );
-    t.write(
-        "q\"uote.txt",
-        &numbered(30).replace("line 15\n", "QUINZE\n"),
-    );
+    t.write(quoted, &numbered(30).replace("line 15\n", "QUINZE\n"));
     t.write("noeol.txt", "a\nb\nC");
     t.write("new.txt", "n1\nn2\n");
     let o = t.open().await;
-    for p in [
-        "crlf.txt",
-        "dir avec espace/é.txt",
-        "q\"uote.txt",
-        "noeol.txt",
-    ] {
+    for p in ["crlf.txt", "dir avec espace/é.txt", quoted, "noeol.txt"] {
         let d = diff(&o, p, DiffSource::Unstaged).await;
         assert_eq!(d.hunks.len(), 1, "{p}");
         apply_cached(&t, &hunk_to_patch(&d, 0), false);
