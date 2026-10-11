@@ -18,11 +18,25 @@ async function rectOf(selector: string): Promise<Rect> {
 
 /** Slides the handle of the `oid` line on the low half (`below`) or high half of the `target` line (Pointer Actual Events). */
 async function dragRow(oid: string, target: string, where: 'below' | 'above'): Promise<void> {
+  await browser.executeAsync((done: () => void) => requestAnimationFrame(() => requestAnimationFrame(() => done())));
   const handle = await rectOf(`${rowSel(oid)} ${tid('rebase-todo-drag-handle')}`);
   const row = await rectOf(rowSel(target));
   const from: Point = { x: Math.round(handle.x + handle.width / 2), y: Math.round(handle.y + handle.height / 2) };
   const to: Point = { x: from.x, y: Math.round(where === 'below' ? row.y + row.height - 4 : row.y + 4) };
+  await browser.execute(() => {
+    const w = window as unknown as { __reorderInput: unknown[] };
+    w.__reorderInput = [];
+    for (const type of ['pointerdown', 'pointermove', 'pointerup']) {
+      const record = (event: Event) => {
+        const e = event as PointerEvent;
+        w.__reorderInput.push({ type: e.type, x: e.clientX, y: e.clientY, buttons: e.buttons, target: (e.target as HTMLElement).closest('[data-testid]')?.getAttribute('data-testid') });
+      };
+      window.addEventListener(type, record, { capture: true });
+      window.addEventListener('pointerup', () => window.removeEventListener(type, record, true), { once: true });
+    }
+  });
   await dragPointer(from, to);
+  console.info('[reorder-input]', JSON.stringify({ from, to, events: await browser.execute(() => (window as unknown as { __reorderInput: unknown[] }).__reorderInput) }));
 }
 
 const order = (): Promise<string[]> =>

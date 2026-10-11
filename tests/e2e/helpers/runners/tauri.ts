@@ -50,7 +50,9 @@ export class TauriRunner implements AppRunner {
 
     const args = ['--port', String(port), '--native-port', String(nativePort)];
     args.push('--native-driver', nativeDriverBinary(this.platform));
-    const logFile = join(session.logsDir, `tauri-driver-${Date.now()}.log`);
+    // WDIO skips test/afterSession hooks when session creation itself fails. Keep the
+    // driver log directly in artifacts so that failure cannot erase its startup cause.
+    const logFile = join(session.artifactsDir, 'logs', `tauri-driver-${Date.now()}.log`);
     this.logs.push(logFile);
     this.driver = spawnLogged(tauriDriverBinary(), args, { env: session.env, logFile, role: 'tauri-driver' });
     await waitForPort(port, {

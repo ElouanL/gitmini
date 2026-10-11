@@ -25,6 +25,17 @@ fn check_github_client_id() {
 fn main() {
     check_github_client_id();
 
+    // The dialog plugin imports TaskDialogIndirect from Common Controls v6. Tauri embeds
+    // its manifest in the app binary, but library/integration test binaries need it too.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
+    {
+        println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
+        println!(
+            "cargo:rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
+        );
+    }
+
     println!("cargo:rerun-if-changed=commands.txt");
     // `AppManifest::commands` requires `&'static str`: the build script is a short process, we let it leak.
     let list: &'static str = Box::leak(
