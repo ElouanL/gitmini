@@ -12,8 +12,8 @@ describe('UI-11 — Project tabs', () => {
   it('UI-11 — keeps two worktrees open, preserves drafts, routes changes and restores tabs after restart', async () => {
     const session = currentSession();
     // The backend exposes canonical paths (including the Windows verbatim prefix).
-    const other = toNamespacedPath(realpathSync(join(session.tmp, 'tabs-other')));
-    const first = toNamespacedPath(realpathSync(session.repo));
+    const other = toNamespacedPath(realpathSync.native(join(session.tmp, 'tabs-other')));
+    const first = toNamespacedPath(realpathSync.native(session.repo));
     await appReady();
     expect(await allByTid('repo-tab')).toHaveLength(2);
     await (await waitForTestId('commit-summary-input')).setValue('Draft A');

@@ -118,7 +118,17 @@ pub fn run() {
                 if perf.is_some() {
                     window = window.initialization_script(perf::INIT_SCRIPT);
                 }
-                window.build()?;
+                let _window = window.build()?;
+                #[cfg(all(target_os = "windows", feature = "e2e"))]
+                if std::env::var("GITMINI_TEST_MODE").as_deref() == Ok("1") {
+                    // Tao initially fits the window to the hosted 1024 px desktop.
+                    // Restore the configured logical size so desktop scenarios
+                    // exercise the same layout as Linux (1280 px, no overlay).
+                    _window.set_size(tauri::LogicalSize::new(
+                        window_config.width,
+                        window_config.height,
+                    ))?;
+                }
                 perf::stamp("window-built");
                 Ok(())
             };

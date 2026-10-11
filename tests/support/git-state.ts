@@ -120,13 +120,14 @@ export function stashList(repo: string): string[] {
 
 /** `git rev-parse --absolute-git-dir`: No test writes `.git/` hard. */
 export function gitDir(repo: string): string {
-  return realpathSync(git(repo, 'rev-parse', '--absolute-git-dir'));
+  // Native realpath expands Windows 8.3 aliases; the JS resolver preserves them.
+  return realpathSync.native(git(repo, 'rev-parse', '--absolute-git-dir'));
 }
 
 /** `<common_dir>`: different from {@link gitDir} in a related worktree. */
 export function commonDir(repo: string): string {
   const p = git(repo, 'rev-parse', '--git-common-dir');
-  return realpathSync(isAbsolute(p) ? p : resolve(repo, p));
+  return realpathSync.native(isAbsolute(p) ? p : resolve(repo, p));
 }
 
 /** Operation files in `<git_dir>`. */
