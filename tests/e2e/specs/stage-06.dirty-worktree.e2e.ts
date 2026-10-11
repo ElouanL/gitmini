@@ -21,8 +21,8 @@ it("STAGE-06 — commit-submit-btn disabled without index or summary, active whe
   const stage = (await $(`${tid('wt-unstaged-item', { path: 'mod.txt' })} ${tid('wt-stage-file-btn')}`)) as unknown as WebdriverIO.Element;
   const row = (await $(tid('wt-unstaged-item', { path: 'mod.txt' }))) as unknown as WebdriverIO.Element;
   await row.scrollIntoView({ block: 'center' });
-  // Hover the opaque row first: WebKit refuses pointer movement to an icon whose color is transparent.
-  await row.moveTo();
+  // Selecting the file exposes its actions on both hover-capable and native WebViews.
+  await row.click();
   await stage.waitForClickable({ timeout: 10_000 });
   await stage.click();
   await idle();

@@ -25,14 +25,19 @@ fn check_github_client_id() {
 fn main() {
     check_github_client_id();
 
-    // The dialog plugin imports TaskDialogIndirect from Common Controls v6. Tauri embeds
-    // its manifest in the app binary, but library/integration test binaries need it too.
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
-        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc")
-    {
+    // Embed the same Common Controls v6 dependency in the app and its test executables.
+    // Tauri's resource compiler only embeds its manifest in binary targets; mixing that
+    // resource with /MANIFEST:EMBED produces a duplicate manifest in the app executable.
+    let windows_msvc = std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows")
+        && std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
+    if windows_msvc {
+        println!("cargo:rerun-if-changed=windows-app-manifest.xml");
         println!("cargo:rustc-link-arg=/MANIFEST:EMBED");
         println!(
-            "cargo:rustc-link-arg=/MANIFESTDEPENDENCY:type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'"
+            "cargo:rustc-link-arg=/MANIFESTINPUT:{}",
+            std::path::Path::new(&std::env::var("CARGO_MANIFEST_DIR").expect("manifest dir"))
+                .join("windows-app-manifest.xml")
+                .display()
         );
     }
 
@@ -50,7 +55,11 @@ fn main() {
             .collect::<Vec<_>>()
             .into_boxed_slice(),
     );
-    let attrs = tauri_build::Attributes::new()
+    let mut attrs = tauri_build::Attributes::new()
         .app_manifest(tauri_build::AppManifest::new().commands(commands));
+    if windows_msvc {
+        attrs =
+            attrs.windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest());
+    }
     tauri_build::try_build(attrs).expect("tauri-build");
 }

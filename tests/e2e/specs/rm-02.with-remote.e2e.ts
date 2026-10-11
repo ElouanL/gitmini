@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { expect } from '@wdio/globals';
 import { currentSession } from '../helpers';
 import { git, revParse } from '../../support/git-state';
-import { appReady, click, idle, waitForTestId } from '../../support/ui';
+import { appReady, click, idle, until, waitForTestId } from '../../support/ui';
 import { gitSpawnLines, spawnCount } from './flows-b-support';
 
 it('RM-02 — pull ff-only, divergence, pull rebase', async () => {
@@ -15,6 +15,7 @@ it('RM-02 — pull ff-only, divergence, pull rebase', async () => {
   await click('toolbar-pull-btn');
   await idle();
   expect(revParse(repo, 'main')).toBe(revParse(repo, 'origin/main'));
+  await until(() => gitSpawnLines().some((l) => l.includes('"merge"') && l.includes('"--ff-only"')), { message: 'fast-forward merge should be logged' });
   const spawns = gitSpawnLines();
   expect(spawns.some((l) => l.includes('"fetch"'))).toBe(true);
   expect(spawns.some((l) => l.includes('"merge"') && l.includes('"--ff-only"'))).toBe(true);
