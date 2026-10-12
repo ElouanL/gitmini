@@ -20,7 +20,13 @@ export interface PerfLine {
   dt?: number;
   /** `performance.timeOrigin + startTime`: ms from epoch. */
   t: number;
+  /** Mark set after a paint: `paint` (double rAF) or `timeout` (fallback, no frame was painted). */
+  via?: 'paint' | 'timeout';
+  /** Screen painted when it is not the normal one (`git-error`: Git missing or too old). */
+  screen?: 'git-error';
 }
+
+export type PerfMarkDetail = Pick<PerfLine, 'via' | 'screen'>;
 
 type Sink = (line: PerfLine) => void;
 
@@ -48,7 +54,7 @@ export function setPerfSink(s: Sink | null): void {
   sink = s;
 }
 
-export function perfMark(name: PerfMarkName): void {
+export function perfMark(name: PerfMarkName, detail: PerfMarkDetail = {}): void {
   const t = performance.timeOrigin + performance.now();
   try {
     performance.mark(name);
@@ -56,26 +62,27 @@ export function perfMark(name: PerfMarkName): void {
     /* environment without User Timing */
   }
   marks.push({ name, t });
-  resolveSink()?.({ kind: 'mark', name, t });
+  resolveSink()?.({ kind: 'mark', name, t, ...detail });
 }
 
 /**
  * Sets the mark to the PREMIER PAINT real: two `requestAnimationFrame` (the first callback runs before the paint of the frame, the
  * This is the "gitmini:app-ready" of the B1 start budget: it measures what the user sees, not the end of the JS.
  */
-export function perfMarkAfterPaint(name: PerfMarkName, fallbackMs = 250): Promise<void> {
+export function perfMarkAfterPaint(name: PerfMarkName, { fallbackMs = 250, screen }: { fallbackMs?: number; screen?: PerfMarkDetail['screen'] } = {}): Promise<void> {
   return new Promise((resolve) => {
     let done = false;
-    const finish = (): void => {
+    const finish = (via: 'paint' | 'timeout'): void => {
       if (done) return;
       done = true;
-      perfMark(name);
+      perfMark(name, { via, screen });
       resolve();
     };
-    // Hidden or minimized window: `requestAnimationFrame` does not run; the fold prevents blocking the opening of the repository.
-    setTimeout(finish, fallbackMs);
+    // Hidden or minimized window, display asleep: `requestAnimationFrame` does not run; the fallback prevents blocking the
+    // opening of the repository. Its mark says `via: 'timeout'`: it is not a paint, and startup.mjs rejects it for B1.
+    setTimeout(() => finish('timeout'), fallbackMs);
     const raf: (cb: () => void) => unknown = typeof requestAnimationFrame === 'function' ? requestAnimationFrame : (cb) => setTimeout(cb, 16);
-    raf(() => raf(finish));
+    raf(() => raf(() => finish('paint')));
   });
 }
 

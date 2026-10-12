@@ -63,6 +63,11 @@ test("parseTrace: tolerant format (without `kind`, `frame` field of the perf.rs 
   assert.deepEqual(t.marks, [{ name: 'gitmini:app-ready', t: 2 }]);
 });
 
+test("parseTrace: `via` and `screen` of the marks set after a paint are kept", () => {
+  const t = parseTrace('{"kind":"mark","name":"gitmini:app-ready","t":1,"via":"timeout","screen":"git-error"}\n{"kind":"mark","name":"gitmini:repo-open-start","t":2,"via":3}\n');
+  assert.deepEqual(t.marks, [{ name: 'gitmini:app-ready', t: 1, via: 'timeout', screen: 'git-error' }, { name: 'gitmini:repo-open-start', t: 2 }]);
+});
+
 test('firstMark / lastMark / frameDurationsBetween', () => {
   const t = parseTrace(TRACE);
   assert.equal(firstMark(t.marks, MARKS.graphFirstPaint).t, 1790972001000);

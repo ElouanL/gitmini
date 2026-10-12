@@ -10,7 +10,7 @@ import { confirmAction } from '../dialogs/confirm';
 import { hasDialog, openDialog } from '../dialogs/registry';
 import { dialogStack } from '../dialogs/stack.svelte';
 import { openContextMenu, resetMenus } from '../menus/registry';
-import { perfFrames, perfMark, perfMarks, perfResetAll, setPerfSink } from '../perf';
+import { perfFrames, perfMark, perfMarkAfterPaint, perfMarks, perfResetAll, setPerfSink, type PerfLine } from '../perf';
 import { app } from '../stores/app.svelte';
 import { graph } from '../stores/graph.svelte';
 import { op } from '../stores/op.svelte';
@@ -472,6 +472,21 @@ describe("window._gitmini test deck and measurements", () => {
     expect(t).toBeGreaterThan(1_600_000_000_000);
     expect(perfFrames()).toEqual([]);
     vi.restoreAllMocks();
+  });
+
+  it("perfMarkAfterPaint: `via: 'paint'` after two frames, `via: 'timeout'` when no frame is painted", async () => {
+    const lines: PerfLine[] = [];
+    setPerfSink((l) => lines.push(l));
+    vi.stubGlobal('requestAnimationFrame', (cb: () => void) => setTimeout(cb, 0));
+    await perfMarkAfterPaint('gitmini:app-ready');
+    vi.stubGlobal('requestAnimationFrame', () => 0);
+    await perfMarkAfterPaint('gitmini:app-ready', { fallbackMs: 5, screen: 'git-error' });
+    vi.unstubAllGlobals();
+    setPerfSink(null);
+    expect(lines).toMatchObject([
+      { kind: 'mark', name: 'gitmini:app-ready', via: 'paint' },
+      { kind: 'mark', name: 'gitmini:app-ready', via: 'timeout', screen: 'git-error' },
+    ]);
   });
 });
 

@@ -17,7 +17,7 @@ const skip = process.platform === 'win32' ? "false binary = scripts to shebang" 
 const tmp = () => mkdtempSync(join(tmpdir(), 'gitmini-perf-test-'));
 
 /** Binning false: writes `app-ready` after `readyMs`, then (if a repository is given) first-paint and index-complete; throws a child. */
-function fakeApp(dir, name, { readyMs = 120, repoMarks = true, crash = false, noMark = false, leakFile, launchFile } = {}) {
+function fakeApp(dir, name, { readyMs = 120, readyDetail = {}, repoMarks = true, crash = false, noMark = false, leakFile, launchFile } = {}) {
   const file = join(dir, name);
   writeFileSync(
     file,
@@ -25,12 +25,12 @@ function fakeApp(dir, name, { readyMs = 120, repoMarks = true, crash = false, no
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 const trace = process.env.GITMINI_PERF_TRACE;
-const mark = (name) => fs.appendFileSync(trace, JSON.stringify({ kind: 'mark', name, t: Date.now() }) + '\\n');
+const mark = (name, detail = {}) => fs.appendFileSync(trace, JSON.stringify({ kind: 'mark', name, t: Date.now(), ...detail }) + '\\n');
 if (${JSON.stringify(crash)}) { console.error('boum'); process.exit(3); }
 const child = spawn('sleep', ['60'], { stdio: 'ignore' }); // « WebView »
 ${launchFile ? `fs.appendFileSync(${JSON.stringify(launchFile)}, JSON.stringify({ home: process.env.HOME, cache: process.env.XDG_CACHE_HOME, trace }) + '\\n');` : ''}
 ${leakFile ? `fs.writeFileSync(${JSON.stringify(leakFile)}, JSON.stringify({ pid: process.pid, child: child.pid, home: process.env.HOME, cfg: process.env.XDG_CONFIG_HOME, notrace: process.env.GITMINI_TEST_MODE, git: process.env.GIT_DIR ?? null, args: process.argv.slice(2) }));` : ''}
-if (!${JSON.stringify(noMark)}) setTimeout(() => mark('gitmini:app-ready'), ${readyMs});
+if (!${JSON.stringify(noMark)}) setTimeout(() => mark('gitmini:app-ready', ${JSON.stringify(readyDetail)}), ${readyMs});
 if (process.argv.length > 2 && ${JSON.stringify(repoMarks)}) {
   setTimeout(() => mark('gitmini:repo-open-start'), ${readyMs + 20});
   setTimeout(() => mark('gitmini:graph-first-paint'), ${readyMs + 220});
@@ -124,6 +124,30 @@ test("startup.mjs: B1 exceedance = result `fail` but exit 0 (report.mjs judges)"
     const [res] = readResultsFile(out);
     assert.equal(res.status, 'fail');
     assert.ok(res.value > 700);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("startup.mjs: an app-ready set by the fallback timer is not a B1 measure (exit 1)", { skip }, () => {
+  const dir = tmp();
+  try {
+    const bin = fakeApp(dir, 'gitmini', { readyMs: 100, readyDetail: { via: 'timeout' } });
+    const r = run(['--binary', bin, '--runs', '1', '--warmup', '0', '--skip-memory', '--out', join(dir, 'startup.json')]);
+    assert.equal(r.status, 1, r.stderr + r.stdout);
+    assert.match(r.stderr, /fallback timer, no frame was painted/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("startup.mjs: the Git error screen is not a B1 measure (exit 1)", { skip }, () => {
+  const dir = tmp();
+  try {
+    const bin = fakeApp(dir, 'gitmini', { readyMs: 100, readyDetail: { via: 'paint', screen: 'git-error' } });
+    const r = run(['--binary', bin, '--runs', '1', '--warmup', '0', '--skip-memory', '--out', join(dir, 'startup.json')]);
+    assert.equal(r.status, 1, r.stderr + r.stdout);
+    assert.match(r.stderr, /Git error screen/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

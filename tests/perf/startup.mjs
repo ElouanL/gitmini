@@ -12,6 +12,8 @@
 //
 // PERF -01 : 1 warm-up launch (throw) then `--runs` Launches (5 defaults) of the application without resistory (the
 //   definition of B1 is the first paint of the reception); value = median of `gitmini:app-ready` - time of the spawn.
+//   A mark set by the fallback timer (`via: "timeout"`: no frame painted, e.g. display asleep or window occluded) or on the
+//   Git error screen (`screen: "git-error"`) is not a B1 measure: the launch fails (exit 1) instead of reporting it.
 // PERF-04: application launched with repository `<GITMINI_FIXTURES_DIR|target/fixtures>/<fixture>/repo` (open in place, read
 //   only: gitmini does not write anything in a repository), measure after `gitmini:graph-first-paint` AND `gitmini:graph-index-complete`, then a
 //   `--settle` (2 s) and 3 samples spaced 500 ms (median). LIMITE: the scripted scroll of B4 cannot be used
@@ -143,6 +145,16 @@ function launch(binary, args, { timeoutMs, label, profileDir }) {
 
 // ── PERF-01
 
+/** Rejects an `app-ready` mark that is not the first paint of the home screen (see the header). */
+export function checkAppReadyMark(mark, label) {
+  if (mark.screen === 'git-error') {
+    throw new MeasureError(`${label} : the Git error screen was painted (Git missing or older than 2.30 in PATH): put a recent git first in PATH.`);
+  }
+  if (mark.via === 'timeout') {
+    throw new MeasureError(`${label} : "${mark.name}" was set by the fallback timer, no frame was painted (display asleep, window hidden or occluded): keep the window visible during the measure.`);
+  }
+}
+
 async function measureStartup(binary, { runs, warmup, timeoutMs }) {
   const samples = [];
   // A hot start must reuse the profile warmed by the discarded launch, including
@@ -153,6 +165,7 @@ async function measureStartup(binary, { runs, warmup, timeoutMs }) {
       const app = launch(binary, [], { timeoutMs, profileDir, label: i < warmup ? "heating" : `run ${i - warmup + 1}` });
       try {
         const mark = await app.waitForMark(MARKS.appReady);
+        checkAppReadyMark(mark, i < warmup ? 'heating' : `run ${i - warmup + 1}`);
         const ms = mark.t - app.spawnEpoch;
         if (i >= warmup) {
           samples.push(ms);
@@ -192,7 +205,10 @@ async function measureApp(binary, args, { timeoutMs, settleMs, waitMarks, label 
   const beforeWebKit = webKitPids();
   const app = launch(binary, args, { timeoutMs, label });
   try {
-    for (const name of waitMarks) await app.waitForMark(name);
+    for (const name of waitMarks) {
+      const mark = await app.waitForMark(name);
+      if (mark.screen === 'git-error') checkAppReadyMark(mark, label);
+    }
     const memory = await sampleMemory(app, { settleMs, beforeWebKit });
     const marks = app.trace().marks;
     const open = firstMark(marks, MARKS.repoOpenStart);
