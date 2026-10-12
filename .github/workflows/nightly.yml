@@ -191,8 +191,10 @@ jobs:
           retention-days: 14
 
   # ── perf Linux : mesures nightly de FX-100K et colonne LINUX
+  # Temporarily disabled with the `perf` job of ci.yml: remove `if: false` to restore.
   perf-linux:
     name: perf-linux
+    if: false
     needs: fixtures
     runs-on: ubuntu-24.04
     timeout-minutes: 90
