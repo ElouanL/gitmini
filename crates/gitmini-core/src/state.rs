@@ -437,12 +437,27 @@ pub struct RepoHandle {
 }
 
 // - fresh confection ( thread_repo )
-/// File impression: date of modification, size and inode (it rewrites its config by `rename`).
+/// File impression: date of modification, size and identity (git rewrites its config by `rename`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct FileStamp {
     mtime: Option<std::time::SystemTime>,
     len: u64,
-    ino: u64,
+    /// Unix: inode. Elsewhere there is no stable inode (and NTFS keeps the creation time of a file replaced by
+    /// `rename`): hash of the content, so that two writes of the same length within one mtime tick are told apart.
+    id: u64,
+}
+
+#[cfg(unix)]
+fn file_id(_path: &Path, meta: &std::fs::Metadata) -> u64 {
+    std::os::unix::fs::MetadataExt::ino(meta)
+}
+
+#[cfg(not(unix))]
+fn file_id(path: &Path, _meta: &std::fs::Metadata) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::hash::DefaultHasher::new();
+    std::fs::read(path).ok().hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Imprint of config files that feed a repository: `<common_dir>/config`, `<git_dir>/config.worktree`,
@@ -482,10 +497,7 @@ impl ConfigStamp {
                     std::fs::metadata(p).ok().map(|m| FileStamp {
                         mtime: m.modified().ok(),
                         len: m.len(),
-                        #[cfg(unix)]
-                        ino: std::os::unix::fs::MetadataExt::ino(&m),
-                        #[cfg(not(unix))]
-                        ino: 0,
+                        id: file_id(p, &m),
                     })
                 })
                 .collect(),
