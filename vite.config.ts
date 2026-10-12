@@ -39,6 +39,8 @@ export default defineConfig(({ mode }) => ({
   },
   test: {
     environment: 'jsdom',
+    // GitHub-enabled tests mock the flag explicitly; CI enables it globally for E2E builds.
+    env: { VITE_GITMINI_GITHUB_LOGIN: '0' },
     include: ['src/**/*.test.ts'],
     setupFiles: ['src/lib/test/setup.ts'],
     restoreMocks: true,

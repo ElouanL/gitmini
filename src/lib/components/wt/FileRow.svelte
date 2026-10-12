@@ -158,7 +158,8 @@
     align-items: center;
     gap: 6px;
     height: var(--row-height);
-    padding: 0 6px 0 8px;
+    /* Overlay scrollbars reserve no layout gutter but intercept pointer events. */
+    padding: 0 22px 0 8px;
     cursor: default;
     user-select: none;
     border-left: 2px solid transparent;

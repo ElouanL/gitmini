@@ -10,7 +10,7 @@ export const MARKS: {
   graphFirstPaint: 'gitmini:graph-first-paint';
   graphIndexComplete: 'gitmini:graph-index-complete';
 };
-export interface TraceMark { name: string; t: number }
+export interface TraceMark { name: string; t: number; via?: 'paint' | 'timeout'; screen?: 'git-error' }
 export interface TraceFrame { dt: number; t: number }
 export interface Trace { marks: TraceMark[]; frames: TraceFrame[]; skipped: number }
 export function parseTrace(text: string): Trace;

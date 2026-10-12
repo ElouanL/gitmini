@@ -12,13 +12,15 @@
 //
 // PERF -01 : 1 warm-up launch (throw) then `--runs` Launches (5 defaults) of the application without resistory (the
 //   definition of B1 is the first paint of the reception); value = median of `gitmini:app-ready` - time of the spawn.
+//   A mark set by the fallback timer (`via: "timeout"`: no frame painted, e.g. display asleep or window occluded) or on the
+//   Git error screen (`screen: "git-error"`) is not a B1 measure: the launch fails (exit 1) instead of reporting it.
 // PERF-04: application launched with repository `<GITMINI_FIXTURES_DIR|target/fixtures>/<fixture>/repo` (open in place, read
 //   only: gitmini does not write anything in a repository), measure after `gitmini:graph-first-paint` AND `gitmini:graph-index-complete`, then a
 //   `--settle` (2 s) and 3 samples spaced 500 ms (median). LIMITE: the scripted scroll of B4 cannot be used
 //   The "after scroll" measure is made by perf.e2e.ts (PERF-04, part WDIO).
 //   Backend = gitmini process, WebView = its descendants (macOS: + com.apple.WebKit.* process appeared since the launch);
 //   each group is reduced by the same measure taken on `tests/perf/hello-tauri/` (built on demand:
-//   `cargo build --release --features custom-protocol`; target `$CARGO_TARGET_DIR` if defined, otherwise hello-tauri/target).
+//   `cargo build --profile release-perf --features custom-protocol`; target `$CARGO_TARGET_DIR` if defined, otherwise hello-tauri/target).
 //   PSS: Linux smaps_rollup, macOS footprint (phys_footprint), Windows working set (PowerShell/CIM): lib/pss.mjs.
 //
 // Output: `startup.json` in common format (lib/results.mjs). Output codes: 0 measurements made (budget exceedance)
@@ -71,6 +73,8 @@ export function buildEnv(tmp, traceFile, base = process.env) {
   });
   if (process.platform === 'win32') {
     Object.assign(env, { USERPROFILE: home, APPDATA: join(home, 'AppData/Roaming'), LOCALAPPDATA: join(home, 'AppData/Local') });
+    mkdirSync(env.APPDATA, { recursive: true });
+    mkdirSync(env.LOCALAPPDATA, { recursive: true });
   }
   return env;
 }
@@ -81,12 +85,12 @@ const live = new Set();
 /**
  * @param {string} binary
  * @param {string[]} args
- * @param {{ timeoutMs: number, label: string }} opts
+ * @param {{ timeoutMs: number, label: string, profileDir?: string }} opts
  */
-function launch(binary, args, { timeoutMs, label }) {
+function launch(binary, args, { timeoutMs, label, profileDir }) {
   const tmp = mkdtempSync(join(tmpdir(), 'gitmini-perf-'));
   const traceFile = join(tmp, 'trace.jsonl');
-  const env = buildEnv(tmp, traceFile);
+  const env = buildEnv(profileDir ?? tmp, traceFile);
   const spawnEpoch = Date.now();
   const child = spawn(binary, args, {
     env,
@@ -141,22 +145,40 @@ function launch(binary, args, { timeoutMs, label }) {
 
 // ── PERF-01
 
+/** Rejects an `app-ready` mark that is not the first paint of the home screen (see the header). */
+export function checkAppReadyMark(mark, label) {
+  if (mark.screen === 'git-error') {
+    throw new MeasureError(`${label} : the Git error screen was painted (Git missing or older than 2.30 in PATH): put a recent git first in PATH.`);
+  }
+  if (mark.via === 'timeout') {
+    throw new MeasureError(`${label} : "${mark.name}" was set by the fallback timer, no frame was painted (display asleep, window hidden or occluded): keep the window visible during the measure.`);
+  }
+}
+
 async function measureStartup(binary, { runs, warmup, timeoutMs }) {
   const samples = [];
-  for (let i = 0; i < warmup + runs; i++) {
-    const app = launch(binary, [], { timeoutMs, label: i < warmup ? "heating" : `run ${i - warmup + 1}` });
-    try {
-      const mark = await app.waitForMark(MARKS.appReady);
-      const ms = mark.t - app.spawnEpoch;
-      if (i >= warmup) {
-        samples.push(ms);
-        log(`PERF-01 run ${i - warmup + 1}/${runs} : ${ms.toFixed(1)} ms`);
-      } else {
-        log(`warm-up: ${ms.toFixed(1)} ms (token)`);
+  // A hot start must reuse the profile warmed by the discarded launch, including
+  // WebView caches. Trace files and processes remain separate for every launch.
+  const profileDir = mkdtempSync(join(tmpdir(), 'gitmini-perf-profile-'));
+  try {
+    for (let i = 0; i < warmup + runs; i++) {
+      const app = launch(binary, [], { timeoutMs, profileDir, label: i < warmup ? "heating" : `run ${i - warmup + 1}` });
+      try {
+        const mark = await app.waitForMark(MARKS.appReady);
+        checkAppReadyMark(mark, i < warmup ? 'heating' : `run ${i - warmup + 1}`);
+        const ms = mark.t - app.spawnEpoch;
+        if (i >= warmup) {
+          samples.push(ms);
+          log(`PERF-01 run ${i - warmup + 1}/${runs} : ${ms.toFixed(1)} ms`);
+        } else {
+          log(`warm-up: ${ms.toFixed(1)} ms (token)`);
+        }
+      } finally {
+        await app.stop();
       }
-    } finally {
-      await app.stop();
     }
+  } finally {
+    rmSync(profileDir, { recursive: true, force: true });
   }
   return samples;
 }
@@ -168,20 +190,25 @@ async function sampleMemory(app, { settleMs, beforeWebKit }) {
   await sleep(settleMs);
   const backend = [];
   const webview = [];
+  const processes = [];
   for (let i = 0; i < 3; i++) {
     const m = measureTree(app.pid, { beforeWebKitPids: beforeWebKit });
     backend.push(m.backendBytes);
     webview.push(m.webviewBytes);
+    processes.push(m.processes);
     if (i < 2) await sleep(500);
   }
-  return { backend, webview };
+  return { backend, webview, processes };
 }
 
 async function measureApp(binary, args, { timeoutMs, settleMs, waitMarks, label }) {
   const beforeWebKit = webKitPids();
   const app = launch(binary, args, { timeoutMs, label });
   try {
-    for (const name of waitMarks) await app.waitForMark(name);
+    for (const name of waitMarks) {
+      const mark = await app.waitForMark(name);
+      if (mark.screen === 'git-error') checkAppReadyMark(mark, label);
+    }
     const memory = await sampleMemory(app, { settleMs, beforeWebKit });
     const marks = app.trace().marks;
     const open = firstMark(marks, MARKS.repoOpenStart);
@@ -197,18 +224,18 @@ async function measureApp(binary, args, { timeoutMs, settleMs, waitMarks, label 
 
 function helloBinaryPath() {
   const target = process.env.CARGO_TARGET_DIR ? resolve(process.env.CARGO_TARGET_DIR) : join(HELLO_DIR, 'target');
-  return join(target, 'release', `hello-tauri${EXE}`);
+  return join(target, 'release-perf', `hello-tauri${EXE}`);
 }
 
 function ensureHelloBinary({ build }) {
   const bin = helloBinaryPath();
   if (existsSync(bin)) return bin;
   if (!build) throw new UsageError(`binaire hello-tauri absent (${bin}) : build it (voir --help) ou passez --hello-binary.`);
-  log(`construction of hello-tauri (cargo build -- release, a few minutes first) → ${bin}`);
+  log(`construction of hello-tauri (cargo build --profile release-perf) → ${bin}`);
   if (!existsSync(join(HELLO_DIR, 'icons/icon.png'))) execFileSync(process.execPath, [join(HELLO_DIR, 'gen-icons.mjs')], { stdio: 'inherit' });
   // The tauri, wry... versions of the database must be those of the application: Cargo.lock initial = that of the workspace.
   if (!existsSync(join(HELLO_DIR, 'Cargo.lock')) && existsSync(join(REPO_ROOT, 'Cargo.lock'))) copyFileSync(join(REPO_ROOT, 'Cargo.lock'), join(HELLO_DIR, 'Cargo.lock'));
-  execFileSync('cargo', ['build', '--release', '--features', 'custom-protocol', '--manifest-path', join(HELLO_DIR, 'Cargo.toml')], { stdio: 'inherit' });
+  execFileSync('cargo', ['build', '--profile', 'release-perf', '--features', 'custom-protocol', '--manifest-path', join(HELLO_DIR, 'Cargo.toml')], { stdio: 'inherit' });
   if (!existsSync(bin)) throw new MeasureError(`hello-tauri construit mais introuvable : ${bin}`);
   return bin;
 }
@@ -346,6 +373,8 @@ async function main() {
         helloWebviewBytes: median(base.memory.webview),
         gitminiBackendBytes: median(app.memory.backend),
         gitminiWebviewBytes: median(app.memory.webview),
+        helloProcesses: base.memory.processes,
+        gitminiProcesses: app.memory.processes,
       };
       if (app.firstPaintMs !== null) log(`(info) repo-open-start → graph-first-paint : ${app.firstPaintMs.toFixed(0)} ms ; → index complet : ${app.indexMs?.toFixed(0) ?? '?'} ms`);
     }

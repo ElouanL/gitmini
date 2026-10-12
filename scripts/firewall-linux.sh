@@ -9,7 +9,7 @@
 # Why? `on` is not one `-P OUTPUT DROP` Overall on Runners GitHub : the runner himself (newspapers, artifacts,
 # heartbeat) exits by the same network; shutting down the host kills the job. `on` mode gets the desired guarantee (tests
 # do not reach any external host, including DNS) by filtering on the group owner of the socket: we launch the
-# tests with `scripts/ci-run-offline.sh <commande…>`, which passes in gitmininonet group (sudo -g). Loopback allowed (mock
+# tests with `scripts/ci-run-offline.sh <commande…>`, which passes in gitmininonet group (setpriv). Loopback allowed (mock
 # GitHub, tauri-driver, WebKitWebDriver, Xvfb), all the rest is REJECT (immediate failure, no timeout).
 # `strict` is suitable for a disposable container or VM (e.g. `docker run --cap-add NET_ADMIN`), never for a hosted runner.
 set -euo pipefail
@@ -79,11 +79,19 @@ case "$cmd" in
       echo "group $group absent: run first 'sudo $0 on'" >&2
       exit 1
     }
+    # Check the launcher independently so sudo/setpriv errors cannot be mistaken for blocked traffic.
+    expected_uid=$(id -u)
+    expected_gid=$(getent group "$group" | cut -d: -f3)
+    actual_identity=$(bash "$here/ci-run-offline.sh" bash -c 'printf "%s:%s" "$(id -u)" "$(id -g)"')
+    [ "$actual_identity" = "$expected_uid:$expected_gid" ] || {
+      echo "CHECK: offline launcher identity $actual_identity, expected $expected_uid:$expected_gid" >&2
+      exit 1
+    }
     # 1.1.1.1 avoids DNS; github.com also checks name resolution. Neither of them must answer: we demand
     # a "inaccessible network" curl code (6 DNS, 7 connection, 28 delay), not a sudo failure (code 1).
     for target in https://1.1.1.1 https://github.com; do
       status=0
-      bash "$here/ci-run-offline.sh" curl -sS --max-time 5 -o /dev/null "$target" 2>/dev/null || status=$?
+      bash "$here/ci-run-offline.sh" curl --noproxy '*' -sS --max-time 5 -o /dev/null "$target" || status=$?
       case "$status" in
         0)
           echo "FAILED: $target is still reachable under group $group" >&2

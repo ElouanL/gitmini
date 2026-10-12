@@ -2,7 +2,7 @@
 import { expect } from '@wdio/globals';
 import { currentSession } from '../helpers';
 import { git } from '../../support/git-state';
-import { appReady, click, idle, isShown, textOf, waitForTestId } from '../../support/ui';
+import { appReady, click, idle, isShown, textOf, until, waitForTestId } from '../../support/ui';
 import { gitSpawnLines } from './flows-b-support';
 
 it("RM-05 — push forced after rewriting", async () => {
@@ -19,13 +19,14 @@ it("RM-05 — push forced after rewriting", async () => {
   await idle();
 
   // expected order: lease without explicit value; the lease is expired (other pushed) → rejected, nothing is overwritten
+  await waitForTestId('push-rejected-dialog', { attrs: { stale: 'true' } });
+  await until(() => gitSpawnLines().some((l) => l.includes('"push"')), { message: 'push subprocess should be logged' });
   const push = gitSpawnLines().find((l) => l.includes('"push"'));
   expect(push).toBeDefined();
   expect(push).toContain('"--force-with-lease"');
   expect(push).toContain('"--force-if-includes"');
   expect(push).toContain('"refs/heads/topic:refs/heads/topic"');
   expect(push).not.toContain('--force-with-lease=');
-  await waitForTestId('push-rejected-dialog', { attrs: { stale: 'true' } });
   expect(fx.gitIn(fx.origin, 'rev-parse', 'topic')).toBe(collabOid);
 
   // fetch, integration of remote commit into terminal (behind = 0), then a new push succeeds without confirmation

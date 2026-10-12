@@ -38,6 +38,54 @@ fn fixture(name: &str) -> Fx {
 
 // ── GRAPH-01
 
+#[test]
+fn log_page_visible_lanes_preserve_crossings_and_history_metadata() {
+    let fx = fixture("octopus");
+    let o = open_complete(&fx.path);
+    let mut args = page_args(&o.repo);
+    let full = log_page_blocking(&o.repo, &args).unwrap();
+    assert!(full.max_lanes > 1);
+
+    args.max_visible_lane = Some(0);
+    let clipped = log_page_blocking(&o.repo, &args).unwrap();
+    assert_eq!(clipped.rows.len(), full.rows.len());
+    assert!(
+        clipped
+            .rows
+            .iter()
+            .flat_map(|r| r.edges.as_chunks::<4>().0.iter())
+            .all(|e| e[0] == 0 || e[1] == 0)
+    );
+    assert!(
+        clipped
+            .rows
+            .iter()
+            .flat_map(|r| r.edges.as_chunks::<4>().0.iter())
+            .any(|e| e[0] != e[1]),
+        "connections between visible and hidden lanes remain visible"
+    );
+    let edge_count = |p: &LogPage| p.rows.iter().map(|r| r.edges.len()).sum::<usize>();
+    assert!(edge_count(&clipped) < edge_count(&full));
+
+    // Clipping changes geometry only: commits, parents, refs, lane assignments,
+    // authors, cursor, total and the full width still describe the same history.
+    let without_edges = |page: &LogPage| {
+        let mut value = serde_json::to_value(page).unwrap();
+        for row in value["rows"].as_array_mut().unwrap() {
+            row.as_object_mut().unwrap().remove("edges");
+        }
+        value
+    };
+    assert_eq!(without_edges(&clipped), without_edges(&full));
+
+    args.max_visible_lane = Some(u32::MAX);
+    let unbounded = log_page_blocking(&o.repo, &args).unwrap();
+    assert_eq!(
+        serde_json::to_value(unbounded).unwrap(),
+        serde_json::to_value(full).unwrap()
+    );
+}
+
 /// GRAPH-01 (Rust side) — `octopus`: one line by commit of `git rev-list --all`, the commit octopus connects 4 parents.
 #[test]
 fn graph_01_octopus_lanes() {

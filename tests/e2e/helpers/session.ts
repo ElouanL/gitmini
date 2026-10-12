@@ -57,6 +57,12 @@ export async function createSession(opts: CreateSessionOptions): Promise<Session
 
   const extra = harnessEnv({ tmp: fx.root, home: fx.home }, opts.mode);
   const env: Env = { ...fx.env, ...extra };
+  if (process.platform === 'win32') {
+    // SHGetKnownFolderPath validates the expanded AppData paths. An isolated
+    // USERPROFILE must contain both folders before Tauri resolves logs/config.
+    mkdirSync(env.APPDATA, { recursive: true });
+    mkdirSync(env.LOCALAPPDATA, { recursive: true });
+  }
   // `web`: the bridge keeps `settings.json` in the folder it is given (same location under all OS)
   const configDir = opts.mode === 'web' ? join(fx.home, '.config', 'dev.gitmini.desktop') : appConfigDir(env);
   mkdirSync(configDir, { recursive: true });

@@ -42,9 +42,12 @@ export function gitSpawnLines(): string[] {
 
 /** All lines of the log files of the session (bridge, application). */
 export function readLogLines(): string[] {
-  const { logsDir } = currentSession();
-  if (!existsSync(logsDir)) return [];
-  return readdirSync(logsDir).flatMap((name) => readFileSync(join(logsDir, name), 'utf8').split('\n'));
+  const { logsDir, artifactsDir } = currentSession();
+  // Native driver output is retained directly in artifacts, including when
+  // session creation fails. Bridge output lives in the temporary session.
+  return [logsDir, join(artifactsDir, 'logs')].flatMap((dir) =>
+    existsSync(dir) ? readdirSync(dir).flatMap((name) => readFileSync(join(dir, name), 'utf8').split('\n')) : [],
+  );
 }
 
 /** Number of subprocess git whose argv contains `sub` as an element (`"merge"`, `"push"`...). */

@@ -59,7 +59,7 @@ export async function bootstrap(): Promise<void> {
 
   if (info.gitError) {
     app.ready = true; // `welcome-git-error` blocking screen: it is it that is painted
-    await perfMarkAfterPaint('gitmini:app-ready');
+    await perfMarkAfterPaint('gitmini:app-ready', { screen: 'git-error' });
     // Read the opt-out preference after paint even when Git is unavailable.
     if (updaterAvailable(info.e2e)) {
       try {

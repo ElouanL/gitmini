@@ -113,11 +113,15 @@ function buildChunk(page: LogPage, k: number, headOid: string | null, mk: PathFa
 
     const e = r.edges;
     for (let j = 0; j + 3 < e.length; j += 4) {
+      // Keep crossings into the visible graph and the clipped boundary lane.
+      // Fully hidden lanes need no native Path2D geometry (hundreds in wide repos).
+      if (e[j]! > MAX_LANE_COLS && e[j + 1]! > MAX_LANE_COLS) continue;
       const flags = e[j + 3]!;
       const bottom = (flags & 1) !== 0;
       segment(pathOf((flags & 2) !== 0 ? ch.dashed : ch.solid, e[j + 2]! & 7, mk), laneX(e[j]!), bottom ? cy : y, laneX(e[j + 1]!), bottom ? y + ROW_H : cy);
     }
 
+    if (r.lane > MAX_LANE_COLS) continue;
     const x = laneX(r.lane);
     const c = r.color & 7;
     if (r.kind === 'stash') {

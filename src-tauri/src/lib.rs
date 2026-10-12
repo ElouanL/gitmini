@@ -14,11 +14,15 @@ pub mod perf;
 pub mod sink;
 pub mod updater;
 
-/// First argument of the command line: `gitmini [<repository-path>]` (, `AppInfo.initialPath`).
+/// Repository argument: `gitmini [<repository-path> | --repo=<repository-path>]`.
 /// The options (`-psn_…` macOS, unknown flags) are not paths.
 pub fn initial_path(args: impl IntoIterator<Item = String>) -> Option<String> {
-    args.into_iter()
-        .find(|a| !a.is_empty() && !a.starts_with('-'))
+    args.into_iter().find_map(|arg| {
+        if let Some(path) = arg.strip_prefix("--repo=") {
+            return (!path.is_empty()).then(|| path.to_owned());
+        }
+        (!arg.is_empty() && !arg.starts_with('-')).then_some(arg)
+    })
 }
 
 /// Context Tauri generated from `tauri.conf.json` and `capabilities/` (one expansion of `generate_context!`:
@@ -94,6 +98,7 @@ pub fn run() {
             );
             app.manage(state);
             perf::stamp("state-ready");
+            drop(_in_runtime);
 
             // `create: false` in tauri.conf.json: the window is built here for injection
             // `window.__gitminiPerfSink` before any script of the page when `GITMINI_PERF_TRACE` is set.
@@ -104,13 +109,45 @@ pub fn run() {
                 .first()
                 .cloned()
                 .ok_or("no windows in tauri.conf.json")?;
-            let mut window = WebviewWindowBuilder::from_config(app, &window_config)?;
             if let Some(perf) = &perf {
                 perf.listen(app);
-                window = window.initialization_script(perf::INIT_SCRIPT);
             }
-            window.build()?;
-            perf::stamp("window-built");
+            let handle = app.handle().clone();
+            let create_window = move || -> tauri::Result<()> {
+                let mut window = WebviewWindowBuilder::from_config(&handle, &window_config)?;
+                if perf.is_some() {
+                    window = window.initialization_script(perf::INIT_SCRIPT);
+                }
+                let _window = window.build()?;
+                #[cfg(all(target_os = "windows", feature = "e2e"))]
+                if std::env::var("GITMINI_TEST_MODE").as_deref() == Ok("1") {
+                    // Tao initially fits the window to the hosted 1024 px desktop.
+                    // Restore the configured logical size so desktop scenarios
+                    // exercise the same layout as Linux (1280 px, no overlay).
+                    _window.set_size(tauri::LogicalSize::new(
+                        window_config.width,
+                        window_config.height,
+                    ))?;
+                }
+                perf::stamp("window-built");
+                Ok(())
+            };
+            // WebView2 creation needs the main event loop to process its completion
+            // callback. Queue construction from another thread so setup can return.
+            #[cfg(target_os = "windows")]
+            {
+                let handle = app.handle().clone();
+                std::thread::Builder::new()
+                    .name("main-window".into())
+                    .spawn(move || {
+                        if let Err(error) = create_window() {
+                            tracing::error!(%error, "Cannot create the main window");
+                            handle.exit(1);
+                        }
+                    })?;
+            }
+            #[cfg(not(target_os = "windows"))]
+            create_window()?;
             Ok(())
         })
         .on_window_event(on_window_event)
@@ -168,5 +205,13 @@ mod tests {
         );
         assert_eq!(initial_path(args(&[])), None);
         assert_eq!(initial_path(args(&["--verbose"])), None);
+        assert_eq!(
+            initial_path(args(&[r"--repo=C:\work repo", "--verbose"])),
+            Some(r"C:\work repo".into())
+        );
+        assert_eq!(
+            initial_path(args(&["--repo=", "/tmp/repo"])),
+            Some("/tmp/repo".into())
+        );
     }
 }

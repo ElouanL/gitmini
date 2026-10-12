@@ -7,7 +7,7 @@
 
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { appBinary, tauriDriverBinary } from '../paths';
+import { appBinary, nativeDriverBinary, tauriDriverBinary } from '../paths';
 import { freePort, waitForPort } from '../ports';
 import { type Spawned, spawnLogged, stopProcess } from '../proc';
 import type { AppRunner, Mode, Session } from '../types';
@@ -49,8 +49,10 @@ export class TauriRunner implements AppRunner {
     const { port, nativePort } = this.ports;
 
     const args = ['--port', String(port), '--native-port', String(nativePort)];
-    if (process.env.GITMINI_NATIVE_DRIVER) args.push('--native-driver', process.env.GITMINI_NATIVE_DRIVER);
-    const logFile = join(session.logsDir, `tauri-driver-${Date.now()}.log`);
+    args.push('--native-driver', nativeDriverBinary(this.platform));
+    // WDIO skips test/afterSession hooks when session creation itself fails. Keep the
+    // driver log directly in artifacts so that failure cannot erase its startup cause.
+    const logFile = join(session.artifactsDir, 'logs', `tauri-driver-${Date.now()}.log`);
     this.logs.push(logFile);
     this.driver = spawnLogged(tauriDriverBinary(), args, { env: session.env, logFile, role: 'tauri-driver' });
     await waitForPort(port, {
@@ -59,6 +61,10 @@ export class TauriRunner implements AppRunner {
       abortIf: () => (this.driver?.hasExited() ? `tauri-driver stopped (see ${logFile})` : null),
     });
 
+    // EdgeDriver treats application arguments as switches. Use an explicit
+    // repository option so a Windows path survives its switch normalization.
+    const appArgs = session.args.map((arg) => this.platform === 'win32' && !arg.startsWith('-') ? `--repo=${arg}` : arg);
+
     return {
       capabilities: {
         hostname: '127.0.0.1',
@@ -66,7 +72,7 @@ export class TauriRunner implements AppRunner {
         // No BiDi negotiation (webSocketUrl): tauri-driver / WebKitWebDriver does not, and `reloadSession(caps)`
         // repart de ces capabilities
         'wdio:enforceWebDriverClassic': true,
-        'tauri:options': { application: binary, args: session.args },
+        'tauri:options': { application: binary, args: appArgs },
       },
     };
   }

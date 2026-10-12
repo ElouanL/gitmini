@@ -77,7 +77,8 @@ describe('UI-09 — Interface : parcours au clavier', () => {
 
     // summary then Mod+Enter: reach the form of commit with Tab
     await pressUntil('Tab', async () => (await activeTestId()) === 'commit-summary-input', { message: "Tab should lead to commit-summary-input" });
-    await browser.keys(summary.split(''));
+    // Element send-keys preserves spaces on WebKit; focus was reached entirely with Tab.
+    await (await waitForTestId('commit-summary-input')).addValue(summary);
     await press('Mod+Enter');
     await idle();
     await until(() => logSubjects(repo, '-1')[0] === summary, { message: `git log -1 should have the summary " ${summary} »` });

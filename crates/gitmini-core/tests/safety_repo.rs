@@ -9,7 +9,9 @@ use gitmini_core::ErrorCode;
 use gitmini_core::events::ChangeKindEv;
 use gitmini_core::ops::{OpCancelArgs, op_cancel};
 use gitmini_core::state::{GitInfo, MIN_GIT, WriteSpec, parse_git_version};
-use gitmini_core::types::{GitError, OpKind, RepoOpState};
+#[cfg(unix)]
+use gitmini_core::types::GitError;
+use gitmini_core::types::{OpKind, RepoOpState};
 use serde_json::Value;
 
 use repo_support::*;
@@ -197,6 +199,10 @@ async fn dropping_a_guard_without_finish_still_releases_and_emits() {
 async fn write_echo_is_decided_by_file_mtime_not_by_arrival_time() {
     init();
     let (_tmp, repo, o) = opened_repo().await;
+    // This test injects watcher kinds directly. Stop the real watcher so delayed filesystem
+    // events cannot add unrelated kinds to the write buffers asserted below.
+    drop(o.repo.watcher.lock().unwrap().take());
+    o.app.sink.clear();
     let h = &o.repo;
     let set = |l: &[ChangeKindEv]| l.iter().copied().collect::<std::collections::BTreeSet<_>>();
     std::fs::write(repo.join("gone.txt"), "x").unwrap();
@@ -687,13 +693,21 @@ fn safe_06_sanitize_process_env_removes_repo_variables() {
     // without cleaning, `git` would target the other repository: this is what the function prevents
     let leaked = std::process::Command::new(git_program())
         .args(["-C", ours.to_str().unwrap(), "rev-parse", "--show-toplevel"])
-        .env("GIT_DIR", other.join(".git"))
-        .env("GIT_WORK_TREE", &other)
+        .env(
+            "GIT_DIR",
+            git_paths::argument(&other.join(".git").to_string_lossy()),
+        )
+        .env(
+            "GIT_WORK_TREE",
+            git_paths::argument(&other.to_string_lossy()),
+        )
         .output()
         .unwrap();
     assert_eq!(
-        String::from_utf8_lossy(&leaked.stdout).trim(),
-        other.to_string_lossy(),
+        Path::new(String::from_utf8_lossy(&leaked.stdout).trim())
+            .canonicalize()
+            .unwrap(),
+        other.canonicalize().unwrap(),
         "la fuite existe bien"
     );
 }

@@ -88,7 +88,7 @@ export const commands = {
   openExternal: (a: { repoId?: RepoId; target: OpenTarget }) => call<null>('open_external', a),
 
   // Reading [R]
-  logPage: (a: { repoId: RepoId; cursor: string | null; startRow?: number; aroundOid?: Oid; limit?: number }) =>
+  logPage: (a: { repoId: RepoId; cursor: string | null; startRow?: number; aroundOid?: Oid; limit?: number; maxVisibleLane?: number }) =>
     call<LogPage>('log_page', a),
   logSearch: (a: { repoId: RepoId; query: string; fields?: SearchField[]; limit?: number }) =>
     call<LogSearchResult>('log_search', a),

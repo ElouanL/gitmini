@@ -69,6 +69,16 @@ function params(rows: GraphRow[], over: Partial<DrawParams> = {}): DrawParams {
 const edge = (from: number, to: number, color: number, bottom: boolean, dashed = false): number[] => [from, to, color, (bottom ? 1 : 0) | (dashed ? 2 : 0)];
 
 describe("Draw : edges", () => {
+  it('omits fully hidden geometry while retaining edges crossing into visible lanes', () => {
+    const { ctx, calls } = fakeCtx();
+    const hidden = MAX_LANE_COLS + 1;
+    draw(ctx, params([row(0, { lane: hidden, edges: [...edge(hidden, hidden + 1, 0, true), ...edge(hidden, 0, 1, true)] })], { maxLanes: hidden + 2 }), mk);
+    const strokes = calls.filter((c) => c.op === 'stroke');
+    expect(strokes.map((c) => c.style)).toEqual([FALLBACK_PALETTE.lanes[1]]);
+    expect(strokes[0]!.path!.ops.some((op) => op.startsWith('C '))).toBe(true);
+    expect(calls.filter((c) => c.op === 'fill')).toHaveLength(0);
+  });
+
   it("only one stroke per color and frame (8 at most), regardless of the number of lines", () => {
     const rows = Array.from({ length: 12 }, (_, i) => row(i, { lane: i % 3, color: i % 3, edges: [...edge(i % 3, i % 3, i % 3, false), ...edge(i % 3, i % 3, i % 3, true)] }));
     const { ctx, calls } = fakeCtx();

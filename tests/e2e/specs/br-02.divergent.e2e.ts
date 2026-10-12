@@ -15,8 +15,7 @@ describe("BR-02 — Branches: removal of an unfused branch", () => {
     await idle();
 
     // The backend refused (NOT_MERGED, 4 commits) without running git: the branch still exists, the dialogue is open.
-    const dialog = await waitForTestId('branch-delete-force-dialog');
-    expect(await dialog.getText()).toContain('4 commits');
+    expect(await textOf('branch-delete-force-dialog')).toContain('4 commits');
     expect(gitOk(repo, 'rev-parse', '--verify', '-q', 'refs/heads/feature').status).toBe(0);
 
     await click('branch-delete-force-btn');
@@ -25,8 +24,8 @@ describe("BR-02 — Branches: removal of an unfused branch", () => {
     expect(git(repo, 'branch', '--list', 'feature')).toBe('');
 
     // The toast of undo displays the deleted oid, with its button.
-    const toast = await waitForToast('undo');
-    expect(await toast.getText()).toContain(featureOid.slice(0, 7));
+    await waitForToast('undo');
+    expect(await textOf('toast[data-kind=undo]')).toContain(featureOid.slice(0, 7));
     await waitForTestId('toast-undo-btn');
     expect(await textOf('toast-undo-btn')).not.toBe('');
   });

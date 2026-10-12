@@ -4,7 +4,7 @@
 // the same environment as the application (fixture.ts: HOME test, fixed dates, git >= 2.30...). The environment is
 // found from the path of the repository (tmpdir prepared by preparationFixture): `repo`, `other`, a worktree bound `../wt`.
 
-import { type Dirent, existsSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { type Dirent, existsSync, readdirSync, readFileSync, realpathSync, rmSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
 import { type Env, envFor, GitError, type GitResult, spawnGit } from './fixture';
 
@@ -120,13 +120,14 @@ export function stashList(repo: string): string[] {
 
 /** `git rev-parse --absolute-git-dir`: No test writes `.git/` hard. */
 export function gitDir(repo: string): string {
-  return git(repo, 'rev-parse', '--absolute-git-dir');
+  // Native realpath expands Windows 8.3 aliases; the JS resolver preserves them.
+  return realpathSync.native(git(repo, 'rev-parse', '--absolute-git-dir'));
 }
 
 /** `<common_dir>`: different from {@link gitDir} in a related worktree. */
 export function commonDir(repo: string): string {
   const p = git(repo, 'rev-parse', '--git-common-dir');
-  return isAbsolute(p) ? p : resolve(repo, p);
+  return realpathSync.native(isAbsolute(p) ? p : resolve(repo, p));
 }
 
 /** Operation files in `<git_dir>`. */

@@ -1,7 +1,8 @@
 // Play file `GITMINI_PERF_TRACE` (, ) : JSON lines, a mark or a frame duration per line.
-//   {"kind":"mark","name":"gitmini:app-ready","t":1790972000123.4}
+//   {"kind":"mark","name":"gitmini:app-ready","t":1790972000123.4,"via":"paint"}
 //   {"kind":"frame","dt":16.7,"t":1790972000140.1}
 // `t` = `performance.timeOrigin + startTime` (ms from epoch): comparable to `Date.now` of the harness.
+// Marks set after a paint carry `via` (`paint`, or `timeout` when no frame was painted) and possibly `screen` (`git-error`).
 // The parser is tolerant: an illegible, truncated (file read during writing) or unknown line is ignored.
 import { readFileSync } from 'node:fs';
 
@@ -14,7 +15,7 @@ export const MARKS = {
 
 /**
  * @param {string} text
- * @returns {{ marks: { name: string; t: number }[]; frames: { dt: number; t: number }[]; skipped: number }}
+ * @returns {{ marks: { name: string; t: number; via?: string; screen?: string }[]; frames: { dt: number; t: number }[]; skipped: number }}
  */
 export function parseTrace(text) {
   const marks = [];
@@ -42,7 +43,10 @@ export function parseTrace(text) {
       }
       frames.push({ dt, t: obj.t });
     } else if ((obj.kind === 'mark' || obj.kind === undefined) && typeof obj.name === 'string') {
-      marks.push({ name: obj.name, t: obj.t });
+      const mark = { name: obj.name, t: obj.t };
+      if (typeof obj.via === 'string') mark.via = obj.via;
+      if (typeof obj.screen === 'string') mark.screen = obj.screen;
+      marks.push(mark);
     } else {
       skipped++;
     }

@@ -10,9 +10,12 @@ group=${GITMINI_OFFLINE_GROUP:-gitmininonet}
   exit 2
 }
 getent group "$group" >/dev/null || {
-  echo "group $group absent: run first 'sudo scripts/firewall-linux.sh we're on." >&2
+  echo "group $group absent: run first 'sudo bash scripts/firewall-linux.sh on'" >&2
   exit 1
 }
 
-# `sudo` gives PATH back to secure_path: it is explicitly re-imposed with HOME, in addition to -E.
-exec sudo -E -u "$(id -un)" -g "$group" -- env "PATH=$PATH" "HOME=$HOME" "$@"
+# Hosted runners allow sudo as root, but their runas policy does not allow arbitrary groups.
+# Enter as root, then drop back to the invoking user with the filtered primary group.
+# `sudo` resets PATH; restore it and HOME after dropping privileges.
+exec sudo -E -- setpriv --reuid "$(id -u)" --regid "$group" --init-groups \
+  env "PATH=$PATH" "HOME=$HOME" "$@"

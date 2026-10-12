@@ -253,6 +253,8 @@ export function createConfig(options: HarnessOptions): WebdriverIO.Config {
           return {
             url: location.href,
             title: document.title,
+            visibility: document.visibilityState,
+            focused: document.hasFocus(),
             hasBridge: Boolean(g),
             events: g?.events ? Object.fromEntries(names.map((n) => [n, { count: g.events?.count(n), last: g.events?.last(n) }])) : null,
             perfMarks: g?.perf?.marks() ?? null,
@@ -270,6 +272,10 @@ export function createConfig(options: HarnessOptions): WebdriverIO.Config {
         await runner?.stop();
       } finally {
         if (session) {
+          if (!session.currentTest) {
+            session.failed = true;
+            session.lastError ??= 'WebDriver session failed before any test started';
+          }
           const result = await disposeSession(session, { failed: session.failed });
           if (result.tokenHits.length > 0) console.error(`[harnais] ${session.id} : token GitHub found in tmpdir (see token-leak.json)`);
         }

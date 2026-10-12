@@ -4,7 +4,7 @@ import { $, browser, expect } from '@wdio/globals';
 import { currentSession } from '../helpers';
 import { dragPointer, type Point, type Rect } from '../../support/graph';
 import { commitMessage, logSubjects, revParse } from '../../support/git-state';
-import { appReady, chooseContextItem, click, countOf, idle, rightClick, tid, until, waitForGone, waitForTestId } from '../../support/ui';
+import { Key, appReady, chooseContextItem, click, countOf, idle, press, tid, until, waitForGone, waitForTestId } from '../../support/ui';
 
 const rowSel = (oid: string): string => tid('rebase-todo-row', { oid });
 const inRow = (oid: string, id: string) => $(`${rowSel(oid)} ${tid(id)}`);
@@ -18,6 +18,7 @@ async function rectOf(selector: string): Promise<Rect> {
 
 /** Slides the handle of the `oid` line on the low half (`below`) or high half of the `target` line (Pointer Actual Events). */
 async function dragRow(oid: string, target: string, where: 'below' | 'above'): Promise<void> {
+  await browser.executeAsync((done: () => void) => requestAnimationFrame(() => requestAnimationFrame(() => done())));
   const handle = await rectOf(`${rowSel(oid)} ${tid('rebase-todo-drag-handle')}`);
   const row = await rectOf(rowSel(target));
   const from: Point = { x: Math.round(handle.x + handle.width / 2), y: Math.round(handle.y + handle.height / 2) };
@@ -35,7 +36,10 @@ describe("IRB-01 — Interactive rebase: squash, fixup, reordering, reword", () 
     const [A, B, C, FX, D] = ['feature~4', 'feature~3', 'feature~2', 'feature~1', 'feature'].map((rev) => revParse(repo, rev));
     const treeBefore = revParse(repo, 'feature^{tree}');
 
-    await rightClick('sidebar-branch-item', { ref: 'refs/heads/main' });
+    // Open the accessible context menu with the keyboard: WebKitWebDriver can
+    // retain its native right-button state and suppress the next pointerdown.
+    await click('sidebar-branch-item', { ref: 'refs/heads/main' });
+    await press('Shift+F10');
     await chooseContextItem('interactive-rebase-onto');
     await waitForTestId('rebase-todo-panel');
     await until(async () => (await countOf('rebase-todo-row')) === 5, { message: 'rebase-todo-panel devrait lister 5 commits' });
@@ -43,6 +47,8 @@ describe("IRB-01 — Interactive rebase: squash, fixup, reordering, reword", () 
 
     // 1. "fixup! A" → fixup, slipped just under A.
     await (await inRow(FX, 'rebase-todo-action-select')).selectByAttribute('value', 'fixup');
+    // Selecting fixup inserts a message field; wait for that layout before measuring the drag handle.
+    await (await inRow(FX, 'rebase-todo-message-input')).waitForDisplayed();
     await dragRow(FX, A, 'below');
     await until(async () => (await order()).join() === [A, FX, B, C, D].join(), { message: "the fixup should be on A" });
 
@@ -51,7 +57,7 @@ describe("IRB-01 — Interactive rebase: squash, fixup, reordering, reword", () 
     const groupInput = await inRow(B, 'rebase-todo-message-input');
     await groupInput.waitForDisplayed();
     expect(await groupInput.getValue()).toContain("A: adds a.txt");
-    await groupInput.setValue("A: adds a.txt\n\nInclut la correction B.");
+    await groupInput.setValue(`A: adds a.txt${Key.Enter}${Key.Enter}Inclut la correction B.`);
 
     // 3. D slid C above.
     await dragRow(D, C, 'above');
