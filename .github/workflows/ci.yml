@@ -105,7 +105,7 @@ jobs:
     name: rust (${{ matrix.os }}, git ${{ matrix.git }})
     needs: fixtures
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20 # budget : 8 min
+    timeout-minutes: ${{ matrix.timeout || 20 }} # budget : 8 min
     strategy:
       fail-fast: false
       matrix:
@@ -113,7 +113,8 @@ jobs:
           - { os: ubuntu-24.04, git: "2.30.9" }
           - { os: ubuntu-24.04, git: stable }
           - { os: macos-14, git: system }
-          - { os: windows-2022, git: system }
+          # The Windows run takes 19-20 min (two tests alone take 10 and 6 min).
+          - { os: windows-2022, git: system, timeout: 35 }
     defaults:
       run:
         shell: bash
