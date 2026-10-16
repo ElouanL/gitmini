@@ -39,6 +39,8 @@ pub struct BridgeOptions {
     pub config_dir: PathBuf,
     /// repository to open on startup, displayed by `app_info.initialPath`.
     pub initial_path: Option<String>,
+    /// `GITMINI_BRIDGE_TOKEN`: required from the Vite dev origins (see `security`); `None` refuses them.
+    pub proxy_token: Option<String>,
 }
 
 /// A bridge running.
@@ -96,6 +98,9 @@ pub async fn start(opts: BridgeOptions) -> io::Result<BridgeHandle> {
             ),
         ));
     }
+    if let Some(token) = &opts.proxy_token {
+        security::check_token(token).map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    }
     let listener = tokio::net::TcpListener::bind(opts.addr).await?;
     let addr = listener.local_addr()?;
 
@@ -113,6 +118,7 @@ pub async fn start(opts: BridgeOptions) -> io::Result<BridgeHandle> {
         sink,
         static_dir: opts.static_dir,
         shutdown: shutdown.clone(),
+        policy: Arc::new(security::Policy::new(addr.port(), opts.proxy_token)),
     });
 
     let router = http::router(state.clone());

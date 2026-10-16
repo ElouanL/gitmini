@@ -36,6 +36,8 @@ pub struct BridgeState {
     pub static_dir: Option<PathBuf>,
     /// Cancelled off: terminates SSE feeds (if not the graceful stop of hyper would never end).
     pub shutdown: CancellationToken,
+    /// Accepted origins (`security::guard`).
+    pub policy: Arc<security::Policy>,
 }
 
 pub fn router(state: Arc<BridgeState>) -> Router {
@@ -45,7 +47,10 @@ pub fn router(state: Arc<BridgeState>) -> Router {
         .route("/__gitmini/invoke/{command}", post(invoke))
         .fallback(static_files)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
-        .layer(middleware::from_fn(security::guard))
+        .layer(middleware::from_fn_with_state(
+            state.policy.clone(),
+            security::guard,
+        ))
         .with_state(state)
 }
 
