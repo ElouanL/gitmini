@@ -55,6 +55,7 @@ impl BroadcastSink {
                 to_message(&Event::RepoChanged(RepoChanged {
                     repo_id,
                     kinds: ChangeKindEv::ALL.to_vec(),
+                    paths: None,
                 }))
             })
             .collect()
@@ -105,6 +106,7 @@ mod tests {
         sink.emit(Event::RepoChanged(RepoChanged {
             repo_id: 3,
             kinds: vec![ChangeKindEv::Index, ChangeKindEv::Worktree],
+            paths: None,
         }));
         sink.emit(Event::OpProgress(OpProgress {
             op_id: "op-1".into(),
@@ -120,7 +122,7 @@ mod tests {
         assert_eq!(a.name, "repo:changed");
         assert_eq!(
             json(&a),
-            serde_json::json!({ "repoId": 3, "kinds": ["index", "worktree"] })
+            serde_json::json!({ "repoId": 3, "kinds": ["index", "worktree"], "paths": null })
         );
         let b = rx.try_recv().unwrap();
         assert_eq!(b.name, "op:progress");
@@ -155,13 +157,14 @@ mod tests {
         sink.emit(Event::RepoChanged(RepoChanged {
             repo_id: 5,
             kinds: vec![ChangeKindEv::Head],
+            paths: None,
         }));
         let msgs = sink.resync_messages();
         assert_eq!(msgs.len(), 2);
         assert!(msgs.iter().all(|m| m.name == "repo:changed"));
         assert_eq!(
             json(&msgs[0]),
-            serde_json::json!({ "repoId": 2, "kinds": ["refs", "index", "worktree", "head", "stash"] })
+            serde_json::json!({ "repoId": 2, "kinds": ["refs", "index", "worktree", "head", "stash"], "paths": null })
         );
         assert_eq!(json(&msgs[1])["repoId"], 5);
     }

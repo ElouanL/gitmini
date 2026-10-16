@@ -10,7 +10,7 @@ import { beginActivity } from '../activity';
 import { lifecycle } from '../lifecycle.svelte';
 import { getTransport } from './transport';
 import type {
-  AppInfo, BranchCompare, CommitDetails, DiffSource, FileDiff, GithubLoginPoll, GithubLoginStart, GithubRepo,
+  AppInfo, BranchCompare, CommitDetails, DiffFileReply, DiffSource, GithubLoginPoll, GithubLoginStart, GithubRepo,
   GithubStatus, Identity, LogPage, LogSearchResult, OpenTarget, PathsOrAll, RecentRepo, ReflogEntry,
   RefsSnapshot, RemoteInfo, RepoInfo, StashEntry, StashFiles, StatusSnapshot, TodoItem, TodoPreview, UndoStatus,
   WriteResult,
@@ -94,8 +94,9 @@ export const commands = {
     call<LogSearchResult>('log_search', a),
   commitDetails: (a: { repoId: RepoId; oid: Oid; against?: Oid }) => call<CommitDetails>('commit_details', a),
   statusGet: (a: { repoId: RepoId }) => call<StatusSnapshot>('status_get', a),
-  diffFile: (a: { repoId: RepoId; path: string; source: DiffSource; force?: boolean }) =>
-    call<FileDiff>('diff_file', a),
+  // `ifNoneMatch`: `hash` of the diff already displayed; same diff → `{ unchanged: true }` (nothing transferred).
+  diffFile: (a: { repoId: RepoId; path: string; source: DiffSource; force?: boolean; ifNoneMatch?: string }) =>
+    call<DiffFileReply>('diff_file', a),
   refsList: (a: { repoId: RepoId }) => call<RefsSnapshot>('refs_list', a),
   reflogList: (a: { repoId: RepoId; ref?: string; limit?: number }) => call<ReflogEntry[]>('reflog_list', a),
   branchCompare: (a: { repoId: RepoId; branch: string | null; target: string }) =>

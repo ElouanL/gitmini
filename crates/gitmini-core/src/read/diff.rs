@@ -22,8 +22,9 @@ use crate::error::{AppError, AppResult, ErrorCode, gix_err};
 use crate::read::refs::fresh_repo;
 use crate::state::{AppState, RepoHandle};
 use crate::types::{
-    ChangeKind, CommitDetails, ConflictView, DiffLine, DiffLineKind, DiffSource, DiffStats,
-    FileChange, FileDiff, Hunk, Oid, RepoId, Signature, StashPart, SubmoduleDiff, TooLarge,
+    ChangeKind, CommitDetails, ConflictView, DiffFileReply, DiffLine, DiffLineKind, DiffSource,
+    DiffStats, DiffUnchanged, FileChange, FileDiff, Hunk, Oid, RepoId, Signature, StashPart,
+    SubmoduleDiff, TooLarge,
 };
 
 /// Context lines around a hunk (05: "3 context lines").
@@ -48,6 +49,9 @@ pub struct DiffFileArgs {
     pub path: String,
     pub source: DiffSource,
     pub force: Option<bool>,
+    /// `hash` of the diff already displayed: if it is still the same, the reply is `{ unchanged: true }`.
+    #[serde(default)]
+    pub if_none_match: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Type)]
@@ -58,9 +62,13 @@ pub struct CommitDetailsArgs {
     pub against: Option<Oid>,
 }
 
-pub async fn diff_file(state: &AppState, args: DiffFileArgs) -> AppResult<FileDiff> {
+pub async fn diff_file(state: &AppState, args: DiffFileArgs) -> AppResult<DiffFileReply> {
     let repo = state.repo(args.repo_id)?;
-    diff_for(&repo, &args.path, &args.source, args.force.unwrap_or(false)).await
+    let diff = diff_for(&repo, &args.path, &args.source, args.force.unwrap_or(false)).await?;
+    if args.if_none_match.as_deref() == Some(diff.hash.as_str()) {
+        return Ok(DiffFileReply::Unchanged(DiffUnchanged { unchanged: true }));
+    }
+    Ok(DiffFileReply::Diff(Box::new(diff)))
 }
 
 pub async fn commit_details(state: &AppState, args: CommitDetailsArgs) -> AppResult<CommitDetails> {
@@ -401,14 +409,23 @@ fn patch_with_hunks<'a>(diff: &FileDiff, hunks: impl Iterator<Item = &'a Hunk>) 
 }
 
 /// `hash` of a `FileDiff`: xxh3 of the text patch, mixed with modes and sizes for diffs without hunk (binar,
-/// trop gros) afin qu'un changement soit toujours visible.
+/// trop gros) afin qu'un changement soit toujours visible. Also covers the rename, the `tooLarge` verdict, the
+/// submodule and LFS summaries: `diff_file`'s `ifNoneMatch` relies on it to answer `unchanged`.
 pub fn diff_hash(diff: &FileDiff) -> String {
     let mut s = String::new();
     s.push_str(&diff.path);
     s.push('\u{0}');
     s.push_str(&format!(
-        "{:?}{:?}{:?}{:?}{}",
-        diff.old_mode, diff.new_mode, diff.old_size, diff.new_size, diff.binary
+        "{:?}{:?}{:?}{:?}{}{:?}{:?}{:?}{:?}",
+        diff.old_mode,
+        diff.new_mode,
+        diff.old_size,
+        diff.new_size,
+        diff.binary,
+        diff.old_path,
+        diff.too_large,
+        diff.submodule,
+        diff.lfs_pointer
     ));
     s.push('\u{0}');
     for h in &diff.hunks {

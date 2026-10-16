@@ -617,15 +617,31 @@ impl RepoHandle {
         Ok(())
     }
 
-    /// Emet `repo:changed` (sorted, split) without kind, does not emit anything.
+    /// Emet `repo:changed` (sorted, split, paths unknown) without kind, does not emit anything.
     pub fn emit_changed(&self, kinds: impl IntoIterator<Item = ChangeKindEv>) {
+        self.emit_changed_paths(kinds, None);
+    }
+
+    /// Like [`Self::emit_changed`], with the worktree paths concerned (`None`: unknown). The paths are only
+    /// carried with a `worktree` kind, and dropped (`None`) beyond [`crate::events::MAX_CHANGED_PATHS`].
+    pub fn emit_changed_paths(
+        &self,
+        kinds: impl IntoIterator<Item = ChangeKindEv>,
+        paths: Option<BTreeSet<String>>,
+    ) {
         let set: BTreeSet<ChangeKindEv> = kinds.into_iter().collect();
         if set.is_empty() {
             return;
         }
+        let paths = paths
+            .filter(|p| {
+                set.contains(&ChangeKindEv::Worktree) && p.len() <= crate::events::MAX_CHANGED_PATHS
+            })
+            .map(|p| p.into_iter().collect());
         self.emit(Event::RepoChanged(RepoChanged {
             repo_id: self.id,
             kinds: set.into_iter().collect(),
+            paths,
         }));
     }
 

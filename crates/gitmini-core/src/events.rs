@@ -28,12 +28,19 @@ impl ChangeKindEv {
     ];
 }
 
+/// Beyond this many worktree paths, `RepoChanged.paths` is `None` (the front rereads as if unknown).
+pub const MAX_CHANGED_PATHS: usize = 256;
+
 /// Charge utile de `repo:changed`.
 #[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoChanged {
     pub repo_id: RepoId,
     pub kinds: Vec<ChangeKindEv>,
+    /// With `worktree` only: the worktree paths concerned (files or folders, relative to the workdir, `/`
+    /// separators, sorted), at most [`MAX_CHANGED_PATHS`]. `None`: unknown, any path may have changed.
+    #[serde(default)]
+    pub paths: Option<Vec<String>>,
 }
 
 /// Charge utile de `op:progress`.

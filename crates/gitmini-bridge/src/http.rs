@@ -228,6 +228,7 @@ mod tests {
             sink.emit(Event::RepoChanged(RepoChanged {
                 repo_id: 7,
                 kinds: vec![ChangeKindEv::Index],
+                paths: None,
             }));
         }
         let first = live.next().await.unwrap();
@@ -235,7 +236,7 @@ mod tests {
         let payload: serde_json::Value = serde_json::from_str(&first.data).unwrap();
         assert_eq!(
             payload,
-            serde_json::json!({ "repoId": 7, "kinds": ["refs", "index", "worktree", "head", "stash"] })
+            serde_json::json!({ "repoId": 7, "kinds": ["refs", "index", "worktree", "head", "stash"], "paths": null })
         );
     }
 }

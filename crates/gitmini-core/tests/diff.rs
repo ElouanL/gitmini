@@ -9,7 +9,7 @@ use gitmini_core::read::diff::{
     CommitDetailsArgs, DiffFileArgs, commit_details, diff_file, diff_for, hunk_to_patch,
 };
 use gitmini_core::types::{
-    ChangeKind, ConflictView, DiffLineKind, DiffSource, FileDiff, StashPart,
+    ChangeKind, ConflictView, DiffFileReply, DiffLineKind, DiffSource, FileDiff, StashPart,
 };
 use pretty_assertions::assert_eq;
 use read_support::{Opened, TestRepo, git_at, open_at};
@@ -897,11 +897,57 @@ async fn stage_08_hash_changes_when_the_file_changes() {
             path: "mod.txt".into(),
             source: DiffSource::Unstaged,
             force: None,
+            if_none_match: None,
         },
     )
     .await
-    .unwrap();
+    .unwrap()
+    .into_diff()
+    .expect("no ifNoneMatch: always the diff");
     assert_eq!(via_cmd.hash, c.hash);
+}
+
+async fn diff_if_none_match(o: &Opened, path: &str, etag: Option<String>) -> DiffFileReply {
+    diff_file(
+        &o.state,
+        DiffFileArgs {
+            repo_id: o.repo.id,
+            path: path.into(),
+            source: DiffSource::Unstaged,
+            force: None,
+            if_none_match: etag,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+/// `ifNoneMatch`: same hash → `{ unchanged: true }` (nothing to transfer); another hash → the full diff.
+#[tokio::test]
+async fn diff_file_if_none_match_answers_unchanged() {
+    let t = mod_repo();
+    let o = t.open().await;
+    let a = diff(&o, "mod.txt", DiffSource::Unstaged).await;
+    let same = diff_if_none_match(&o, "mod.txt", Some(a.hash.clone())).await;
+    assert!(matches!(same, DiffFileReply::Unchanged(u) if u.unchanged));
+    assert_eq!(
+        serde_json::to_value(&same).unwrap(),
+        serde_json::json!({ "unchanged": true })
+    );
+    let other = diff_if_none_match(&o, "mod.txt", Some("0000000000000000".into())).await;
+    let full = other.into_diff().expect("other hash: the diff");
+    assert_eq!(full.hash, a.hash);
+    assert_eq!(
+        serde_json::to_value(DiffFileReply::Diff(Box::new(full.clone()))).unwrap()["hash"],
+        serde_json::json!(a.hash),
+        "the diff keeps its contract shape"
+    );
+    t.write("mod.txt", &(numbered(40).replace("line 5\n", "CINQ\n")));
+    let changed = diff_if_none_match(&o, "mod.txt", Some(a.hash.clone()))
+        .await
+        .into_diff()
+        .expect("the file changed: the new diff");
+    assert_ne!(changed.hash, a.hash);
 }
 
 // ── commit_details

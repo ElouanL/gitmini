@@ -1,7 +1,7 @@
 //! Details of commit and diff : `commit_details`, `diff_file` [R] .
 use gitmini_core::AppError;
 use gitmini_core::read::diff::{CommitDetailsArgs, DiffFileArgs};
-use gitmini_core::types::{CommitDetails, FileDiff};
+use gitmini_core::types::{CommitDetails, DiffFileReply};
 
 use super::{Args, Core, call};
 
@@ -18,7 +18,10 @@ pub async fn commit_details(
 }
 
 #[tauri::command]
-pub async fn diff_file(state: Core<'_>, args: Args<DiffFileArgs>) -> Result<FileDiff, AppError> {
+pub async fn diff_file(
+    state: Core<'_>,
+    args: Args<DiffFileArgs>,
+) -> Result<DiffFileReply, AppError> {
     call(
         "diff_file",
         gitmini_core::read::diff::diff_file(&state, args.0),

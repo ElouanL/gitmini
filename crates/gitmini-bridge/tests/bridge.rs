@@ -526,6 +526,7 @@ async fn sse_streams_the_three_events_in_tauri_format() {
     app.emit(Event::RepoChanged(RepoChanged {
         repo_id: 4,
         kinds: vec![ChangeKindEv::Index, ChangeKindEv::Worktree],
+        paths: None,
     }));
     app.emit(Event::OpProgress(OpProgress {
         op_id: "op-9".into(),
@@ -541,7 +542,7 @@ async fn sse_streams_the_three_events_in_tauri_format() {
     assert_eq!(a.event.as_deref(), Some("repo:changed"));
     assert_eq!(
         a.json(),
-        json!({ "repoId": 4, "kinds": ["index", "worktree"] })
+        json!({ "repoId": 4, "kinds": ["index", "worktree"], "paths": null })
     );
     let p = sse.next_event().await.unwrap();
     assert_eq!(p.event.as_deref(), Some("op:progress"));
@@ -581,6 +582,7 @@ async fn sse_broadcasts_to_every_client_and_only_events_after_subscription() {
     b.handle.app.emit(Event::RepoChanged(RepoChanged {
         repo_id: 2,
         kinds: vec![ChangeKindEv::Head],
+        paths: None,
     }));
     for sse in [&mut one, &mut two] {
         let e = sse.next_event().await.unwrap();

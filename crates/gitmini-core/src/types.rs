@@ -353,6 +353,31 @@ pub struct FileDiff {
     pub lfs_pointer: Option<bool>,
 }
 
+/// Reply of `diff_file`: the diff, or `{ unchanged: true }` when its `hash` equals the `ifNoneMatch` sent
+/// (silent reload of the displayed diff: nothing to transfer nor redraw).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(untagged)]
+pub enum DiffFileReply {
+    Unchanged(DiffUnchanged),
+    Diff(Box<FileDiff>),
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffUnchanged {
+    pub unchanged: bool,
+}
+
+impl DiffFileReply {
+    /// The diff, `None` for `unchanged`.
+    pub fn into_diff(self) -> Option<FileDiff> {
+        match self {
+            DiffFileReply::Diff(d) => Some(*d),
+            DiffFileReply::Unchanged(_) => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Hunk {
