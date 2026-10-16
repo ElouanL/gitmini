@@ -14,6 +14,7 @@
 
   import { t } from '$i18n/index';
   import Icon from '../ui/Icon.svelte';
+  import Spinner from '../ui/Spinner.svelte';
   import type { IconName } from '../ui/icons';
   import MenuList, { type MenuListItem } from '../menu/MenuList.svelte';
 
@@ -77,6 +78,8 @@
 
   // "Progress and cancellation of an order [L]
   const progress = $derived(op.inflight?.opId ? op.inflight : null);
+  // Short command (commit, checkout, stage...): no progress bar, just a spinner and its label.
+  const busy = $derived(op.inflight && !op.inflight.opId ? op.inflight : null);
   const progressText = $derived.by(() => {
     if (!progress) return '';
     const base = progress.progressLabel ?? progress.label;
@@ -222,6 +225,13 @@
 
   <span class="spacer"></span>
 
+  {#if busy}
+    <div class="busy" data-testid="toolbar-op-busy" role="status" title={busy.label}>
+      <Spinner />
+      <span class="busy-text truncate">{busy.label}</span>
+    </div>
+  {/if}
+
   <!-- Progression of a command [L] -->
   {#if progress}
     <div class="progress" data-testid="toolbar-op-progress" data-op-id={progress.opId} role="status">
@@ -366,6 +376,26 @@
     padding: 0 8px;
     line-height: 22px;
     font-size: 12px;
+  }
+  /* Shown after 200 ms only: instant commands do not flash a spinner. */
+  .busy {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 200px;
+    margin-right: 4px;
+    font-size: 12px;
+    color: var(--fg-muted);
+    opacity: 0;
+    animation: busy-in 0.15s ease-out 0.2s forwards;
+  }
+  .busy-text {
+    min-width: 0;
+  }
+  @keyframes busy-in {
+    to {
+      opacity: 1;
+    }
   }
   @media (max-width: 1280px) {
     .lbl {
