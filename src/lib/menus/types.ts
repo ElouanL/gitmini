@@ -5,12 +5,12 @@ export type MenuId = 'commit' | 'branch' | 'remote-branch' | 'remote' | 'tag' | 
 
 export const MENU_IDS: readonly MenuId[] = ['commit', 'branch', 'remote-branch', 'remote', 'tag', 'stash', 'wip', 'wt-file'];
 
-/** Closed list of `<action>` `context-menu-item-<action>` . No `reset-*` entries. */
+/** Closed list of `<action>` `context-menu-item-<action>` . */
 export const MENU_ITEM_IDS = [
   'checkout', 'checkout-detached', 'create-branch', 'cherry-pick', 'revert', 'rebase-onto', 'interactive-rebase',
   'interactive-rebase-onto', 'merge', 'push', 'pull', 'fetch', 'open-pr', 'rename', 'delete', 'copy-sha',
   'copy-message', 'copy-name', 'copy-url', 'copy-path', 'stash-apply', 'stash-pop', 'stash-drop', 'stash-branch',
-  'stash-show', 'stash-save', 'stash-paths', 'open-external', 'discard-all',
+  'stash-show', 'stash-save', 'stash-paths', 'open-external', 'discard-all', 'reset',
 ] as const;
 
 export type MenuItemId = (typeof MENU_ITEM_IDS)[number];

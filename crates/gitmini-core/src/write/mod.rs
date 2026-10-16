@@ -9,6 +9,7 @@ pub mod merge;
 pub mod pick;
 pub mod rebase;
 pub mod remote;
+pub mod reset;
 pub mod runner;
 pub mod stash;
 pub mod todo;

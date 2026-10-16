@@ -1,4 +1,4 @@
-// A wrapper typed by common IPC command (66 of ). The desktop adds updater.ts .
+// A wrapper typed by common IPC command (67 of ). The desktop adds updater.ts .
 //
 // Conventions :
 // - `commands.<camelCase>` for the `snake_case` command of the contract (`stage_paths` → `commands.stagePaths`);
@@ -75,7 +75,7 @@ async function call<T>(command: string, args: object = {}): Promise<T> {
   }
 }
 
-// "The 66 joint orders
+// "The 67 joint orders
 export const commands = {
   // Application, repository, settings
   appInfo: () => call<AppInfo>('app_info'),
@@ -129,6 +129,8 @@ export const commands = {
     call<RefsSnapshot>('branch_checkout', a),
   branchRename: (a: { repoId: RepoId; oldName: string; newName: string }) => call<RefsSnapshot>('branch_rename', a),
   branchDelete: (a: { repoId: RepoId; name: string; force: boolean }) => call<BranchDeleteResult>('branch_delete', a),
+  branchReset: (a: { repoId: RepoId; oid: Oid; mode: 'soft' | 'mixed' | 'keep' | 'hard'; expectedHead: Oid }) =>
+    call<WriteResult>('branch_reset', a),
   mergeBranch: (a: { repoId: RepoId; ref: string; mode: MergeMode; message?: string }) =>
     call<MergeBranchResult>('merge_branch', a),
   mergeContinue: (a: { repoId: RepoId; message: string }) => call<{ oid: Oid }>('merge_continue', a),
@@ -205,7 +207,7 @@ export const COMMAND_NAMES = {
   stageHunk: 'stage_hunk', unstageHunk: 'unstage_hunk', discardHunk: 'discard_hunk',
   commitCreate: 'commit_create', configSetIdentity: 'config_set_identity',
   branchCreate: 'branch_create', branchCheckout: 'branch_checkout', branchRename: 'branch_rename',
-  branchDelete: 'branch_delete', mergeBranch: 'merge_branch', mergeContinue: 'merge_continue', mergeAbort: 'merge_abort',
+  branchDelete: 'branch_delete', branchReset: 'branch_reset', mergeBranch: 'merge_branch', mergeContinue: 'merge_continue', mergeAbort: 'merge_abort',
   rebaseStart: 'rebase_start', rebaseInteractiveStart: 'rebase_interactive_start', rebaseContinue: 'rebase_continue',
   rebaseSkip: 'rebase_skip', rebaseAbort: 'rebase_abort',
   stashSave: 'stash_save', stashApply: 'stash_apply', stashPop: 'stash_pop', stashDrop: 'stash_drop',

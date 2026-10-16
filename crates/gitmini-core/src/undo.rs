@@ -36,6 +36,7 @@
 //! `branch_delete`: `BranchDelete { name, oid }`: after git:
 //!
 //! `stash_drop`: `StashDrop { oid, message }`: after git:
+//! `branch_reset` (soft, mixed, keep): `Reset { mode }`: after git; `hard` calls [`clear`] instead.
 //! - I'm sorry. `remote_push` —— `mark_pushed(&repo, &branch)` after push successful
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -50,6 +51,7 @@ use crate::error::{AppError, AppResult, ErrorCode};
 use crate::read::opstate::read_opstate;
 use crate::state::{AppState, RepoHandle};
 use crate::types::{Oid, RepoId, UndoBlockReason, UndoEntry, UndoKind, UndoStatus};
+use crate::write::reset::ResetMode;
 
 const ZERO_OID: &str = "0000000000000000000000000000000000000000";
 
@@ -76,6 +78,8 @@ pub enum UndoOp {
     BranchDelete { name: String, oid: Oid },
     /// `stash_drop`: Oid of stash and message **full** of the refrog ("On main: wip parser").
     StashDrop { oid: Oid, message: String },
+    /// `branch_reset` in `soft`, `mixed` or `keep` mode (`hard` is never recorded).
+    Reset { mode: ResetMode },
 }
 
 impl UndoOp {
@@ -90,6 +94,12 @@ impl UndoOp {
             UndoOp::Pull => UndoKind::Pull,
             UndoOp::BranchDelete { .. } => UndoKind::BranchDelete,
             UndoOp::StashDrop { .. } => UndoKind::StashDrop,
+            UndoOp::Reset { mode } => match mode {
+                ResetMode::Soft => UndoKind::ResetSoft,
+                ResetMode::Mixed => UndoKind::ResetMixed,
+                // `hard` is not recorded; `--keep` would move the ref back without touching local changes.
+                ResetMode::Keep | ResetMode::Hard => UndoKind::ResetKeep,
+            },
         }
     }
 }
@@ -217,6 +227,13 @@ pub fn begin(repo: &RepoHandle, op: UndoOp) {
         reflog_offset,
     };
     repo.undo.lock().unwrap().pending = Some(pending);
+}
+
+/// Forgets the pending operation and the last entry: an operation that cannot be undone has just replaced them.
+pub fn clear(repo: &RepoHandle) {
+    let mut slot = repo.undo.lock().unwrap();
+    slot.entry = None;
+    slot.pending = None;
 }
 
 /// End of an cancelable operation (see the module header). No effect if there is no `pending` , or as long as
@@ -475,6 +492,21 @@ fn texts(
         UndoOp::StashDrop { message, .. } => {
             let label = format!("Restore the stash \"{message}\"");
             let effect = format!("{label} to stash@{{0}}.");
+            (label, effect)
+        }
+        UndoOp::Reset { mode } => {
+            let label = format!("Cancel reset of {branch}");
+            let effect = match mode {
+                ResetMode::Soft => {
+                    format!("{label}; {branch} returns to {before7}. The index is kept.")
+                }
+                ResetMode::Mixed => format!(
+                    "{label}; {branch} returns to {before7} and the index is restored. Working files are kept."
+                ),
+                ResetMode::Keep | ResetMode::Hard => format!(
+                    "{label}; {branch} returns to {before7}. Your local changes are preserved."
+                ),
+            };
             (label, effect)
         }
     }

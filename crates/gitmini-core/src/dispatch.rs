@@ -1,15 +1,15 @@
 //! Generic IPC command splitter: `invoke(state, "stage_paths", json)`.
 //!
 //! Serves at the HTTP (`gitmini-bridge`) and contract tests. `src-tauri` displays the same
-//! 66 commands via `#[tauri::command]`. The list [`COMMANDS`] is that of
+//! 67 commands via `#[tauri::command]`. The list [`COMMANDS`] is that of
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
-/// The 66 orders in the contract.
-pub const COMMANDS: [&str; 66] = [
+/// The 67 orders in the contract.
+pub const COMMANDS: [&str; 67] = [
     "app_info",
     "repo_open",
     "repo_close",
@@ -43,6 +43,7 @@ pub const COMMANDS: [&str; 66] = [
     "branch_checkout",
     "branch_rename",
     "branch_delete",
+    "branch_reset",
     "merge_branch",
     "merge_continue",
     "merge_abort",
@@ -134,6 +135,7 @@ pub async fn invoke(state: &AppState, command: &str, args: Value) -> AppResult<V
         "branch_checkout" => ser(crate::write::branch::branch_checkout(state, de(args)?).await?),
         "branch_rename" => ser(crate::write::branch::branch_rename(state, de(args)?).await?),
         "branch_delete" => ser(crate::write::branch::branch_delete(state, de(args)?).await?),
+        "branch_reset" => ser(crate::write::reset::branch_reset(state, de(args)?).await?),
         "merge_branch" => ser(crate::write::merge::merge_branch(state, de(args)?).await?),
         "merge_continue" => ser(crate::write::merge::merge_continue(state, de(args)?).await?),
         "merge_abort" => ser(crate::write::merge::merge_abort(state, de(args)?).await?),
@@ -183,10 +185,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sixty_six_unique_commands() {
+    fn sixty_seven_unique_commands() {
         let mut v = COMMANDS.to_vec();
         v.sort_unstable();
         v.dedup();
-        assert_eq!(v.len(), 66);
+        assert_eq!(v.len(), 67);
     }
 }

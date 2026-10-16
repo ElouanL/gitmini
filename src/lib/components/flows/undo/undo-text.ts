@@ -73,6 +73,10 @@ export function derivedDescription(entry: UndoEntry): string {
         : t("undo.confirm.description.pull.noUpstream", { branch, sha });
     case 'branch-delete':
       return t("undo.confirm.description.branch-delete", { branch, sha });
+    case 'reset-soft':
+    case 'reset-mixed':
+    case 'reset-keep':
+      return t(`undo.confirm.description.${entry.kind}`, { branch, sha });
     case 'stash-drop':
       return t("undo.confirm.description.stash-drop", { message: entry.stashMessage ?? quotedIn(entry.label) ?? '' });
     default:

@@ -1,7 +1,7 @@
 //! `undo_last` . Ownership of the
 //!
-//! Only documented exception to "no exposed branch reset": `git reset --soft|--keep` only serves here, on
-//! the "before" oid recorded by the log (`undo`), never on a user input.
+//! `git reset` here only targets the "before" oid recorded by the log (`undo`), never a user input. The user-facing
+//! reset is `write::reset`.
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -90,6 +90,8 @@ fn declare_kinds(g: &mut WriteGuard, kind: UndoKind) {
         | UndoKind::CherryPick
         | UndoKind::Revert
         | UndoKind::Pull => g.declare(&[Head, Refs, Index, Worktree]),
+        UndoKind::ResetSoft | UndoKind::ResetMixed => g.declare(&[Head, Refs, Index]),
+        UndoKind::ResetKeep => g.declare(&[Head, Refs, Index, Worktree]),
         UndoKind::BranchDelete => g.declare(&[Refs]),
         UndoKind::StashDrop => g.declare(&[Stash]),
     }
@@ -161,6 +163,21 @@ async fn run_undo(repo: &Arc<RepoHandle>, entry: &UndoEntry) -> AppResult<()> {
             git(repo, &["reset", "--keep", before, "--"])
                 .await
                 .map_err(dirty_message)
+        }
+        // Same mode as the reset: `--keep` would refuse the files that `soft` / `mixed` left modified.
+        UndoKind::ResetSoft | UndoKind::ResetMixed | UndoKind::ResetKeep => {
+            let before = entry
+                .before
+                .as_deref()
+                .filter(|b| is_full_hex(b))
+                .ok_or_else(|| corrupt("oid \"before\""))?;
+            match entry.kind {
+                UndoKind::ResetSoft => git(repo, &["reset", "--soft", before, "--"]).await,
+                UndoKind::ResetMixed => git(repo, &["reset", "--mixed", before, "--"]).await,
+                _ => git(repo, &["reset", "--keep", before, "--"])
+                    .await
+                    .map_err(dirty_message),
+            }
         }
         UndoKind::BranchDelete => {
             let name = entry
