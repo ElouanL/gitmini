@@ -107,6 +107,7 @@ export default {
   'diff.submodule.clean': "up to date",
   'diff.submodule.none': '—',
   'diff.lfs': "Git pointer LFS",
+  'diff.lossy': "This file is not valid UTF-8: hunks cannot be staged or discarded one by one. Stage or discard the whole file from the file list.",
   'diff.conflict.banner': "File in conflict — resolve it in your editor, then mark it as resolved.",
   'diff.conflict.tab.markers': 'Markers',
   'diff.conflict.tab.ours': 'Our changes',

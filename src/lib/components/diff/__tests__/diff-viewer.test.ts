@@ -211,6 +211,21 @@ describe('hunks (STAGE-02, STAGE-08)', () => {
     expect(screen.queryAllByTestId('diff-hunk-stage-btn')).toHaveLength(0);
   });
 
+  it("non-UTF-8 content: no hunk button, a banner points to the whole file", async () => {
+    fake.on('diff_file', () => ({ ...MOD, lossy: true }));
+    mount({ kind: 'unstaged' });
+    await waitFor(() => expect(lines()).toHaveLength(8));
+    expect(screen.queryAllByTestId('diff-hunk-stage-btn')).toHaveLength(0);
+    expect(screen.getByTestId('diff-lossy-banner')).toHaveTextContent(/not valid UTF-8/);
+  });
+
+  it("no lossy banner on a valid UTF-8 diff", async () => {
+    fake.on('diff_file', () => MOD);
+    mount({ kind: 'unstaged' });
+    await waitFor(() => expect(lines()).toHaveLength(8));
+    expect(screen.queryByTestId('diff-lossy-banner')).toBeNull();
+  });
+
   it("no hunk button on a non-UTF-8 path", async () => {
     setup({ diff_file: () => MOD }, [file('bad�.txt', { unstaged: 'modified', nonUtf8: true })]);
     mount({ kind: 'unstaged' }, 'bad�.txt');

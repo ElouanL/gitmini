@@ -114,6 +114,11 @@ export type FileDiff = {
 	oldMode: number | null,
 	newMode: number | null,
 	binary: boolean,
+	/**
+	 *  Text not valid UTF-8 on one side: the lines are decoded with U+FFFD, so the hunks cannot be turned
+	 *  back into an exact patch (stage / unstage / discard of a hunk refused, whole file only).
+	 */
+	lossy: boolean,
 	tooLarge: TooLarge | null,
 	oldSize: number | null,
 	newSize: number | null,

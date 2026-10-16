@@ -35,7 +35,7 @@ export function hunk(lines: [kind: 'ctx' | 'add' | 'del' | 'noeol', text: string
 
 export function fileDiff(over: Partial<FileDiff> = {}): FileDiff {
   return {
-    path: 'mod.txt', oldPath: null, oldMode: null, newMode: null, binary: false, tooLarge: null, oldSize: null, newSize: null, hunks: [],
+    path: 'mod.txt', oldPath: null, oldMode: null, newMode: null, binary: false, lossy: false, tooLarge: null, oldSize: null, newSize: null, hunks: [],
     stats: { added: 0, removed: 0 }, hash: 'h1', submodule: null, lfsPointer: null, ...over,
   };
 }

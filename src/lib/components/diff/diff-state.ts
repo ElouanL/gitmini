@@ -10,6 +10,7 @@ export function sameDiff(a: FileDiff | null, b: FileDiff | null): boolean {
     a.path === b.path &&
     a.oldPath === b.oldPath &&
     a.binary === b.binary &&
+    a.lossy === b.lossy &&
     a.oldSize === b.oldSize &&
     a.newSize === b.newSize &&
     a.oldMode === b.oldMode &&
@@ -32,9 +33,9 @@ export function eventAffectsDiff(kinds: readonly string[], sourceKind: string): 
   return kinds.includes('worktree') || kinds.includes('index') || kinds.includes('head');
 }
 
-/** hunk buttons: only on a diff text `unstaged` / `staged`, never binary, big, submodule, conflict or path no UTF-8 (05 "Stage a hunk"). */
+/** hunk buttons: only on a diff text `unstaged` / `staged`, never binary, big, submodule, conflict, path or content no UTF-8 (05 "Stage a hunk"). */
 export function hunkActionsAllowed(diff: FileDiff | null, sourceKind: string, nonUtf8: boolean): boolean {
   if (!diff || nonUtf8) return false;
   if (sourceKind !== 'unstaged' && sourceKind !== 'staged') return false;
-  return !diff.binary && diff.tooLarge === null && !diff.submodule && diff.hunks.length > 0;
+  return !diff.binary && !diff.lossy && diff.tooLarge === null && !diff.submodule && diff.hunks.length > 0;
 }

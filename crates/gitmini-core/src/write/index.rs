@@ -803,6 +803,14 @@ async fn hunk_locked(
             "A binary file has no hunk.",
         ));
     }
+    if diff.lossy {
+        // The hunk text is decoded with U+FFFD: the patch would rewrite the invalid bytes.
+        return Err(AppError::invalid_argument_reason(
+            "path",
+            "non-utf8",
+            "This file is not valid UTF-8: stage or discard the whole file.",
+        ));
+    }
     if diff.too_large.is_some() {
         return Err(AppError::invalid_argument_reason(
             "path",
@@ -1036,6 +1044,7 @@ mod tests {
             old_mode: None,
             new_mode: None,
             binary: false,
+            lossy: false,
             too_large: None,
             old_size: None,
             new_size: None,

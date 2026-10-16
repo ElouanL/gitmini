@@ -407,8 +407,8 @@ pub fn diff_hash(diff: &FileDiff) -> String {
     s.push_str(&diff.path);
     s.push('\u{0}');
     s.push_str(&format!(
-        "{:?}{:?}{:?}{:?}{}",
-        diff.old_mode, diff.new_mode, diff.old_size, diff.new_size, diff.binary
+        "{:?}{:?}{:?}{:?}{}{}",
+        diff.old_mode, diff.new_mode, diff.old_size, diff.new_size, diff.binary, diff.lossy
     ));
     s.push('\u{0}');
     for h in &diff.hunks {
@@ -914,6 +914,7 @@ fn compute_diff(
         old_mode: None,
         new_mode: None,
         binary: false,
+        lossy: false,
         too_large: None,
         old_size: None,
         new_size: None,
@@ -1041,6 +1042,9 @@ fn compute_diff(
         return Ok(base);
     }
 
+    // Lines are shown with `from_utf8_lossy`: an invalid byte (Latin-1 `\xe9`...) would come back as U+FFFD
+    // in a hunk patch, so hunk actions are refused on such a file (`hunk_locked`).
+    base.lossy = std::str::from_utf8(old_bytes).is_err() || std::str::from_utf8(new_bytes).is_err();
     if plain {
         base.hunks = build_plain_hunk(new_bytes);
     } else {
@@ -1559,6 +1563,7 @@ mod tests {
             old_mode: None,
             new_mode: None,
             binary: false,
+            lossy: false,
             too_large: None,
             old_size: None,
             new_size: None,
