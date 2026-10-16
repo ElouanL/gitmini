@@ -19,6 +19,7 @@ use crate::state::{AppState, RepoHandle, WriteSpec};
 use crate::types::{Oid, OpKind, RepoId, StopReason, WriteResult};
 use crate::write::errors::map_failure;
 use crate::write::finish_state_rule;
+use crate::write::identity::{ensure_identity, identity_error};
 use crate::write::runner::{self, RunOpts};
 
 /// Oid ceiling per operation (guards the command line in 32 Kio on Windows).
@@ -268,15 +269,7 @@ async fn after_failure(
     finish_state_rule(repo, err)
 }
 
-// "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Identity" "Ident" "Ident" "Ident" "Ident" "Ident" "Ident "Ident "Ident "Ident "I" "Ident "" "Ident "" "I" "I
-
-fn identity_error() -> AppError {
-    AppError::new(
-        ErrorCode::IdentityMissing,
-        "Missing git identity (user.name / user.email).",
-    )
-    .with_details(json!({}))
-}
+// ── Identity
 
 /// Git refused to create a commit for lack of exploitable identity: pattern #3 of , plus variants that
 /// fall back to `GIT_FAILED` in the table (`user.name` containing only ignored characters, no address
@@ -298,39 +291,6 @@ fn is_identity_failure(err: &AppError) -> bool {
     err.detail("stderr")
         .and_then(|s| s.as_str())
         .is_some_and(|s| re.is_match(s))
-}
-
-/// Pre-check ID (primarily subprocess): git creates at least one commit, it needs a **committer**
-/// (`GIT_COMMITTER_*` > `committer.*` > `user.*`) and, for a revert, a **author** (`GIT_AUTHOR_*` > `author.*` >
-/// `user.*`) ; the cherry-pick keeps the original author. The address can come from `EMAIL` unless `user.useConfigOnly`
-/// is true. Like `RepoInfo.identity`, automatic git detection (GECOS, host name) is not taken into account.
-pub fn commit_identity_missing(git: &gix::Repository, author_needed: bool) -> bool {
-    let snapshot = git.config_snapshot();
-    let config_only = snapshot.boolean("user.useConfigOnly").unwrap_or(false);
-    let env = |key: &str| {
-        std::env::var(key)
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-    };
-    let cfg = |key: &str| {
-        snapshot
-            .string(key)
-            .map(|v| v.to_string().trim().to_string())
-            .filter(|v| !v.is_empty())
-    };
-    let resolved = |role: &str| {
-        let upper = role.to_ascii_uppercase();
-        let name = env(&format!("GIT_{upper}_NAME"))
-            .or_else(|| cfg(&format!("{role}.name")))
-            .or_else(|| cfg("user.name"));
-        let email = env(&format!("GIT_{upper}_EMAIL"))
-            .or_else(|| cfg(&format!("{role}.email")))
-            .or_else(|| cfg("user.email"))
-            .or_else(|| if config_only { None } else { env("EMAIL") });
-        name.is_some() && email.is_some()
-    };
-    !resolved("committer") || (author_needed && !resolved("author"))
 }
 
 fn current_head(repo: &RepoHandle) -> Option<String> {
@@ -527,9 +487,7 @@ pub fn prepare(
     }
 
     // 7 bis. identity: without it git would stop with a `CHERRY_PICK_HEAD` that nothing can solve
-    if commit_identity_missing(&git, verb == Verb::Revert) {
-        return Err(identity_error());
-    }
+    ensure_identity(repo, verb == Verb::Revert)?;
 
     // Application order: old → recent first (cherry-pick), reversed for avert.
     let mut ordered_ids = match indexed_order(repo, &ids) {
@@ -804,14 +762,14 @@ async fn sequencer_locked(repo: &Arc<RepoHandle>, op: SeqOp) -> AppResult<WriteR
                 )
                 .with_details(json!({ "paths": paths })));
             }
-            check_identity(repo, verb)?;
+            check_identity(repo, verb).await?;
             run_sequencer(repo, verb, "--continue", "sequencer_continue").await?;
         }
         SeqOp::Skip => {
             if stale {
                 return bad_stop_reason("The condition is incomplete: give up to clean it.");
             }
-            check_identity(repo, verb)?;
+            check_identity(repo, verb).await?;
             run_sequencer(repo, verb, "--skip", "sequencer_skip").await?;
         }
         SeqOp::Abort => {
@@ -823,12 +781,9 @@ async fn sequencer_locked(repo: &Arc<RepoHandle>, op: SeqOp) -> AppResult<WriteR
 }
 
 /// Continue and Skip create commits (the following for Skip): no identity, no git.
-fn check_identity(repo: &RepoHandle, verb: Verb) -> AppResult<()> {
-    if commit_identity_missing(&repo.thread_repo(), verb == Verb::Revert) {
-        Err(identity_error())
-    } else {
-        Ok(())
-    }
+async fn check_identity(repo: &Arc<RepoHandle>, verb: Verb) -> AppResult<()> {
+    let repo = repo.clone();
+    tokio::task::spawn_blocking(move || ensure_identity(&repo, verb == Verb::Revert)).await?
 }
 
 /// `--continue` / `--skip`: a new stop (conflict, empty commit, blocking) becomes `CONFLICT { state }` ,

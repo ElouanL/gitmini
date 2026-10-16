@@ -637,6 +637,72 @@ fn thread_repo_reloads_in_a_linked_worktree() {
     assert_eq!(head_info_branch(&repo), Some("feat".to_string()));
 }
 
+/// `[include]` files feed the config like the others: their fingerprint is followed (files the loaded config was
+/// read from), including an include added during the session.
+#[test]
+fn thread_repo_follows_included_config_files() {
+    init();
+    let (_tmp, root) = tempdir();
+    let app = app(&root.join("config"));
+    let repo = root.join("proj");
+    init_repo(&repo, false);
+    let remote_of_main = |h: &gitmini_core::state::RepoHandle| {
+        h.thread_repo()
+            .config_snapshot()
+            .string("branch.main.remote")
+            .map(|v| v.to_string())
+    };
+    let watched = |h: &gitmini_core::state::RepoHandle, name: &str| {
+        h.config_files().iter().any(|p| p.ends_with(name))
+    };
+    let extra = root.join("extra.gitconfig");
+    std::fs::write(&extra, "[branch \"main\"]\n\tremote = origin\n").unwrap();
+    git(&repo, &["config", "include.path", extra.to_str().unwrap()]);
+    let h = open_handle(app.state.shared.clone(), app.state.next_repo_id(), &repo).unwrap();
+    assert!(watched(&h, "extra.gitconfig"), "{:?}", h.config_files());
+    assert_eq!(remote_of_main(&h).as_deref(), Some("origin"));
+    assert_eq!(h.config_reload_count(), 0, "no reloading at the first call");
+
+    // edition of the included file alone
+    std::fs::write(&extra, "[branch \"main\"]\n\tremote = upstream\n").unwrap();
+    assert_eq!(remote_of_main(&h).as_deref(), Some("upstream"));
+    assert_eq!(h.config_reload_count(), 1);
+
+    // include added during the session: followed from the reloading that discovers it
+    let more = root.join("more.gitconfig");
+    std::fs::write(&more, "[branch \"main\"]\n\tmerge = refs/heads/main\n").unwrap();
+    git(
+        &repo,
+        &["config", "--add", "include.path", more.to_str().unwrap()],
+    );
+    assert_eq!(
+        h.thread_repo()
+            .config_snapshot()
+            .string("branch.main.merge")
+            .map(|v| v.to_string())
+            .as_deref(),
+        Some("refs/heads/main")
+    );
+    assert_eq!(h.config_reload_count(), 2);
+    assert!(watched(&h, "more.gitconfig"), "{:?}", h.config_files());
+    std::fs::write(&more, "[branch \"main\"]\n\tmerge = refs/heads/trunk\n").unwrap();
+    assert_eq!(
+        h.thread_repo()
+            .config_snapshot()
+            .string("branch.main.merge")
+            .map(|v| v.to_string())
+            .as_deref(),
+        Some("refs/heads/trunk")
+    );
+    assert_eq!(h.config_reload_count(), 3);
+    let _ = h.thread_repo();
+    assert_eq!(
+        h.config_reload_count(),
+        3,
+        "stable once the includes are known"
+    );
+}
+
 fn head_info_branch(repo: &gix::Repository) -> Option<String> {
     gitmini_core::repo::head_info(repo).branch
 }
