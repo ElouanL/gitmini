@@ -353,7 +353,7 @@ pub struct Plan {
 fn not_found_oid(oid: &str) -> AppError {
     AppError::not_found(
         "oid",
-        format!("Commit introuvable : {}", &oid[..oid.len().min(7)]),
+        format!("Commit not found: {}", &oid[..oid.len().min(7)]),
     )
     .with_detail("name", oid)
 }

@@ -70,11 +70,11 @@ pub async fn repo_clone(state: &AppState, args: RepoCloneArgs) -> AppResult<Repo
     let _activity = state.shared.activity_guard()?;
     let url = args.url.trim().to_string();
     if url.is_empty() || url.starts_with('-') || url.chars().any(char::is_control) {
-        return Err(AppError::invalid_argument("url", "URL invalide."));
+        return Err(AppError::invalid_argument("url", "Invalid URL."));
     }
     let dest = PathBuf::from(&args.dest);
     let (Some(parent), Some(_)) = (dest.parent().map(Path::to_path_buf), dest.file_name()) else {
-        return Err(AppError::invalid_argument("dest", "Destination invalide."));
+        return Err(AppError::invalid_argument("dest", "Invalid destination."));
     };
     if !dest.is_absolute() {
         return Err(AppError::invalid_argument_reason(

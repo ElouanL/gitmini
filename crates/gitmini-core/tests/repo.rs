@@ -963,7 +963,7 @@ async fn rob_08_missing_workdir_is_not_found_workdir() {
     }
     let err = opened
         .repo
-        .begin_write(gitmini_core::state::WriteSpec::new("stage", "Indexation"))
+        .begin_write(gitmini_core::state::WriteSpec::new("stage", "Stage"))
         .err()
         .unwrap();
     assert_eq!(

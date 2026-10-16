@@ -126,7 +126,7 @@
   </button>
 {/snippet}
 
-<header class="toolbar" data-testid="toolbar" aria-label="Barre d’tools">
+<header class="toolbar" data-testid="toolbar" aria-label={t('toolbar.label')}>
   <div class="tb repo" data-testid="toolbar-repo-name" title={repo.info?.workdir}>
     <Icon name="folder" />
     <span class="lbl-always truncate">{repo.name || t('toolbar.noRepo')}</span>

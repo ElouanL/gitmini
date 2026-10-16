@@ -45,8 +45,7 @@ const CLEAN_BATCH_BYTES: usize = 100 * 1024;
 
 pub async fn stage_paths(state: &AppState, args: PathsArgs) -> AppResult<StatusSnapshot> {
     let repo = state.repo(args.repo_id)?;
-    let g =
-        repo.begin_write(WriteSpec::new("stage", "Indexation").declares(&[ChangeKindEv::Index]))?;
+    let g = repo.begin_write(WriteSpec::new("stage", "Stage").declares(&[ChangeKindEv::Index]))?;
     let res = stage_paths_locked(&repo, args.paths).await;
     g.finish();
     res
@@ -55,7 +54,7 @@ pub async fn stage_paths(state: &AppState, args: PathsArgs) -> AppResult<StatusS
 pub async fn unstage_paths(state: &AppState, args: PathsArgs) -> AppResult<StatusSnapshot> {
     let repo = state.repo(args.repo_id)?;
     let g =
-        repo.begin_write(WriteSpec::new("unstage", "Indexation").declares(&[ChangeKindEv::Index]))?;
+        repo.begin_write(WriteSpec::new("unstage", "Unstage").declares(&[ChangeKindEv::Index]))?;
     let res = unstage_paths_locked(&repo, args.paths).await;
     g.finish();
     res
@@ -74,9 +73,8 @@ pub async fn discard_paths(state: &AppState, args: PathsArgs) -> AppResult<Statu
 
 pub async fn stage_hunk(state: &AppState, args: HunkArgs) -> AppResult<StatusSnapshot> {
     let repo = state.repo(args.repo_id)?;
-    let g = repo.begin_write(
-        WriteSpec::new("stage-hunk", "Indexation d'un hunk").declares(&[ChangeKindEv::Index]),
-    )?;
+    let g = repo
+        .begin_write(WriteSpec::new("stage-hunk", "Stage hunk").declares(&[ChangeKindEv::Index]))?;
     let res = hunk_locked(&repo, args, HunkOp::Stage).await;
     g.finish();
     res
@@ -95,7 +93,7 @@ pub async fn unstage_hunk(state: &AppState, args: HunkArgs) -> AppResult<StatusS
 pub async fn discard_hunk(state: &AppState, args: HunkArgs) -> AppResult<StatusSnapshot> {
     let repo = state.repo(args.repo_id)?;
     let g = repo.begin_write(
-        WriteSpec::new("discard-hunk", "Annulation d'un hunk")
+        WriteSpec::new("discard-hunk", "Discard hunk")
             .declares(&[ChangeKindEv::Index, ChangeKindEv::Worktree]),
     )?;
     let res = hunk_locked(&repo, args, HunkOp::Discard).await;

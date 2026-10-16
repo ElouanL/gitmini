@@ -602,7 +602,7 @@ fn launch(
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(not_found()),
         Err(e) => Err(AppError::internal(format!(
-            "Impossible de lancer « {} » : {e}",
+            "Could not launch \"{}\": {e}",
             spec.program
         ))),
     }

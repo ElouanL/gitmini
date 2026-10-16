@@ -503,11 +503,8 @@ fn tree_entry_side(repo: &gix::Repository, tree: gix::ObjectId, path: &BStr) -> 
 }
 
 fn commit_not_found(commit: impl std::fmt::Display) -> AppError {
-    AppError::new(
-        ErrorCode::NotFound,
-        format!("Commit introuvable : {commit}"),
-    )
-    .with_details(serde_json::json!({ "what": "oid", "name": commit.to_string() }))
+    AppError::new(ErrorCode::NotFound, format!("Commit not found: {commit}"))
+        .with_details(serde_json::json!({ "what": "oid", "name": commit.to_string() }))
 }
 
 /// Commit `id`, ou `NOT_FOUND { what: "oid" }`.
@@ -522,7 +519,7 @@ pub fn commit_tree(repo: &gix::Repository, commit: gix::ObjectId) -> AppResult<g
 
 fn parse_oid(spec: &str) -> AppResult<gix::ObjectId> {
     gix::ObjectId::from_hex(spec.trim().as_bytes()).map_err(|_| {
-        AppError::new(ErrorCode::NotFound, format!("Commit introuvable : {spec}"))
+        AppError::new(ErrorCode::NotFound, format!("Commit not found: {spec}"))
             .with_details(serde_json::json!({ "what": "oid", "name": spec }))
     })
 }
@@ -1415,6 +1412,19 @@ mod tests {
 
     fn numbered(n: usize) -> String {
         (1..=n).map(|i| format!("line {i}\n")).collect()
+    }
+
+    #[test]
+    fn commit_not_found_messages_are_english() {
+        let e = parse_oid("zzz").unwrap_err();
+        assert_eq!(e.code_str(), "NOT_FOUND");
+        assert_eq!(e.message, "Commit not found: zzz");
+        let e = commit_not_found(gix::ObjectId::null(gix::hash::Kind::Sha1));
+        assert!(
+            e.message.starts_with("Commit not found: 0000000"),
+            "{}",
+            e.message
+        );
     }
 
     #[test]

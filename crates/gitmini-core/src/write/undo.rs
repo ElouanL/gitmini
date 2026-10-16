@@ -25,7 +25,7 @@ pub struct UndoLastArgs {
 pub async fn undo_last(state: &AppState, args: UndoLastArgs) -> AppResult<WriteResult> {
     let repo = state.repo(args.repo_id)?;
     // The `repo:changed` Kinds depend on the input: they are declared once the cancellation has been made.
-    let mut g = repo.begin_write(WriteSpec::new("undo", "Annulation"))?;
+    let mut g = repo.begin_write(WriteSpec::new("undo", "Undo"))?;
     let res = undo_locked(&repo, &mut g, args).await;
     g.finish();
     res

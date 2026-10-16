@@ -411,7 +411,7 @@ async fn save_locked(repo: &Arc<RepoHandle>, args: StashSaveArgs) -> AppResult<S
         .map(str::trim)
         .filter(|m| !m.is_empty());
     if message.is_some_and(|m| m.contains('\0')) {
-        return Err(AppError::invalid_argument("message", "Message invalide."));
+        return Err(AppError::invalid_argument("message", "Invalid message."));
     }
     if let Some(paths) = &args.paths {
         let (r, paths) = (repo.clone(), paths.clone());

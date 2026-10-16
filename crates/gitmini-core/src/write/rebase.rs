@@ -145,7 +145,7 @@ pub async fn rebase_interactive_start(
 ) -> AppResult<WriteResult> {
     let repo = state.repo(args.repo_id)?;
     let mut g = repo.begin_write(
-        WriteSpec::new("rebase", "Rebase interactif")
+        WriteSpec::new("rebase", "Interactive rebase")
             .op(args.op_id.clone())
             .declares(&declared_kinds(args.autostash)),
     )?;
@@ -211,7 +211,7 @@ pub async fn rebase_onto_oid_locked(
     let repo = g.handle().clone();
     repo.require_no_op()?;
     let onto = ObjectId::from_hex(onto_oid.as_bytes())
-        .map_err(|_| AppError::invalid_argument("onto", format!("Oid invalide : {onto_oid}")))?;
+        .map_err(|_| AppError::invalid_argument("onto", format!("Invalid oid: {onto_oid}")))?;
     let plan = {
         let (repo, onto_str) = (repo.clone(), onto.to_string());
         tokio::task::spawn_blocking(move || plan_start(&repo, &onto_str, None, autostash)).await??
@@ -244,12 +244,12 @@ pub async fn rebase_onto_oid_locked(
 
 /// `rebase_continue`: refuses without running git if paths are not merged.
 pub async fn rebase_continue(state: &AppState, args: RebaseOpArgs) -> AppResult<WriteResult> {
-    step_command(state, args, "--continue", "Rebase : continuer").await
+    step_command(state, args, "--continue", "Rebase: continue").await
 }
 
 /// `rebase_skip` : `git rebase --skip`.
 pub async fn rebase_skip(state: &AppState, args: RebaseOpArgs) -> AppResult<WriteResult> {
-    step_command(state, args, "--skip", "Rebase : sauter").await
+    step_command(state, args, "--skip", "Rebase: skip").await
 }
 
 async fn step_command(
@@ -320,9 +320,8 @@ async fn step_locked(
 /// `rebase_abort`: `git rebase --abort` (`git am --abort` for the Kind `am`).
 pub async fn rebase_abort(state: &AppState, args: RepoArgs) -> AppResult<WriteResult> {
     let repo = state.repo(args.repo_id)?;
-    let mut g = repo.begin_write(
-        WriteSpec::new("rebase", "Rebase : abandonner").declares(&declared_kinds(false)),
-    )?;
+    let mut g = repo
+        .begin_write(WriteSpec::new("rebase", "Rebase: abort").declares(&declared_kinds(false)))?;
     let res = abort_locked(&repo, &mut g).await;
     conclude(&repo, g, res)
 }

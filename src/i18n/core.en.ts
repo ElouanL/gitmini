@@ -13,6 +13,7 @@ export default {
   'app.title': 'gitmini',
   'app.windowTitle': '{name} — gitmini',
   'app.loading': 'Loading...',
+  'app.spinner': 'Loading',
   'app.bootError.title': 'Could not reach backend',
   'app.bootError.hint': "Launch the application with \"just dev\", or open this page with ?mock=1 to use fake data.",
   'app.bootError.retry': 'Try again',
@@ -119,6 +120,7 @@ export default {
   'banner.mergeContinue': 'Merge finished',
 
   // ── Toolbar
+  'toolbar.label': 'Toolbar',
   'toolbar.noRepo': 'No repository open',
   'toolbar.repoSwitcher': 'Repository: {name}',
   'toolbar.recent': 'Recent',

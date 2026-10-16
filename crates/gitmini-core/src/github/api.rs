@@ -39,7 +39,7 @@ impl GithubState {
         self.client
             .get_or_init(|| build_client(self.e2e))
             .clone()
-            .map_err(|e| AppError::internal(format!("Client HTTP indisponible : {e}")))
+            .map_err(|e| AppError::internal(format!("HTTP client unavailable: {e}")))
     }
 }
 

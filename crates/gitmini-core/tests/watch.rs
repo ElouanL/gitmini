@@ -936,7 +936,7 @@ async fn external_change_flushed_during_a_write_is_kept_for_release() {
     tokio::time::sleep(Duration::from_millis(60)).await;
     let guard = o
         .repo
-        .begin_write(WriteSpec::new("stage", "Indexation"))
+        .begin_write(WriteSpec::new("stage", "Stage"))
         .unwrap();
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert_eq!(o.app.sink.count("repo:changed"), 0);

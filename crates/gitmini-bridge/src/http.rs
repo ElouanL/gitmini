@@ -75,7 +75,7 @@ async fn invoke(
     let args = match parse_args(&body) {
         Ok(v) => v,
         Err(e) => {
-            let err = bridge_error("body", format!("Corps JSON invalide : {e}"));
+            let err = bridge_error("body", format!("Invalid JSON body: {e}"));
             return (StatusCode::BAD_REQUEST, Json(err)).into_response();
         }
     };

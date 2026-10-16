@@ -85,7 +85,7 @@ fn de<T: DeserializeOwned>(args: Value) -> AppResult<T> {
         args
     };
     serde_json::from_value(args)
-        .map_err(|e| AppError::invalid_argument("args", format!("Arguments invalides : {e}")))
+        .map_err(|e| AppError::invalid_argument("args", format!("Invalid arguments: {e}")))
 }
 
 fn ser<T: serde::Serialize>(v: T) -> AppResult<Value> {

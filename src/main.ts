@@ -11,7 +11,7 @@ import './lib/register-domains';
 app.applyTheme();
 
 const target = document.getElementById('app');
-if (!target) throw new Error('#app introuvable');
+if (!target) throw new Error('#app not found');
 mount(App, { target });
 
 void bootstrap();
