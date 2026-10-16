@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Compose the existing Tauri configuration and verify actual signed updater assets before publication.
 import { createHash, createPublicKey, verify } from 'node:crypto';
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -43,6 +43,9 @@ export function verifySignature(bytes, signature, pubkey) {
     'Invalid signature trusted comment');
   return lines[2].slice('trusted comment: '.length);
 }
+
+const signedVersion = (comment) => comment.split('\t').find((field) => field.startsWith('version:'))
+  ?.slice('version:'.length).replace(/^v/, '');
 
 export function configuration(env, existing = {}) {
   const endpoint = (env.GITMINI_UPDATER_ENDPOINT?.trim() || '').trim();
@@ -101,17 +104,29 @@ export function validateManifest(manifest, directory, version, pubkey, repo, tag
     const signature = readFileSync(join(directory, `${name}.sig`), 'utf8').trim();
     assert(signature === platform.signature.trim(), `Manifest signature differs from the asset: ${name}`);
     const comment = verifySignature(readFileSync(join(directory, name)), signature, pubkey);
-    const signedVersion = comment.split('\t').find((field) => field.startsWith('version:'))?.slice('version:'.length);
-    assert(signedVersion?.replace(/^v/, '') === version, `Artifact signature must cover the built version: ${name}`);
+    assert(signedVersion(comment) === version, `Artifact signature must cover the built version: ${name}`);
   }
 }
 
-// Authenticode signing rewrites the installer, so its Minisign signature must be recomputed and the manifest updated.
+const assetName = (url) => decodeURIComponent(new URL(url).pathname.split('/').pop());
+
+// Each updater artifact once, although tauri-action lists several platform entries for some of them.
+export function artifactNames(manifest) {
+  const names = new Set(Object.values(manifest.platforms ?? {})
+    .filter((platform) => typeof platform?.url === 'string').map((platform) => assetName(platform.url)));
+  assert(names.size > 0, 'The manifest lists no updater artifact');
+  for (const name of names) {
+    assert(/^[\w.+-]+$/.test(name) && !name.startsWith('.') && !name.startsWith('-'), `Invalid asset name: ${name}`);
+  }
+  return [...names].sort();
+}
+
+// Set the signature of every platform entry that refers to this asset.
 export function replaceSignature(manifest, installerName, signature) {
   let replaced = 0;
   for (const platform of Object.values(manifest.platforms ?? {})) {
     if (typeof platform?.url !== 'string') continue;
-    if (decodeURIComponent(new URL(platform.url).pathname.split('/').pop()) !== installerName) continue;
+    if (assetName(platform.url) !== installerName) continue;
     platform.signature = signature.trim();
     replaced += 1;
   }
@@ -119,8 +134,23 @@ export function replaceSignature(manifest, installerName, signature) {
   return manifest;
 }
 
+// The build signs with a throwaway key; the signing job signs every artifact again with the release key and
+// copies the new signatures into the manifest. A signature left over from the build fails here.
+export function resignAll(manifest, directory, version, pubkey) {
+  const names = artifactNames(manifest);
+  for (const name of names) {
+    const signature = readFileSync(join(directory, `${name}.sig`), 'utf8');
+    const comment = verifySignature(readFileSync(join(directory, name)), signature, pubkey);
+    assert(signedVersion(comment) === version, `The new signature must cover the built version: ${name}`);
+    replaceSignature(manifest, name, signature);
+  }
+  const orphans = readdirSync(directory).filter((file) => file.endsWith('.sig') && !names.includes(file.slice(0, -4)));
+  assert(orphans.length === 0, `Signatures without a manifest entry: ${orphans.join(', ')}`);
+  return manifest;
+}
+
 function main() {
-  const [mode, directory, installer] = process.argv.slice(2);
+  const [mode, directory] = process.argv.slice(2);
   const env = process.env;
   if (mode === 'check' || mode === 'config') {
     const version = releaseVersion();
@@ -140,19 +170,18 @@ function main() {
     validateManifest(JSON.parse(readFileSync(join(directory, 'latest.json'), 'utf8')),
       directory, version, env.GITMINI_UPDATER_PUBKEY?.trim(), env.GITHUB_REPOSITORY, env.TAG);
     console.log('Updater manifest and all artifact signatures verified');
+  } else if (mode === 'artifacts') {
+    assert(directory, 'Usage: updater-release.mjs artifacts <latest.json>');
+    console.log(artifactNames(JSON.parse(readFileSync(directory, 'utf8'))).join('\n'));
   } else if (mode === 'resign') {
-    assert(directory && installer, 'Usage: updater-release.mjs resign <latest.json> <installer>');
+    assert(directory, 'Usage: updater-release.mjs resign <asset-directory>');
     const pubkey = env.GITMINI_UPDATER_PUBKEY?.trim();
     assert(pubkey, 'GITMINI_UPDATER_PUBKEY is required');
-    const signature = readFileSync(`${installer}.sig`, 'utf8');
-    const comment = verifySignature(readFileSync(installer), signature, pubkey);
-    const signedVersion = comment.split('\t').find((field) => field.startsWith('version:'))?.slice('version:'.length);
-    assert(signedVersion?.replace(/^v/, '') === releaseVersion(), 'The new signature must cover the built version');
-    const manifest = JSON.parse(readFileSync(directory, 'utf8'));
-    replaceSignature(manifest, basename(installer), signature);
-    writeFileSync(directory, `${JSON.stringify(manifest, null, 2)}\n`);
-    console.log(`Updated the manifest signature for ${basename(installer)}`);
-  } else throw new Error('Usage: updater-release.mjs <check|config|verify [asset-directory]|resign <latest.json> <installer>>');
+    const manifestPath = join(directory, 'latest.json');
+    const manifest = resignAll(JSON.parse(readFileSync(manifestPath, 'utf8')), directory, releaseVersion(), pubkey);
+    writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    console.log(`Updated the manifest signatures for ${artifactNames(manifest).join(', ')}`);
+  } else throw new Error('Usage: updater-release.mjs <check|config|verify <asset-directory>|artifacts <latest.json>|resign <asset-directory>>');
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
