@@ -1,8 +1,9 @@
 // Domaine « rebase » (07) : `rebase-confirm-dialog` (rebase simple), `rebase-todo-panel` (rebase interactif, vue centrale),
+// `squash-dialog` (action `rebase.squash`, menu entry `squash`: squash consecutive selected commits),
 // menu entries `rebase-onto` / `interactive-rebase` / `interactive-rebase-onto`, and operations banner actions
 // `op.continue` / `op.skip` / `op.abort` for rebase, merge, cherry-pick and revert (see banner-actions.ts).
 // Contract inter-agents: `openDialog('rebase-confirm-dialog', { branch, target })` (slide and drop graph).
-import { t } from '$i18n/index';
+import { t, tp } from '$i18n/index';
 import { registerAction, registerActions } from '$lib/actions/registry';
 import { openDialog, registerDialog } from '$lib/dialogs/registry';
 import { registerMenuItems } from '$lib/menus/registry';
@@ -12,8 +13,10 @@ import { headBranchName, headOnBranch, loadedRowIndex } from '../branches/common
 import { bannerActions } from './banner-actions';
 import { openInteractiveRebase, parentOfCommit } from './interactive';
 import { reachableFromHead } from './reachability';
+import { checkSquashSelection, squashDisabledReason, squashTargetOids } from './squash';
 
 registerDialog('rebase-confirm-dialog', () => import('./RebaseConfirmDialog.svelte'));
+registerDialog('squash-dialog', () => import('./SquashDialog.svelte'));
 registerCenterView('rebase-todo-panel', () => import('./RebaseTodoPanel.svelte'));
 registerActions(bannerActions);
 
@@ -29,6 +32,17 @@ registerAction({
     const drop = ctx.graph.dragDrop;
     if (!drop) return;
     void openDialog('rebase-confirm-dialog', { branch: drop.src.name, target: drop.dst.name });
+  },
+});
+
+// "Squash N commits": `multi-commit-squash-btn` calls it without target (graph selection), the `squash` menu entry with it.
+registerAction({
+  id: 'rebase.squash',
+  label: (ctx) => tp('rebase.menu.squash', squashTargetOids(ctx).length),
+  palette: false,
+  disabledReason: squashDisabledReason,
+  run: (ctx) => {
+    void openDialog('squash-dialog', { oids: squashTargetOids(ctx) });
   },
 });
 
@@ -62,6 +76,21 @@ registerMenuItems('commit', [
     run: async (ctx) => {
       const parent = await parentOfCommit(ctx.target.oid, ctx.session);
       if (parent !== undefined) openInteractiveRebase(parent, ctx.session);
+    },
+  },
+  {
+    id: 'squash',
+    label: (ctx) => tp('rebase.menu.squash', ctx.target.oids.length),
+    order: 52,
+    // Consecutive commits of HEAD without merge (masked when certainly invalid; a line not loaded leaves it to the backend).
+    visible: (ctx) => {
+      if (ctx.target.oids.length < 2 || !headOnBranch(ctx.session)) return false;
+      const check = checkSquashSelection(ctx.target.oids, loadedRowIndex(ctx.session), repo.head?.oid ?? null);
+      return check.ok || check.reason === 'unknown';
+    },
+    enabled: (ctx) => ctx.op.blockReason('write') === null,
+    run: async (ctx) => {
+      await openDialog('squash-dialog', { oids: ctx.target.oids });
     },
   },
 ]);

@@ -158,7 +158,7 @@ describe('palette', () => {
 
 describe('context menus (03)', () => {
   it("input identifiers follow the closed list of 01 §5.7; no reset-*", () => {
-    expect(MENU_ITEM_IDS).toHaveLength(29);
+    expect(MENU_ITEM_IDS).toHaveLength(30);
     expect(MENU_ITEM_IDS.some((i) => i.startsWith('reset'))).toBe(false);
     expect(MENU_IDS).toEqual(['commit', 'branch', 'remote-branch', 'remote', 'tag', 'stash', 'wip', 'wt-file']);
     for (const m of MENU_IDS) for (const id of menuItemIds(m)) expect(MENU_ITEM_IDS).toContain(id);

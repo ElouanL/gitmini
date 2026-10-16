@@ -1,4 +1,4 @@
-//! Interactive rebase (, ) at the service level: IRB-01 to IRB-06. The todo generated is
+//! Interactive rebase (, ) at the service level: IRB-01 to IRB-07. The todo generated is
 //! proven by its effects: subjects, raw messages (`cat-file`), trees, operating status, temporary folder.
 mod common;
 mod rebase_support;
@@ -916,6 +916,114 @@ async fn irb_06_root_rebase_with_null_upstream() {
     assert_eq!(fx.git(&["rev-list", "--count", "feature"]), "6");
     assert_eq!(fx.rev("feature^{tree}"), tree);
     assert_eq!(fx.raw_message("feature~4"), "A: renamed from the root\n");
+}
+
+// ── IRB-07 (graph squash)
+
+/// `%an <%ae> %ad` of a commit: the identity and date of its author.
+fn author_of(fx: &Fx, rev: &str) -> String {
+    fx.git(&["log", "-1", "--format=%an <%ae> %ad", "--date=raw", rev])
+}
+
+/// IRB-07 — "Merge N commits" from the graph, B+C consecutive in the middle of the range: the whole `upstream..HEAD` todo
+/// (B pick, C squash carrying the message, the others pick). Default message format: oldest subject, blank line,
+/// the other subjects; author and date of B, identical final tree, following commits replayed.
+#[tokio::test]
+async fn irb_07_graph_squash_consecutive_range_in_the_middle() {
+    let fx = Fx::load("rebase-interactive");
+    let o = fx.open().await;
+    let c = commits(&fx);
+    let tree_before = fx.rev("feature^{tree}");
+    let author_b = author_of(&fx, &c.b);
+    let msg = "B: typo\n\nC: adds c.txt";
+
+    let p = preview(&o, Some("main")).await.expect("preview");
+    let a = args(
+        &o,
+        Some("main"),
+        &p.head,
+        vec![
+            item(&c.a, TodoAction::Pick, None),
+            item(&c.b, TodoAction::Pick, None),
+            item(&c.c, TodoAction::Squash, Some(msg)),
+            item(&c.fix, TodoAction::Pick, None),
+            item(&c.d, TodoAction::Pick, None),
+        ],
+        false,
+    );
+    let op = a.op_id.clone();
+    rebase_interactive_start(&o.state, a)
+        .await
+        .expect("rebase_interactive_start");
+
+    assert_eq!(
+        fx.subjects("main..feature"),
+        [
+            "D: adds d.txt",
+            "fixup! A: add a.txt",
+            "B: typo",
+            "A: adds a.txt"
+        ]
+    );
+    assert_eq!(fx.raw_message("feature~2"), format!("{msg}\n"));
+    assert_eq!(author_of(&fx, "feature~2"), author_b, "author of B kept");
+    // the squashed commit carries the changes of B and C
+    assert_eq!(fx.git(&["show", "feature~2:c.txt"]), "c");
+    assert!(
+        fx.git(&["show", "feature~2:README.md"])
+            .contains("This is the README.")
+    );
+    assert_eq!(
+        fx.rev("feature^{tree}"),
+        tree_before,
+        "final tree identical to the one before"
+    );
+    // A is untouched, the commits after the range are rewritten
+    assert_eq!(fx.rev("feature~3"), c.a);
+    assert_ne!(fx.rev("feature"), c.d);
+    assert!(!temp_dir_of(&op).exists());
+    assert!(!fx.rebase_merge_exists());
+    assert_eq!(read_opstate(&o.repo), None);
+}
+
+/// IRB-07 — "Merge N commits" including the root (`upstream: null` = `--root`): `base: init` + A merged, author of the root.
+#[tokio::test]
+async fn irb_07_graph_squash_including_the_root() {
+    let fx = Fx::load("rebase-interactive");
+    let o = fx.open().await;
+    let tree_before = fx.rev("feature^{tree}");
+    let p = preview(&o, None).await.expect("preview --root");
+    let root = p.items[0].oid.clone();
+    let author_root = author_of(&fx, &root);
+    let msg = "base: init\n\nA: adds a.txt";
+    let todo: Vec<TodoItem> = p
+        .items
+        .iter()
+        .enumerate()
+        .map(|(n, i)| match n {
+            1 => item(&i.oid, TodoAction::Squash, Some(msg)),
+            _ => item(&i.oid, TodoAction::Pick, None),
+        })
+        .collect();
+    let a = args(&o, None, &p.head, todo, false);
+    let op = a.op_id.clone();
+
+    rebase_interactive_start(&o.state, a)
+        .await
+        .expect("rebase --root");
+
+    assert_eq!(fx.git(&["rev-list", "--count", "feature"]), "5");
+    assert_eq!(
+        fx.git(&["rev-list", "--max-parents=0", "feature"]),
+        fx.rev("feature~4"),
+        "the merged commit is the new root"
+    );
+    assert_eq!(fx.raw_message("feature~4"), format!("{msg}\n"));
+    assert_eq!(author_of(&fx, "feature~4"), author_root);
+    assert_eq!(fx.git(&["show", "feature~4:a.txt"]), "a");
+    assert_eq!(fx.rev("feature^{tree}"), tree_before);
+    assert!(!temp_dir_of(&op).exists());
+    assert!(!fx.rebase_merge_exists());
 }
 
 // ── Annulation

@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { whenIdle } from '$lib/activity';
 import { abortConfirmMessage } from './banner-actions';
-import { runAction } from '$lib/actions/registry';
+import { actionDisabledReason, getAction, runAction } from '$lib/actions/registry';
 import DialogHost from '$lib/components/dialogs-base/DialogHost.svelte';
 import '$lib/components/dialogs-base/register';
 import { openDialog, preloadDialog } from '$lib/dialogs/registry';
@@ -15,7 +15,7 @@ import { op } from '$lib/stores/op.svelte';
 import { repo } from '$lib/stores/repo.svelte';
 import { toast } from '$lib/stores/toast.svelte';
 import { ui } from '$lib/stores/ui.svelte';
-import { makeBranch, makeConflictState, makeRefs, makeStashes, makeStatus, makeUndo } from '$lib/test/fixtures';
+import { makeBranch, makeConflictState, makeRefs, makeStashes, makeStatus, makeUndo, oid as fxOid } from '$lib/test/fixtures';
 import { resetAll } from '$lib/test/reset';
 import { openTestRepo, oid } from '../test-support';
 import '$lib/register-core';
@@ -27,7 +27,7 @@ const maybe = (id: string) => screen.queryByTestId(id);
 
 // The dialogues are in lazy loading: they are downloaded once (the first dynamic import of a chunk is slow under vitest).
 beforeAll(async () => {
-  await Promise.all(['rebase-confirm-dialog'].map((id) => preloadDialog(id)));
+  await Promise.all(['rebase-confirm-dialog', 'squash-dialog'].map((id) => preloadDialog(id)));
 }, 30_000);
 
 beforeEach(() => {
@@ -739,5 +739,165 @@ describe("rebase-todo-panel : Alt+arrow from line", () => {
     input.focus();
     await userEvent.keyboard('{Alt>}{ArrowUp}{/Alt}');
     expect(order()).toEqual([A, B, C].map((i) => i.oid));
+  });
+});
+
+// ── Squash of selected commits
+
+describe('squash', () => {
+  // Test log_page: linear lines 60..1, HEAD = fxOid(60); 58 and 59 selected (in reverse click order), 60 rewritten above.
+  const sq = (n: number, summary: string, pushed = false): TodoPreviewItem => ({
+    oid: fxOid(n), shortOid: fxOid(n).slice(0, 7), summary, message: `${summary}\n\nbody`, author: 'Bot', pushed,
+  });
+  const squashPreview = (): TodoPreview => ({ base: fxOid(57), head: fxOid(60), items: [sq(58, 'A: adds a', true), sq(59, 'B: typo'), sq(60, 'C: adds c')] });
+  const HEAD_MAIN = { head: { branch: 'main', oid: oid('e'), detached: false, unborn: false } };
+
+  async function openSquash(extra: Record<string, () => unknown> = {}) {
+    const fake = await openTestRepo({ rebase_todo_preview: () => squashPreview(), rebase_interactive_start: () => HEAD_MAIN, ...extra });
+    render(DialogHost);
+    graph.selectCommits([fxOid(59), fxOid(58)]);
+    expect(await runAction('rebase.squash')).toBe(true);
+    await screen.findByTestId('squash-message-input');
+    return fake;
+  }
+
+  it("menu entry: visible for consecutive commits of HEAD only, plural label", async () => {
+    await openTestRepo();
+    const menu = (oids: string[]) => resolveMenu({ menu: 'commit', oid: oids[0]!, oids });
+    const entry = menu([fxOid(59), fxOid(58)]).find((i) => i.id === 'squash');
+    expect(entry?.label).toBe('Squash 2 commits...');
+    expect(entry?.disabled).toBeFalsy();
+    expect(menu([fxOid(59)]).map((i) => i.id)).not.toContain('squash');
+    expect(menu([fxOid(59), fxOid(57)]).map((i) => i.id)).not.toContain('squash');
+    // Action without target (multi-commit-squash-btn): graph selection, reason in the tooltip.
+    graph.selectCommits([fxOid(59), fxOid(57)]);
+    expect(actionDisabledReason(getAction('rebase.squash')!)).toBe('The selected commits must be consecutive.');
+    graph.selectCommits([fxOid(59), fxOid(58)]);
+    expect(actionDisabledReason(getAction('rebase.squash')!)).toBeNull();
+    op.setState(makeConflictState());
+    expect(menu([fxOid(59), fxOid(58)]).find((i) => i.id === 'squash')?.disabled).toBe(true);
+  });
+
+  it("dialog: preview from the parent of the oldest, pre-filled message, pushed warning, rewrite note, exact payload", async () => {
+    const fake = await openSquash();
+    expect(fake.callsOf('rebase_todo_preview')[0]!.args).toEqual({ repoId: 1, upstream: fxOid(57) });
+    expect(screen.getAllByTestId('squash-commit-item').map((i) => i.getAttribute('data-oid'))).toEqual([fxOid(58), fxOid(59)]);
+    const input = tid('squash-message-input') as HTMLTextAreaElement;
+    expect(input.value).toBe('A: adds a\n\nB: typo');
+    await waitFor(() => expect(document.activeElement).toBe(input));
+    expect(tid('squash-pushed-warning')).toHaveTextContent('1 of these commits is already on a remote.');
+    expect(tid('squash-rewrite-note')).toHaveTextContent('1 later commit will be rewritten as well.');
+    expect(maybe('squash-autostash-checkbox')).toBeNull();
+
+    await fireEvent.input(input, { target: { value: '  ' } });
+    expect(tid('squash-confirm-btn')).toBeDisabled();
+    await fireEvent.input(input, { target: { value: 'A: adds a and b' } });
+    await userEvent.click(tid('squash-confirm-btn'));
+    await waitFor(() => expect(fake.callsOf('rebase_interactive_start')).toHaveLength(1));
+    const args = fake.callsOf('rebase_interactive_start')[0]!.args;
+    expect(args).toMatchObject({ repoId: 1, upstream: fxOid(57), expectedHead: fxOid(60), autostash: false });
+    expect(typeof args.opId).toBe('string');
+    expect(args.todo).toEqual([
+      { oid: fxOid(58), action: 'pick' },
+      { oid: fxOid(59), action: 'squash', message: 'A: adds a and b' },
+      { oid: fxOid(60), action: 'pick' },
+    ]);
+    await whenIdle();
+    expect(graph.selection.kind).toBe('none');
+    expect(maybe('squash-dialog')).toBeNull();
+  });
+
+  it("lines not loaded: order and base read by commit_details", async () => {
+    const parents: Record<string, string> = { [oid('b')]: oid('a'), [oid('c')]: oid('b') };
+    const fake = await openTestRepo({
+      commit_details: (a) => ({ oid: a.oid, parents: [parents[String(a.oid)]], message: 'x' }),
+      rebase_todo_preview: () => ({ base: oid('a'), head: oid('c'), items: [item(1, 'B', { oid: oid('b') }), item(2, 'C', { oid: oid('c') })] }),
+    });
+    render(DialogHost);
+    void openDialog('squash-dialog', { oids: [oid('c'), oid('b')] });
+    expect(((await screen.findByTestId('squash-message-input')) as HTMLTextAreaElement).value).toBe('B\n\nC');
+    expect(fake.callsOf('rebase_todo_preview')[0]!.args).toEqual({ repoId: 1, upstream: oid('a') });
+    expect(maybe('squash-rewrite-note')).toBeNull();
+    expect(tid('squash-confirm-btn')).toBeEnabled();
+  });
+
+  it("lines not loaded, commit_details fails: inline error instead of an empty dialog", async () => {
+    const fake = await openTestRepo({
+      commit_details: () => {
+        throw { code: 'NOT_FOUND', message: 'gone' };
+      },
+    });
+    render(DialogHost);
+    void openDialog('squash-dialog', { oids: [oid('c'), oid('b')] });
+    expect(await screen.findByTestId('squash-error')).toHaveTextContent('Could not read the selected commits.');
+    expect(maybe('squash-loading')).toBeNull();
+    expect(tid('squash-confirm-btn')).toBeDisabled();
+    expect(fake.callsOf('rebase_todo_preview')).toHaveLength(0);
+  });
+
+  it("lines not loaded, chain on another branch: not-in-head reason, not STALE", async () => {
+    const parents: Record<string, string> = { [oid('b')]: oid('a'), [oid('c')]: oid('b') };
+    await openTestRepo({
+      commit_details: (a) => ({ oid: a.oid, parents: [parents[String(a.oid)]], message: 'x' }),
+      // `a..HEAD` does not contain the selected side-branch commits.
+      rebase_todo_preview: () => ({ base: oid('a'), head: oid('e'), items: [item(1, 'D', { oid: oid('d') }), item(2, 'E', { oid: oid('e') })] }),
+    });
+    render(DialogHost);
+    void openDialog('squash-dialog', { oids: [oid('c'), oid('b')] });
+    expect(await screen.findByTestId('squash-error')).toHaveTextContent('The selected commits do not belong to the current branch.');
+    expect(tid('squash-confirm-btn')).toBeDisabled();
+  });
+
+  it("UNSUPPORTED_MERGES from the preview: inline error, confirmation disabled", async () => {
+    await openTestRepo({
+      rebase_todo_preview: () => {
+        throw { code: 'UNSUPPORTED_MERGES', message: 'merges', details: { oids: [fxOid(59)] } };
+      },
+    });
+    render(DialogHost);
+    void openDialog('squash-dialog', { oids: [fxOid(58), fxOid(59)] });
+    expect(await screen.findByTestId('squash-error')).toHaveTextContent('Range containing merges: not supported in v1.');
+    expect(tid('squash-confirm-btn')).toBeDisabled();
+    expect(toast.items).toHaveLength(0);
+  });
+
+  it("STALE: dedicated toast", async () => {
+    await openSquash({
+      rebase_interactive_start: () => {
+        throw { code: 'STALE', message: 'expired', details: { what: 'todo' } };
+      },
+    });
+    await userEvent.click(tid('squash-confirm-btn'));
+    await whenIdle();
+    await waitFor(() => expect(toast.items.at(-1)?.message).toBe('The branch changed since the selection: nothing was squashed. Select the commits again.'));
+  });
+
+  it("DIRTY_WORKTREE: the dialog reopens with the typed message, retry with autostash", async () => {
+    let n = 0;
+    const fake = await openSquash({
+      rebase_interactive_start: () => {
+        if (n++ === 0) throw { code: 'DIRTY_WORKTREE', message: 'sale', details: { paths: ['README.md'] } };
+        return HEAD_MAIN;
+      },
+    });
+    await fireEvent.input(tid('squash-message-input'), { target: { value: 'Typed message' } });
+    await userEvent.click(tid('squash-confirm-btn'));
+    await screen.findByTestId('squash-dirty');
+    await waitFor(() => expect((tid('squash-message-input') as HTMLTextAreaElement).value).toBe('Typed message'));
+    await userEvent.click(tid('squash-confirm-btn'));
+    await waitFor(() => expect(fake.callsOf('rebase_interactive_start')).toHaveLength(2));
+    expect(fake.callsOf('rebase_interactive_start')[1]!.args).toMatchObject({ autostash: true });
+    expect((fake.callsOf('rebase_interactive_start')[1]!.args.todo as { message?: string }[])[1]!.message).toBe('Typed message');
+  });
+
+  it("CONFLICT: banner of the base (operation state), no toast", async () => {
+    await openSquash({
+      rebase_interactive_start: () => {
+        throw { code: 'CONFLICT', message: 'conflit', details: { state: makeConflictState() } };
+      },
+    });
+    await userEvent.click(tid('squash-confirm-btn'));
+    await waitFor(() => expect(op.state?.kind).toBe('rebase'));
+    expect(toast.items).toHaveLength(0);
   });
 });
