@@ -148,6 +148,44 @@ fn synthetic_diff_files() -> PathBuf {
     dir
 }
 
+/// One commit modifying 2,000 files (5 to 80 Kio) and 4 text files of ~5 Mio, on top of a base commit
+/// (PERF-12, worst case of the commit panel: `MAX_COMMIT_FILES` line counts).
+fn synthetic_wide_commit() -> PathBuf {
+    let dir = cache_dir("wide-commit");
+    if dir.join(".git").exists() {
+        return dir;
+    }
+    git(&dir, &["init", "-q", "-b", "main"]);
+    let body = |i: usize, tag: &str, lines: usize| -> String {
+        (0..lines)
+            .map(|l| {
+                if l % 23 == 0 {
+                    format!("{tag} {l:06} of {i}\n")
+                } else {
+                    format!("{l:06} line of file {i} with some text\n")
+                }
+            })
+            .collect()
+    };
+    let write_all = |tag: &str| {
+        for i in 0..2000 {
+            let p = dir.join(format!("d{:02}/f{i:04}.txt", i % 40));
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, body(i, tag, 128 + (i % 16) * 128)).unwrap();
+        }
+        for i in 0..4 {
+            std::fs::write(dir.join(format!("huge{i}.txt")), body(i, tag, 130_000)).unwrap();
+        }
+    };
+    write_all("base");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-q", "-m", "base"]);
+    write_all("next");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-q", "-m", "wide"]);
+    dir
+}
+
 /// 300 branches at upstream (`origin/*`) on 3,000 commits.
 fn synthetic_refs_300() -> PathBuf {
     let dir = cache_dir("refs300");
@@ -301,6 +339,27 @@ fn commit_details_bench(c: &mut Criterion) {
                     ))
                     .unwrap();
                 }
+            },
+            BatchSize::PerIteration,
+        )
+    });
+    let wide_path = synthetic_wide_commit();
+    let (wide_state, wide) = open(&rt, &wide_path);
+    let wide_id = wide.id;
+    let head = git(&wide_path, &["rev-parse", "HEAD"]);
+    g.bench_function("commit_details_2000_files_cold_cache", |b| {
+        b.iter_batched(
+            || *wide.cache.lock().unwrap() = Default::default(),
+            |_| {
+                rt.block_on(commit_details(
+                    &wide_state,
+                    CommitDetailsArgs {
+                        repo_id: wide_id,
+                        oid: head.clone(),
+                        against: None,
+                    },
+                ))
+                .unwrap();
             },
             BatchSize::PerIteration,
         )

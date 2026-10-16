@@ -9,6 +9,7 @@
 //! * `commit_details` / `tree_changes`: list of files from a commit or a range, renames, meters.
 use std::ops::Range;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use gix::bstr::{BStr, BString, ByteSlice};
 use gix::diff::blob::{Algorithm, Diff, InternedInput, pipeline::Mode, pipeline::WorktreeRoots};
@@ -63,16 +64,17 @@ pub async fn diff_file(state: &AppState, args: DiffFileArgs) -> AppResult<FileDi
     diff_for(&repo, &args.path, &args.source, args.force.unwrap_or(false)).await
 }
 
-pub async fn commit_details(state: &AppState, args: CommitDetailsArgs) -> AppResult<CommitDetails> {
+/// Shared with the LRU cache: serialized as is, never deep-copied (up to 2,000 `FileChange`).
+pub async fn commit_details(
+    state: &AppState,
+    args: CommitDetailsArgs,
+) -> AppResult<Arc<CommitDetails>> {
     let repo = state.repo(args.repo_id)?;
     repo.ensure_present()?;
     let against = args.against;
     let oid = args.oid;
-    let details = tokio::task::spawn_blocking(move || {
-        commit_details_blocking(&repo, &oid, against.as_deref())
-    })
-    .await??;
-    Ok((*details).clone())
+    tokio::task::spawn_blocking(move || commit_details_blocking(&repo, &oid, against.as_deref()))
+        .await?
 }
 
 /// Diff from a file (used by `diff_file` and `stage_hunk` & co, which build the backend side patch).
@@ -1168,12 +1170,16 @@ fn mode_class(mode: u32) -> u32 {
     mode & 0o170000
 }
 
-/// `(binaire, taille)` of a blob and, if both sides are text, additions / deletions.
+/// `(binary, (additions, deletions))` of a file of a tree comparison.
+type BlobStats = (bool, Option<(u32, u32)>);
+
+/// `(binaire, taille)` of a blob and, if both sides are text of at most [`TOO_LARGE_BYTES`], additions /
+/// deletions.
 fn blob_stats(
     repo: &gix::Repository,
     old: Option<gix::ObjectId>,
     new: Option<gix::ObjectId>,
-) -> (bool, Option<(u32, u32)>) {
+) -> BlobStats {
     let read = |id: Option<gix::ObjectId>| -> Option<Option<Vec<u8>>> {
         match id {
             None => Some(None),
@@ -1193,6 +1199,9 @@ fn blob_stats(
     if looks_binary(&o) || looks_binary(&n) {
         return (true, None);
     }
+    if o.len() as u64 > TOO_LARGE_BYTES || n.len() as u64 > TOO_LARGE_BYTES {
+        return (false, None); // `tooLarge` in the diff viewer: the diff is not worth computing for a counter
+    }
     let input = InternedInput::new(&o[..], &n[..]);
     let diff = Diff::compute(Algorithm::Histogram, &input);
     (false, Some((diff.count_additions(), diff.count_removals())))
@@ -1206,14 +1215,36 @@ pub fn tree_changes(
     new: Option<gix::ObjectId>,
     renames: Renames,
 ) -> AppResult<(Vec<FileChange>, bool)> {
+    let (files, truncated, _) =
+        tree_changes_cancellable(repo, old, new, renames, &AtomicBool::new(false))?;
+    Ok((files, truncated))
+}
+
+/// Below, the line counts of a file list are computed on the calling thread.
+const STATS_PARALLEL_MIN: usize = 32;
+/// Threads of the line counts of a large file list.
+const MAX_STATS_THREADS: usize = 8;
+/// gix object cache of each line count thread (the blobs of a commit are rarely read twice).
+const STATS_THREAD_CACHE_BYTES: usize = 4 * 1024 * 1024;
+
+struct Row {
+    path: BString,
+    fc: FileChange,
+    submodule: bool,
+    old_id: Option<gix::ObjectId>,
+    new_id: Option<gix::ObjectId>,
+}
+
+/// [`tree_changes`] whose line counts stop as soon as `cancel` is raised: the files not yet counted keep
+/// `additions` / `deletions` at `None`. Third boolean: `true` if every count was computed (result cacheable).
+pub fn tree_changes_cancellable(
+    repo: &gix::Repository,
+    old: Option<gix::ObjectId>,
+    new: Option<gix::ObjectId>,
+    renames: Renames,
+    cancel: &AtomicBool,
+) -> AppResult<(Vec<FileChange>, bool, bool)> {
     use gix::diff::tree_with_rewrites::Change;
-    struct Row {
-        path: BString,
-        fc: FileChange,
-        submodule: bool,
-        old_id: Option<gix::ObjectId>,
-        new_id: Option<gix::ObjectId>,
-    }
     let changes = raw_tree_changes(repo, old, new, renames)?;
     let mut rows: Vec<Row> = Vec::with_capacity(changes.len());
     for c in changes {
@@ -1318,19 +1349,77 @@ pub fn tree_changes(
     rows.sort_by(|a, b| a.path.cmp(&b.path));
     let truncated = rows.len() > MAX_COMMIT_FILES;
     rows.truncate(MAX_COMMIT_FILES);
-    let mut files = Vec::with_capacity(rows.len());
-    for mut r in rows {
-        if !r.submodule {
-            let (binary, counts) = blob_stats(repo, r.old_id, r.new_id);
-            r.fc.binary = binary;
-            if let Some((add, del)) = counts {
-                r.fc.additions = Some(add);
-                r.fc.deletions = Some(del);
-            }
+    let complete = fill_stats(repo, &mut rows, cancel);
+    Ok((
+        rows.into_iter().map(|r| r.fc).collect(),
+        truncated,
+        complete,
+    ))
+}
+
+/// Binary flag and line counts of `rows` (submodules excepted), spread over threads beyond
+/// [`STATS_PARALLEL_MIN`] files (model `scan_parallel` of `log.rs`). `false` if `cancel` stopped the work.
+fn fill_stats(repo: &gix::Repository, rows: &mut [Row], cancel: &AtomicBool) -> bool {
+    let jobs: Vec<usize> = (0..rows.len()).filter(|i| !rows[*i].submodule).collect();
+    let apply = |r: &mut Row, (binary, counts): BlobStats| {
+        r.fc.binary = binary;
+        if let Some((add, del)) = counts {
+            r.fc.additions = Some(add);
+            r.fc.deletions = Some(del);
         }
-        files.push(r.fc);
+    };
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, MAX_STATS_THREADS)
+        .min(jobs.len().div_ceil(STATS_PARALLEL_MIN / 2).max(1));
+    if jobs.len() < STATS_PARALLEL_MIN || threads == 1 {
+        for i in jobs {
+            if cancel.load(Ordering::Relaxed) {
+                return false;
+            }
+            let stats = blob_stats(repo, rows[i].old_id, rows[i].new_id);
+            apply(&mut rows[i], stats);
+        }
+        return true;
     }
-    Ok((files, truncated))
+    // `gix::Repository` is not `Sync`: one thread-local repository per thread, from the same shared handle
+    let shared = repo.clone().into_sync();
+    let ids: Vec<(Option<gix::ObjectId>, Option<gix::ObjectId>)> = jobs
+        .iter()
+        .map(|i| (rows[*i].old_id, rows[*i].new_id))
+        .collect();
+    let next = AtomicUsize::new(0);
+    let results: Vec<Vec<(usize, BlobStats)>> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                let (shared, ids, next) = (&shared, &ids, &next);
+                scope.spawn(move || {
+                    let mut repo = shared.to_thread_local();
+                    repo.object_cache_size_if_unset(STATS_THREAD_CACHE_BYTES);
+                    let mut out = Vec::new();
+                    loop {
+                        let k = next.fetch_add(1, Ordering::Relaxed);
+                        if k >= ids.len() || cancel.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        out.push((k, blob_stats(&repo, ids[k].0, ids[k].1)));
+                    }
+                    out
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|w| w.join().unwrap_or_default())
+            .collect()
+    });
+    let mut done = 0;
+    for (k, stats) in results.into_iter().flatten() {
+        apply(&mut rows[jobs[k]], stats);
+        done += 1;
+    }
+    done == jobs.len()
 }
 
 //
@@ -1371,7 +1460,10 @@ pub fn commit_details_blocking(
             .map(|p| commit_tree(&repo, *p))
             .transpose()?,
     };
-    let (files, truncated) = tree_changes(&repo, old_tree, Some(tree), Renames::Configured)?;
+    // a newer request supersedes this one: its line counts stop and the result is not cached
+    let cancel = h.supersede_commit_stats();
+    let (files, truncated, complete) =
+        tree_changes_cancellable(&repo, old_tree, Some(tree), Renames::Configured, &cancel)?;
     let author = signature_of(commit.author().map_err(gix_err)?);
     let committer = signature_of(commit.committer().map_err(gix_err)?);
     let message = commit
@@ -1389,7 +1481,9 @@ pub fn commit_details_blocking(
         files,
         truncated,
     });
-    h.cache.lock().unwrap().commits.put(key, details.clone());
+    if complete {
+        h.cache.lock().unwrap().commits.put(key, details.clone());
+    }
     Ok(details)
 }
 

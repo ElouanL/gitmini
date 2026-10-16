@@ -4,9 +4,13 @@
 mod common;
 mod read_support;
 
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
 use common::Fixture;
 use gitmini_core::read::diff::{
-    CommitDetailsArgs, DiffFileArgs, commit_details, diff_file, diff_for, hunk_to_patch,
+    CommitDetailsArgs, DiffFileArgs, Renames, TOO_LARGE_BYTES, commit_details, commit_tree,
+    diff_file, diff_for, hunk_to_patch, tree_changes_cancellable,
 };
 use gitmini_core::types::{
     ChangeKind, ConflictView, DiffLineKind, DiffSource, FileDiff, StashPart,
@@ -910,7 +914,7 @@ async fn details(
     o: &Opened,
     oid: &str,
     against: Option<&str>,
-) -> gitmini_core::types::CommitDetails {
+) -> Arc<gitmini_core::types::CommitDetails> {
     commit_details(
         &o.state,
         CommitDetailsArgs {
@@ -1110,6 +1114,111 @@ async fn commit_details_truncates_after_2000_files_and_caches_results() {
     let again = details(&o, &head, None).await;
     assert_eq!(again.files.len(), 2000);
     assert!(!o.repo.cache.lock().unwrap().commits.is_empty());
+}
+
+#[tokio::test]
+async fn commit_details_skips_line_counts_beyond_too_large_bytes() {
+    let big = |tag: &str| -> String {
+        (0..40_000)
+            .map(|i| format!("{tag} line {i:05} with some padding\n"))
+            .collect()
+    };
+    let t = TestRepo::init();
+    t.write("big.txt", &big("a"));
+    t.write("small.txt", "1\n2\n");
+    t.git(&["add", "-A"]);
+    t.git(&["commit", "-q", "-m", "base"]);
+    t.write("big.txt", &big("b"));
+    t.write("small.txt", "1\nTWO\n");
+    t.git(&["add", "-A"]);
+    t.git(&["commit", "-q", "-m", "big change"]);
+    assert!(std::fs::metadata(t.path.join("big.txt")).unwrap().len() > TOO_LARGE_BYTES);
+    let o = t.open().await;
+    let d = details(&o, &t.rev_parse("HEAD"), None).await;
+    let file = |p: &str| d.files.iter().find(|f| f.path == p).unwrap();
+    // beyond `TOO_LARGE_BYTES` the diff viewer shows `tooLarge`: no line counts, still not binary
+    assert_eq!(
+        (file("big.txt").additions, file("big.txt").deletions),
+        (None, None)
+    );
+    assert!(!file("big.txt").binary);
+    assert_eq!(
+        (file("small.txt").additions, file("small.txt").deletions),
+        (Some(1), Some(1))
+    );
+}
+
+#[tokio::test]
+async fn commit_details_parallel_line_counts_match_git_numstat() {
+    let t = TestRepo::init();
+    for i in 0..300 {
+        t.write(&format!("d{}/f{i:03}.txt", i % 7), &numbered(40));
+    }
+    t.git(&["add", "-A"]);
+    t.git(&["commit", "-q", "-m", "base"]);
+    for i in 0..300 {
+        let mut body = numbered(40).replace("line 20\n", &format!("CHANGED {i}\n"));
+        for k in 0..i % 5 {
+            body.push_str(&format!("extra {k}\n"));
+        }
+        t.write(&format!("d{}/f{i:03}.txt", i % 7), &body);
+    }
+    t.git(&["add", "-A"]);
+    t.git(&["commit", "-q", "-m", "touches 300 files"]);
+    let o = t.open().await;
+    let d = details(&o, &t.rev_parse("HEAD"), None).await;
+    let ours: Vec<String> = d
+        .files
+        .iter()
+        .map(|f| {
+            format!(
+                "{}\t{}\t{}",
+                f.additions.unwrap(),
+                f.deletions.unwrap(),
+                f.path
+            )
+        })
+        .collect();
+    let mut theirs = lines_of(&t.git(&["diff", "--numstat", "--histogram", "HEAD^", "HEAD"]));
+    theirs.sort_by(|a, b| a.rsplit('\t').next().cmp(&b.rsplit('\t').next()));
+    assert_eq!(ours, theirs);
+}
+
+#[tokio::test]
+async fn commit_stats_cancellation_supersedes_and_keeps_the_file_list() {
+    let t = TestRepo::init();
+    for i in 0..50 {
+        t.write(&format!("f{i:02}.txt"), &numbered(10));
+    }
+    t.git(&["add", "-A"]);
+    t.git(&["commit", "-q", "-m", "base"]);
+    for i in 0..50 {
+        t.write(&format!("f{i:02}.txt"), &numbered(12));
+    }
+    t.git(&["add", "-A"]);
+    t.git(&["commit", "-q", "-m", "grow"]);
+    let o = t.open().await;
+    // each new request raises the flag of the previous one
+    let first = o.repo.supersede_commit_stats();
+    let second = o.repo.supersede_commit_stats();
+    assert!(first.load(Ordering::Relaxed));
+    assert!(!second.load(Ordering::Relaxed));
+    // superseded computation: complete file list, no line counts, reported incomplete
+    let repo = o.repo.thread_repo();
+    let old = commit_tree(&repo, repo.rev_parse_single("HEAD^").unwrap().detach()).unwrap();
+    let new = commit_tree(&repo, repo.rev_parse_single("HEAD").unwrap().detach()).unwrap();
+    let (files, truncated, complete) =
+        tree_changes_cancellable(&repo, Some(old), Some(new), Renames::Off, &first).unwrap();
+    assert!(!truncated && !complete);
+    assert_eq!(files.len(), 50);
+    assert!(files.iter().all(|f| f.additions.is_none()));
+    let (files, _, complete) =
+        tree_changes_cancellable(&repo, Some(old), Some(new), Renames::Off, &second).unwrap();
+    assert!(complete);
+    assert!(files.iter().all(|f| f.additions == Some(2)));
+    // `commit_details` raises the flag of the request it supersedes
+    let _ = details(&o, &t.rev_parse("HEAD"), None).await;
+    assert!(second.load(Ordering::Relaxed));
 }
 
 #[tokio::test]
