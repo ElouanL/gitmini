@@ -1,4 +1,4 @@
-// Contract of the 65 commands: one wrapper per order, exact name, arguments transmitted as is.
+// Contract of the 68 commands: one wrapper per order, exact name, arguments transmitted as is.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -15,10 +15,10 @@ function rustCommandList(): string[] {
 }
 
 describe('commands.ts', () => {
-  it("exactly displays the 65 backend commands", () => {
+  it("exactly displays the 68 backend commands", () => {
     const names = Object.values(COMMAND_NAMES).sort();
-    expect(names).toHaveLength(65);
-    expect(new Set(names).size).toBe(65);
+    expect(names).toHaveLength(68);
+    expect(new Set(names).size).toBe(68);
     expect(names).toEqual([...rustCommandList()].sort());
   });
 

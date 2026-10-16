@@ -66,6 +66,12 @@ export function createMockTransport(): Transport {
       if (path.includes('dubious')) throw err('NOT_A_REPO', "Owner not safe", { path, reason: 'dubious-ownership' });
       return repoInfo(path);
     },
+    repo_init: async (a) => {
+      const path = String(a.path);
+      await sleep(60);
+      if (path.includes('existing')) throw err('ALREADY_EXISTS', `${path} is already a Git repository.`, { what: 'repo', path });
+      return repoInfo(path);
+    },
     repo_close: () => null,
     repo_activate: () => null,
     log_page: async (a) => {

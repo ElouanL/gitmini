@@ -17,6 +17,7 @@ export default {
   'remotes.toast.remoteRemoved': "Remote {name} deleted",
   'remotes.toast.prOpened': 'Comparison page opened in the browser',
   'remotes.toast.cloned': "{name} cloned",
+  'remotes.toast.initialized': "Repository {name} created",
 
   // Forced push (confirm-dialog[data-action=force-push])
   'remotes.forcePush.title': 'Forced Push',
@@ -99,6 +100,22 @@ export default {
   'remotes.clone.error.dest.empty': 'Choose the destination folder.',
   'remotes.clone.error.dest.exists': "The {path} folder is not empty.",
   'remotes.clone.error.pickRepo': 'Choose a GitHub repository.',
+
+  // New repository
+  'remotes.init.title': 'New repository',
+  'remotes.init.path': 'Folder',
+  'remotes.init.path.placeholder': 'Absolute path (created if missing, existing files are kept)',
+  'remotes.init.browseTitle': 'Choose the folder of the new repository',
+  'remotes.init.branch': 'Initial branch',
+  'remotes.init.readme': 'Add a README.md',
+  'remotes.init.initialCommit': 'Commit every file ("Initial commit")',
+  'remotes.init.publish': 'Then publish on GitHub',
+  'remotes.init.submit': 'Create',
+  'remotes.init.commitMessage': 'Initial commit',
+  'remotes.init.error.path.empty': 'Choose a folder.',
+  'remotes.init.error.path.repo': '{path} is already a Git repository: open it instead.',
+  'remotes.op.init': 'Create repository',
+  'remotes.op.initialCommit': 'Initial commit',
 
   // Menu: Open PR
   'remotes.menu.openPr': "Open a PR on GitHub",

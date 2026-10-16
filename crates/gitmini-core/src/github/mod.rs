@@ -311,6 +311,16 @@ pub struct GithubReposResult {
 
 #[derive(Debug, Clone, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
+pub struct GithubCreateRepoArgs {
+    /// Organization login; the signed-in account when absent.
+    pub owner: Option<String>,
+    pub name: String,
+    pub private: bool,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
 pub struct GithubOpenPrArgs {
     pub repo_id: RepoId,
     pub branch: String,
@@ -388,6 +398,27 @@ pub(crate) async fn logout(gh: &Arc<GithubState>) -> AppResult<()> {
 
 pub async fn github_repos(state: &AppState, args: GithubReposArgs) -> AppResult<GithubReposResult> {
     api::list_repos(&state.shared.github, args.page, args.per_page).await
+}
+
+pub async fn github_orgs(state: &AppState) -> AppResult<Vec<String>> {
+    api::list_orgs(&state.shared.github).await
+}
+
+pub async fn github_create_repo(
+    state: &AppState,
+    args: GithubCreateRepoArgs,
+) -> AppResult<GithubRepo> {
+    api::create_repo(
+        &state.shared.github,
+        args.owner
+            .as_deref()
+            .map(str::trim)
+            .filter(|o| !o.is_empty()),
+        args.name.trim(),
+        args.private,
+        args.description.as_deref(),
+    )
+    .await
 }
 
 pub async fn github_open_pr(

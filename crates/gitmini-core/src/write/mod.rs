@@ -4,6 +4,7 @@ pub mod clone;
 pub mod commit;
 pub mod errors;
 pub mod index;
+pub mod init;
 pub mod merge;
 pub mod pick;
 pub mod rebase;

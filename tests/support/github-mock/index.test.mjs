@@ -1,5 +1,6 @@
 // HTTP Mock Tests GitHub : Device Flow, API, log, configuration . The real git tests are in git.test.mjs.
 import assert from 'node:assert/strict';
+import { statSync } from 'node:fs';
 import { after, before, describe, it } from 'node:test';
 import { liveMocks, startMock } from './index.mjs';
 
@@ -393,5 +394,33 @@ describe('POST /__mock/config', () => {
     assert.equal(res.status, 404);
     assert.equal((await res.json()).message, 'Not Found');
     assert.equal((await fetch(`${mock.baseUrl}/__mock/inconnu`)).status, 404);
+  });
+});
+
+describe('repository creation: POST /user/repos, POST /orgs/<org>/repos, GET /user/orgs', () => {
+  const create = (path, body, token = 'gho_test') =>
+    post(path, JSON.stringify(body), { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) });
+
+  it('creates an empty bare repository, lists it, and refuses a taken name with 422', async () => {
+    const r = await create('/user/repos', { name: 'fresh', private: true, auto_init: false });
+    assert.equal(r.status, 201);
+    const repo = await r.json();
+    assert.equal(repo.full_name, 'octo-test/fresh');
+    assert.equal(repo.private, true);
+    assert.equal(repo.clone_url, mock.cloneUrl('octo-test/fresh'));
+    assert.ok(statSync(mock.bareRepoPath('octo-test/fresh')).isDirectory());
+    const list = await (await api('/user/repos?per_page=100')).json();
+    assert.ok(list.some((x) => x.full_name === 'octo-test/fresh'));
+    const dup = await create('/user/repos', { name: 'fresh' });
+    assert.equal(dup.status, 422);
+    assert.match((await dup.json()).errors[0].message, /already exists/);
+  });
+
+  it('organization owner, orgs listing, invalid name and missing token', async () => {
+    const r = await create('/orgs/org/repos', { name: 'delta' });
+    assert.equal((await r.json()).full_name, 'org/delta');
+    assert.deepEqual((await (await api('/user/orgs')).json()).map((o) => o.login), ['org']);
+    assert.equal((await create('/user/repos', { name: 'a b' })).status, 422);
+    assert.equal((await create('/user/repos', { name: 'x' }, null)).status, 401);
   });
 });

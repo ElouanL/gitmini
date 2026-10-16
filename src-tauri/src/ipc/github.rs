@@ -1,9 +1,10 @@
 //! GitHub . `repo_clone` is in `repo.rs`.
 use gitmini_core::AppError;
 use gitmini_core::github::{
-    GithubLoginPollArgs, GithubOpenPrArgs, GithubOpenPrResult, GithubReposArgs, GithubReposResult,
+    GithubCreateRepoArgs, GithubLoginPollArgs, GithubOpenPrArgs, GithubOpenPrResult,
+    GithubReposArgs, GithubReposResult,
 };
-use gitmini_core::types::{GithubLoginPoll, GithubLoginStart, GithubStatus};
+use gitmini_core::types::{GithubLoginPoll, GithubLoginStart, GithubRepo, GithubStatus};
 
 use super::{Args, Core, call};
 
@@ -58,6 +59,23 @@ pub async fn github_open_pr(
     call(
         "github_open_pr",
         gitmini_core::github::github_open_pr(&state, args.0),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn github_orgs(state: Core<'_>) -> Result<Vec<String>, AppError> {
+    call("github_orgs", gitmini_core::github::github_orgs(&state)).await
+}
+
+#[tauri::command]
+pub async fn github_create_repo(
+    state: Core<'_>,
+    args: Args<GithubCreateRepoArgs>,
+) -> Result<GithubRepo, AppError> {
+    call(
+        "github_create_repo",
+        gitmini_core::github::github_create_repo(&state, args.0),
     )
     .await
 }
