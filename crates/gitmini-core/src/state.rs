@@ -16,6 +16,7 @@ use crate::github::GithubState;
 use crate::read::log::GraphIndex;
 use crate::read::status::StatusSlots;
 use crate::repo::{Launcher, SystemLauncher};
+use crate::settings::ProxySetting;
 use crate::types::{GitError, GitInfoDto, OpId, RepoId, RepoOpState, Settings};
 use crate::undo::UndoSlot;
 use crate::watch::WatchHandle;
@@ -227,9 +228,21 @@ pub struct Shared {
     pub cfg: AppConfig,
     pub github: Arc<GithubState>,
     pub ops: Arc<OpRegistry>,
+    /// Effective proxy (`network.proxy.*`), read by each network git invocation.
+    proxy: RwLock<ProxySetting>,
 }
 
 impl Shared {
+    pub fn proxy(&self) -> ProxySetting {
+        self.proxy.read().unwrap().clone()
+    }
+
+    /// Applies a new proxy to git and to the GitHub HTTP client (rebuilt at its next use).
+    pub fn set_proxy(&self, proxy: ProxySetting) {
+        self.github.set_proxy(proxy.clone());
+        *self.proxy.write().unwrap() = proxy;
+    }
+
     pub(crate) fn activity_guard(&self) -> AppResult<OwnedRwLockReadGuard<()>> {
         self.update_gate
             .clone()
@@ -268,7 +281,10 @@ impl AppState {
     }
 
     pub fn with_git(cfg: AppConfig, sink: Arc<dyn EventSink>, git: GitInfo) -> Arc<Self> {
+        let (settings, recovered) = crate::settings::load(&cfg.config_dir);
+        let proxy = crate::settings::proxy_from(&settings);
         let github = Arc::new(GithubState::new(cfg.e2e));
+        github.set_proxy(proxy.clone());
         let shared = Arc::new(Shared {
             update_gate: Arc::new(tokio::sync::RwLock::new(())),
             sink,
@@ -276,8 +292,8 @@ impl AppState {
             cfg,
             github,
             ops: Arc::new(OpRegistry::default()),
+            proxy: RwLock::new(proxy),
         });
-        let (settings, recovered) = crate::settings::load(&shared.cfg.config_dir);
         Arc::new(Self {
             shared,
             repos: RwLock::new(HashMap::new()),

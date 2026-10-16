@@ -50,6 +50,9 @@ export function createMockTransport(): Transport {
       if (key === 'editor.command' && typeof a.value === 'string' && !a.value.includes('{path}')) {
         throw err('INVALID_ARGUMENT', "The command must contain {path}", { field: 'value' });
       }
+      if (key === 'network.proxy.url' && typeof a.value === 'string' && !/^(https?|socks5h?):\/\/[^\s/?#]+\/?$/i.test(a.value)) {
+        throw err('INVALID_ARGUMENT', 'Invalid proxy URL', { field: 'value' });
+      }
       settings[key] = a.value;
       return null;
     },

@@ -313,6 +313,14 @@ export default {
   'settings.editorCommand.hint': "Must contain {path}; {line} is optional. Leave empty for the system text editor.",
   'settings.editorCommand.missingPath': "The command must contain {path}.",
   'settings.dimUnreachable': "Dim unreachable commits",
+  'settings.proxy': 'Proxy',
+  'settings.proxy.system': 'System (environment and git config)',
+  'settings.proxy.none': 'No proxy',
+  'settings.proxy.manual': 'Manual',
+  'settings.proxy.url': 'Proxy URL',
+  'settings.proxy.url.placeholder': 'http://user:password@proxy:8080',
+  'settings.proxy.hint': 'Used for HTTPS remotes, GitHub and updates. SSH remotes are not affected.',
+  'settings.proxy.invalid': 'Expected scheme://host:port with http, https, socks5 or socks5h.',
   'settings.close': 'Close',
 
   //

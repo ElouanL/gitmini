@@ -13,7 +13,7 @@ pub mod keyring;
 pub mod pr;
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use secrecy::{ExposeSecret, SecretString};
@@ -73,7 +73,9 @@ pub struct GithubState {
     pub(crate) logins: Mutex<HashMap<String, PendingLogin>>,
     opener: Mutex<Option<UrlOpener>>,
     timeout: Mutex<Duration>,
-    client: OnceLock<Result<reqwest::Client, String>>,
+    /// HTTP client built at first use for `proxy`; emptied by `set_proxy`.
+    client: Mutex<Option<Result<reqwest::Client, String>>>,
+    proxy: Mutex<crate::settings::ProxySetting>,
 }
 
 impl GithubState {
@@ -97,7 +99,8 @@ impl GithubState {
             logins: Mutex::new(HashMap::new()),
             opener: Mutex::new(None),
             timeout: Mutex::new(api::REQUEST_TIMEOUT),
-            client: OnceLock::new(),
+            client: Mutex::new(None),
+            proxy: Mutex::new(Default::default()),
         }
     }
 

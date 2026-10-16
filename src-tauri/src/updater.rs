@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use base64::Engine;
+use gitmini_core::settings::ProxySetting;
 use serde::Serialize;
 use serde_json::Value;
 use tauri::{AppHandle, Manager, Runtime};
@@ -205,6 +206,19 @@ pub fn cleanup<R: Runtime>(app: &AppHandle<R>) {
 
 pub fn builder<R: Runtime>(app: &AppHandle<R>) -> tauri_plugin_updater::UpdaterBuilder {
     let builder = app.updater_builder().timeout(Duration::from_secs(30));
+    // same proxy as git and the GitHub API (`network.proxy.*`)
+    let proxy = app
+        .try_state::<std::sync::Arc<gitmini_core::AppState>>()
+        .map(|state| state.shared.proxy())
+        .unwrap_or_default();
+    let builder = match proxy {
+        ProxySetting::System => builder,
+        ProxySetting::None => builder.no_proxy(),
+        ProxySetting::Manual(url) => match url.parse() {
+            Ok(url) => builder.proxy(url),
+            Err(_) => builder,
+        },
+    };
     #[cfg(windows)]
     let builder = builder
         // This hook also runs before a failed ShellExecuteW. Keep repositories and Tauri

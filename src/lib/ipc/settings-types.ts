@@ -3,6 +3,7 @@
 
 export type ThemeSetting = 'system' | 'light' | 'dark';
 export type PullModeSetting = 'ff-only' | 'rebase';
+export type ProxyModeSetting = 'system' | 'none' | 'manual';
 
 export interface LayoutSetting {
   left: number;
@@ -23,6 +24,8 @@ export interface KnownSettings {
   'pull.mode': PullModeSetting;
   'editor.command': string | null;
   'graph.dimUnreachable': boolean;
+  'network.proxy.mode': ProxyModeSetting;
+  'network.proxy.url': string | null;
   layout: LayoutSetting;
 }
 
@@ -42,6 +45,8 @@ export const DEFAULT_SETTINGS: KnownSettings = {
   'pull.mode': 'ff-only',
   'editor.command': null,
   'graph.dimUnreachable': true,
+  'network.proxy.mode': 'system',
+  'network.proxy.url': null,
   layout: DEFAULT_LAYOUT,
 };
 

@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::{GithubReposResult, GithubState, GithubToken, bearer};
 use crate::error::{AppError, AppResult, ErrorCode};
+use crate::settings::ProxySetting;
 use crate::types::GithubRepo;
 
 pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
@@ -22,24 +23,38 @@ fn install_crypto_provider() {
     });
 }
 
-fn build_client(e2e: bool) -> Result<reqwest::Client, String> {
+fn build_client(e2e: bool, proxy: &ProxySetting) -> Result<reqwest::Client, String> {
     install_crypto_provider();
     let mut b = reqwest::Client::builder()
         .user_agent(format!("gitmini/{}", env!("CARGO_PKG_VERSION")))
         .timeout(REQUEST_TIMEOUT);
-    if e2e {
+    match proxy {
         // the mock is on 127.0.0.1: never via the proxy of the test machine
-        b = b.no_proxy();
+        _ if e2e => b = b.no_proxy(),
+        ProxySetting::None => b = b.no_proxy(),
+        ProxySetting::Manual(url) => {
+            b = b.proxy(reqwest::Proxy::all(url).map_err(|e| e.to_string())?);
+        }
+        ProxySetting::System => {}
     }
     b.build().map_err(|e| e.to_string())
 }
 
 impl GithubState {
     pub(crate) fn http(&self) -> AppResult<reqwest::Client> {
-        self.client
-            .get_or_init(|| build_client(self.e2e))
+        let mut slot = self.client.lock().unwrap();
+        slot.get_or_insert_with(|| build_client(self.e2e, &self.proxy.lock().unwrap()))
             .clone()
             .map_err(|e| AppError::internal(format!("Client HTTP indisponible : {e}")))
+    }
+
+    /// New proxy: the client is rebuilt at its next use (requests in progress keep the old one).
+    pub(crate) fn set_proxy(&self, proxy: ProxySetting) {
+        let mut current = self.proxy.lock().unwrap();
+        if *current != proxy {
+            *current = proxy;
+            *self.client.lock().unwrap() = None;
+        }
     }
 }
 
@@ -246,6 +261,20 @@ mod tests {
             GithubState::with_store(false, Box::new(crate::github::keyring::MemoryStore::new()));
         assert!(gh.http().is_ok());
         assert!(GithubState::new(true).http().is_ok());
+    }
+
+    #[test]
+    fn proxy_change_rebuilds_the_client() {
+        let gh =
+            GithubState::with_store(false, Box::new(crate::github::keyring::MemoryStore::new()));
+        assert!(gh.http().is_ok());
+        gh.set_proxy(ProxySetting::Manual("http://127.0.0.1:3128".into()));
+        assert!(gh.client.lock().unwrap().is_none());
+        assert!(gh.http().is_ok());
+        gh.set_proxy(ProxySetting::Manual("socks5h://127.0.0.1:1080".into()));
+        assert!(gh.http().is_ok());
+        gh.set_proxy(ProxySetting::None);
+        assert!(gh.http().is_ok());
     }
 
     #[test]
