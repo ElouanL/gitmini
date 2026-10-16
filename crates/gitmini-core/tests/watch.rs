@@ -384,6 +384,149 @@ async fn gitignore_change_is_taken_into_account() {
     assert_eq!(o.app.sink.count("repo:changed"), 0, "build/ is now ignored");
 }
 
+/// A tracked file matching `.gitignore` is still watched (Git only ignores untracked files): edits to it, and
+/// to a file of an ignored folder added to the index while the repository is open, are reported; an untracked
+/// file next to them is not. Both watch modes.
+#[tokio::test]
+async fn tracked_files_matching_gitignore_are_still_reported() {
+    for per_dir in [false, true] {
+        init();
+        let (_tmp, root) = tempdir();
+        let repo = root.join("proj");
+        init_repo(&repo, true);
+        std::fs::write(repo.join(".gitignore"), "*.lock\nvendor/\nlate/\n").unwrap();
+        std::fs::create_dir_all(repo.join("vendor/pkg")).unwrap();
+        std::fs::create_dir_all(repo.join("late")).unwrap();
+        std::fs::write(repo.join("Cargo.lock"), "1").unwrap();
+        std::fs::write(repo.join("vendor/pkg/lib.js"), "1").unwrap();
+        git(
+            &repo,
+            &["add", "-f", ".gitignore", "Cargo.lock", "vendor/pkg/lib.js"],
+        );
+        git(&repo, &["commit", "-q", "-m", "vendored"]);
+        let o = open_quiet(&root, &repo).await;
+        if per_dir {
+            restart_watcher(&o.repo, per_dir_config()).await;
+            settle(&o.app.sink, Duration::from_millis(400)).await;
+            o.app.sink.clear();
+            let watched = o.repo.watched_dirs();
+            assert!(
+                watched.contains(&repo.join("vendor/pkg")),
+                "folder holding a tracked file: {watched:?}"
+            );
+            assert!(!watched.contains(&repo.join("late")), "{watched:?}");
+        }
+
+        for (i, file) in ["Cargo.lock", "vendor/pkg/lib.js"].iter().enumerate() {
+            std::fs::write(repo.join(file), "2").unwrap();
+            wait_changed(&o.app.sink, 1).await;
+            assert_eq!(
+                kinds_after_settle(&o.app.sink).await,
+                k(&[Worktree]),
+                "per_dir={per_dir} #{i} {file}"
+            );
+            o.app.sink.clear();
+        }
+
+        std::fs::write(repo.join("vendor/pkg/untracked.js"), "x").unwrap();
+        std::fs::write(repo.join("other.lock"), "x").unwrap();
+        settle(&o.app.sink, QUIET).await;
+        assert_eq!(
+            o.app.sink.count("repo:changed"),
+            0,
+            "per_dir={per_dir}: untracked ignored files"
+        );
+
+        // a file of an ignored folder becomes tracked while the repository is open
+        std::fs::write(repo.join("late/new.js"), "1").unwrap();
+        git(&repo, &["add", "-f", "late/new.js"]);
+        wait_changed(&o.app.sink, 1).await;
+        settle(&o.app.sink, QUIET).await;
+        if per_dir {
+            wait_until(WAIT, "watch on the folder of a newly tracked file", || {
+                o.repo.watched_dirs().contains(&repo.join("late"))
+            })
+            .await;
+        }
+        o.app.sink.clear();
+        std::fs::write(repo.join("late/new.js"), "2").unwrap();
+        wait_changed(&o.app.sink, 1).await;
+        assert_eq!(
+            kinds_after_settle(&o.app.sink).await,
+            k(&[Worktree]),
+            "per_dir={per_dir}: newly tracked"
+        );
+    }
+}
+
+/// A change of `info/exclude` rebuilds the exclusion stack (and is itself reported), both watch modes.
+#[tokio::test]
+async fn info_exclude_change_is_taken_into_account() {
+    for per_dir in [false, true] {
+        init();
+        let (_tmp, root) = tempdir();
+        let repo = root.join("proj");
+        init_repo(&repo, true);
+        std::fs::create_dir_all(repo.join("build")).unwrap();
+        std::fs::create_dir_all(repo.join(".git/info")).unwrap();
+        let o = open_quiet(&root, &repo).await;
+        if per_dir {
+            restart_watcher(&o.repo, per_dir_config()).await;
+            settle(&o.app.sink, Duration::from_millis(400)).await;
+            o.app.sink.clear();
+        }
+        std::fs::write(repo.join("build/out.o"), "1").unwrap();
+        wait_changed(&o.app.sink, 1).await;
+        settle(&o.app.sink, QUIET).await;
+        o.app.sink.clear();
+
+        std::fs::write(repo.join(".git/info/exclude"), "build/\n").unwrap();
+        wait_changed(&o.app.sink, 1).await;
+        assert_eq!(
+            kinds_after_settle(&o.app.sink).await,
+            k(&[Worktree]),
+            "per_dir={per_dir}: the status must be reread"
+        );
+        o.app.sink.clear();
+        std::fs::write(repo.join("build/out.o"), "2").unwrap();
+        std::fs::write(repo.join("build/other.o"), "3").unwrap();
+        settle(&o.app.sink, QUIET).await;
+        assert_eq!(
+            o.app.sink.count("repo:changed"),
+            0,
+            "per_dir={per_dir}: build/ is now excluded"
+        );
+    }
+}
+
+/// A `core.excludesFile` set while the repository is open is taken into account (config reread).
+#[tokio::test]
+async fn config_excludes_file_change_is_taken_into_account() {
+    init();
+    let (_tmp, root) = tempdir();
+    let repo = root.join("proj");
+    init_repo(&repo, true);
+    let excludes = root.join("excludes");
+    std::fs::write(&excludes, "*.tmp\n").unwrap();
+    let o = open_quiet(&root, &repo).await;
+    std::fs::write(repo.join("x.tmp"), "1").unwrap();
+    wait_changed(&o.app.sink, 1).await;
+    settle(&o.app.sink, QUIET).await;
+    o.app.sink.clear();
+
+    git(
+        &repo,
+        &["config", "core.excludesFile", excludes.to_str().unwrap()],
+    );
+    wait_changed(&o.app.sink, 1).await;
+    assert_eq!(kinds_after_settle(&o.app.sink).await, k(&[Worktree]));
+    o.app.sink.clear();
+    std::fs::write(repo.join("x.tmp"), "2").unwrap();
+    std::fs::write(repo.join("y.tmp"), "3").unwrap();
+    settle(&o.app.sink, QUIET).await;
+    assert_eq!(o.app.sink.count("repo:changed"), 0, "*.tmp is now excluded");
+}
+
 //
 /// + ROB-12: the watcher of the related worktree monitors `<common_dir>`.
 #[tokio::test]
