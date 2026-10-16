@@ -1669,8 +1669,8 @@ fn env_dump_hook(file: &Path) -> String {
 }
 
 /// 10 "Network and Credentials": Token (`GITMINI_GH_TOKEN`) is only present in the subprocess environment
-/// git network concerned (trust model: its hooks `pre-push` see it), never in another subprocess
-/// git (merge, rebase) or their hooks. Hooks dump their environment: real proof, not the newspaper of the
+/// git network towards the GitHub host in https (trust model: its hooks `pre-push` see it), never in another
+/// subprocess git (merge, rebase), their hooks, or a network command towards another remote (here a local path). Hooks dump their environment: real proof, not the newspaper of the
 /// Runner (which filters the token by construction).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn rm_12_token_only_reaches_the_network_git_process_environment() {
@@ -1727,7 +1727,7 @@ async fn rm_12_token_only_reaches_the_network_git_process_environment() {
         );
     }
 
-    // 3. push: the network command receives the token, its hook pre-push sees it (trust model assumed)
+    // 3. push towards a local path (not the GitHub host): neither the token nor the credential inline
     remote_push(
         &app.state,
         push_args(&app, "origin", "feature", true, false),
@@ -1737,8 +1737,41 @@ async fn rm_12_token_only_reaches_the_network_git_process_environment() {
     let pre_push = dump("pre-push");
     assert!(pre_push.contains("ran:pre-push"));
     assert!(
-        pre_push.contains("GITMINI_GH_TOKEN=gho_envtest"),
-        "git push receives GITMINI_GH_TOKEN (the hook pre-push sees it)"
+        !pre_push.contains("GITMINI_GH_TOKEN") && !pre_push.contains("gho_envtest"),
+        "a push to a remote other than GitHub must not receive the token"
+    );
+    let rec = find_spawn(&fx.repo, "push").expect("push launched");
+    assert!(!rec.argv.iter().any(|a| a.starts_with("credential.")));
+
+    // 4. a GitHub URL rewritten by `insteadOf` towards the local path: git contacts the local path, no token
+    let origin = fx.origin.to_string_lossy().into_owned();
+    git(
+        &fx.repo,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/octo-test/alpha.git",
+        ],
+    );
+    git(
+        &fx.repo,
+        &[
+            "config",
+            &format!("url.{origin}.insteadOf"),
+            "https://github.com/octo-test/alpha.git",
+        ],
+    );
+    fx.commit("local2.txt", "local2", "local: add local2.txt");
+    reset();
+    remote_push(&app.state, push_args(&app, "origin", "main", false, false))
+        .await
+        .expect("push via insteadOf");
+    let pre_push = dump("pre-push");
+    assert!(pre_push.contains("ran:pre-push"));
+    assert!(
+        !pre_push.contains("GITMINI_GH_TOKEN"),
+        "insteadOf: the URL really contacted decides"
     );
 }
 

@@ -306,6 +306,7 @@ async fn token_is_only_in_the_environment_never_in_argv() {
         .expect("store");
     let mut opts = h.opts();
     opts.network = true;
+    opts.remote_urls = vec!["https://github.com/octo-test/alpha.git".into()];
     runner::run(&h.handle, &["push", "origin", "main"], opts)
         .await
         .unwrap();
@@ -332,4 +333,23 @@ async fn token_is_only_in_the_environment_never_in_argv() {
     // A non-networked command does not receive the token.
     runner::run(&h.handle, &["status"], h.opts()).await.unwrap();
     assert!(!h.record().env.contains_key("GITMINI_GH_TOKEN"));
+    // Nor does a network command towards another host, ssh or a local path.
+    for url in [
+        "https://gitlab.com/o/r.git",
+        "git@github.com:octo-test/alpha.git",
+        "/tmp/origin.git",
+    ] {
+        let mut opts = h.opts();
+        opts.network = true;
+        opts.remote_urls = vec![url.into()];
+        runner::run(&h.handle, &["push", "origin", "main"], opts)
+            .await
+            .unwrap();
+        let rec = h.record();
+        assert!(!rec.env.contains_key("GITMINI_GH_TOKEN"), "{url}");
+        assert!(
+            !rec.args.iter().any(|a| a.starts_with("credential.")),
+            "{url}"
+        );
+    }
 }
