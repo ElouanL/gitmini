@@ -68,8 +68,10 @@ jobs:
           cache-dependency-path: |
             pnpm-lock.yaml
             tests/e2e/pnpm-lock.yaml
+            tests/playwright/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm --dir tests/e2e install --frozen-lockfile
+      - run: pnpm --dir tests/playwright install --frozen-lockfile
       # `tauri::generate_context!` requires frontendDist (../dist) to exist at the src-tauri compilation.
       - name: "Directory dist (placeholder for clippy)"
         run: '[ -d dist ] || { mkdir -p dist && echo "<!doctype html>" > dist/index.html; }'
@@ -86,6 +88,11 @@ jobs:
           pnpm --dir tests/e2e run lint
           pnpm --dir tests/e2e run typecheck
           pnpm --dir tests/e2e run test
+      - name: Playwright harness (eslint, tsc, unit tests)
+        run: |
+          pnpm --dir tests/playwright run lint
+          pnpm --dir tests/playwright run typecheck
+          pnpm --dir tests/playwright run test
       - name: "Testing of GitHub mock, check-test-policy and perf tools"
         run: node --test "tests/support/**/*.test.mjs" "tests/perf/*.test.mjs"
       - name: "Update publishing tests"

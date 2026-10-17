@@ -1,0 +1,28 @@
+{
+  "name": "gitmini-e2e-playwright",
+  "version": "0.1.0",
+  "private": true,
+  "license": "GPL-3.0-only",
+  "type": "module",
+  "packageManager": "pnpm@10.6.1",
+  "scripts": {
+    "e2e": "playwright test",
+    "test": "node --import tsx --test \"support/*.test.ts\"",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "1.63.0",
+    "@types/node": "^22",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "tsx": "^4.23.15",
+    "typescript": "^6",
+    "typescript-eslint": "^8.71.0"
+  },
+  "description": "Playwright end-to-end test harness for gitmini (Chrome + gitmini-bridge)"
+}

@@ -45,6 +45,12 @@ e2e-web *ARGS: fixtures
     GITMINI_E2E_WORKERS=${GITMINI_E2E_WORKERS:-4} pnpm --dir tests/e2e exec wdio run wdio.web.conf.ts {{ARGS}}
     node scripts/check-ghosts.mjs
 
+# E2E with Playwright in local web mode (macOS / Linux), additional to e2e-web: same Chrome + `gitmini-bridge` stack, own harness in tests/playwright
+e2e-pw *ARGS: fixtures
+    VITE_GITMINI_GITHUB_LOGIN=1 pnpm build
+    cargo build -p gitmini-bridge
+    status=0; GITMINI_E2E_WORKERS=${GITMINI_E2E_WORKERS:-4} pnpm --dir tests/playwright exec playwright test {{ARGS}} || status=$?; node scripts/check-ghosts.mjs --artifacts "${GITMINI_E2E_ARTIFACTS:-tests/playwright/.artifacts}" || status=$?; exit $status
+
 # Perf measurements: (informative), boot and memory without WebDriver, then WDIO off macOS
 perf: fixtures
     cargo bench -p gitmini-core
@@ -66,5 +72,7 @@ lint:
     pnpm size
     pnpm --dir tests/e2e run lint
     pnpm --dir tests/e2e run typecheck
+    pnpm --dir tests/playwright run lint
+    pnpm --dir tests/playwright run typecheck
     just check-test-policy
     cargo deny check
