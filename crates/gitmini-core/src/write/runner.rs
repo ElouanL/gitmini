@@ -17,6 +17,8 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::events::{Event, EventSink, OpProgress};
+use crate::github::GithubState;
+use crate::github::credential;
 use crate::state::RepoHandle;
 
 const CAPTURE_LIMIT: usize = 4 * 1024 * 1024;
@@ -84,6 +86,9 @@ pub struct RunOpts {
     pub env: Vec<(String, String)>,
     /// Add `-c http.lowSpeed*` , `GIT_SSH_COMMAND` default and credential GitHub inline.
     pub network: bool,
+    /// URLs contacted by a network command (after `insteadOf`). The GitHub token and the credential inline are
+    /// only injected if one of them is on the GitHub host in https ([`credential::token_applies`]).
+    pub remote_urls: Vec<String>,
     /// `GIT_LFS_SKIP_SMUDGE=1`: `clone` and `fetch` only.
     pub lfs_skip_smudge: bool,
     /// rebase Subcommand: adds the five `-c rebase.*` (§3.2). `--empty=drop` is the caller's responsibility.
@@ -278,28 +283,39 @@ pub fn credential_args(base: &str) -> Vec<String> {
     ]
 }
 
+/// GitHub token of a network command: `GITMINI_GH_TOKEN` added to `opts.env` (read at most once per session)
+/// and returns the credential inline, only if one of `opts.remote_urls` is on the GitHub host in https. Any
+/// other remote (ssh, other host, local path, plain http) never receives the token.
+fn github_credentials(gh: &GithubState, opts: &mut RunOpts) -> Vec<String> {
+    let base = gh.credential_base();
+    if !opts.network
+        || !opts
+            .remote_urls
+            .iter()
+            .any(|u| credential::token_applies(&base, u))
+    {
+        return Vec::new();
+    }
+    if let Some(token) = gh.token_for_git() {
+        opts.env.push((
+            "GITMINI_GH_TOKEN".into(),
+            secrecy::ExposeSecret::expose_secret(&token).to_string(),
+        ));
+    }
+    if opts.env.iter().any(|(k, _)| k == "GITMINI_GH_TOKEN") {
+        credential_args(&base)
+    } else {
+        Vec::new()
+    }
+}
+
 //
 /// Run git in repository. An output code 0 is converted to `AppError` (table of §7.2, via
 /// `write::errors`), sauf `opts.allow_failure`.
 pub async fn run(repo: &RepoHandle, args: &[&str], opts: RunOpts) -> AppResult<GitOutput> {
     repo.ensure_present()?;
     let mut opts = opts;
-    if opts.network {
-        // credential GitHub inline: only if a token exists (read at most once per session).
-        if let Some(token) = repo.shared.github.token_for_git() {
-            opts.env.push((
-                "GITMINI_GH_TOKEN".into(),
-                secrecy::ExposeSecret::expose_secret(&token).to_string(),
-            ));
-        }
-    }
-    let base = repo.shared.github.credential_base();
-    let has_token = opts.env.iter().any(|(k, _)| k == "GITMINI_GH_TOKEN");
-    let cred = if opts.network && has_token {
-        credential_args(&base)
-    } else {
-        Vec::new()
-    };
+    let cred = github_credentials(&repo.shared.github, &mut opts);
     let ssh_defined = opts.network && ssh_command_defined(repo);
     let workdir = opts.cwd.clone().unwrap_or_else(|| repo.workdir.clone());
     let inv = build_invocation(
@@ -322,20 +338,7 @@ pub async fn run_global(
     opts: RunOpts,
 ) -> AppResult<GitOutput> {
     let mut opts = opts;
-    if opts.network
-        && let Some(token) = shared.github.token_for_git()
-    {
-        opts.env.push((
-            "GITMINI_GH_TOKEN".into(),
-            secrecy::ExposeSecret::expose_secret(&token).to_string(),
-        ));
-    }
-    let has_token = opts.env.iter().any(|(k, _)| k == "GITMINI_GH_TOKEN");
-    let cred = if opts.network && has_token {
-        credential_args(&shared.github.credential_base())
-    } else {
-        Vec::new()
-    };
+    let cred = github_credentials(&shared.github, &mut opts);
     let ssh_defined = opts.network && global_ssh_command_defined();
     let workdir = opts.cwd.clone();
     let inv = build_invocation(
@@ -879,6 +882,52 @@ mod tests {
             false,
         );
         assert!(!j.argv.iter().any(|a| a.starts_with("credential.")));
+    }
+
+    #[test]
+    fn github_token_only_for_https_remotes_on_the_github_host() {
+        let gh =
+            GithubState::with_store(false, Box::new(crate::github::keyring::MemoryStore::new()));
+        gh.store_token("gho_scoped").unwrap();
+        let opts = |urls: &[&str]| RunOpts {
+            network: true,
+            remote_urls: urls.iter().map(|u| u.to_string()).collect(),
+            ..Default::default()
+        };
+        let has_token = |o: &RunOpts| o.env.iter().any(|(k, _)| k == "GITMINI_GH_TOKEN");
+
+        let mut o = opts(&["https://github.com/o/r.git"]);
+        assert_eq!(
+            github_credentials(&gh, &mut o),
+            credential_args("https://github.com")
+        );
+        assert!(has_token(&o));
+        // `fetch --all`: one GitHub remote among others is enough
+        let mut o = opts(&["git@gitlab.com:o/r.git", "https://github.com/o/r.git"]);
+        assert!(!github_credentials(&gh, &mut o).is_empty());
+        assert!(has_token(&o));
+
+        for urls in [
+            &[][..],
+            &["git@github.com:o/r.git"][..],
+            &["ssh://git@github.com/o/r.git"][..],
+            &["http://github.com/o/r.git"][..],
+            &["https://gitlab.com/o/r.git"][..],
+            &["https://github.com.evil.test/o/r.git"][..],
+            &["/tmp/origin.git"][..],
+            &["file:///tmp/github.com/o/r.git"][..],
+        ] {
+            let mut o = opts(urls);
+            assert!(github_credentials(&gh, &mut o).is_empty(), "{urls:?}");
+            assert!(!has_token(&o), "{urls:?}");
+        }
+        // non-network command: never
+        let mut o = RunOpts {
+            network: false,
+            ..opts(&["https://github.com/o/r.git"])
+        };
+        assert!(github_credentials(&gh, &mut o).is_empty());
+        assert!(!has_token(&o));
     }
 
     #[test]

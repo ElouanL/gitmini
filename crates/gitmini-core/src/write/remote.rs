@@ -163,6 +163,23 @@ pub(crate) fn remote_urls(r: &gix::Repository, name: &str) -> Option<(String, St
     Some((fetch, push))
 }
 
+/// URLs that git contacts for the remote `name` in `direction`, rewritten by `insteadOf`/`pushInsteadOf` like
+/// git does: the runner only injects the GitHub token if one is https on the GitHub host.
+pub(crate) fn contacted_urls(
+    r: &gix::Repository,
+    name: &str,
+    direction: gix::remote::Direction,
+) -> Vec<String> {
+    r.find_remote(name)
+        .map(|remote| {
+            remote
+                .urls(direction)
+                .map(|u| u.to_bstring().to_str_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Upstream of a local branch: `branch.<b>.remote` and `branch.<b>.merge`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Upstream {
@@ -395,22 +412,27 @@ async fn fetch_locked(
     args: &RemoteFetchArgs,
     label: &str,
 ) -> AppResult<()> {
-    let remote_url = match &args.remote {
-        Some(name) => {
-            let name = name.clone();
-            Some(
-                read(repo, move |r| {
-                    require_remote(r, "remote", &name)?;
-                    Ok((
-                        name.clone(),
-                        remote_urls(r, &name).map(|(f, _)| f).unwrap_or_default(),
-                    ))
-                })
-                .await?,
-            )
+    let remote = args.remote.clone();
+    let (remote_url, urls) = read(repo, move |r| {
+        use gix::remote::Direction::Fetch;
+        match remote {
+            Some(name) => {
+                require_remote(r, "remote", &name)?;
+                let url = remote_urls(r, &name).map(|(f, _)| f).unwrap_or_default();
+                let urls = contacted_urls(r, &name, Fetch);
+                Ok((Some((name, url)), urls))
+            }
+            // `--all`: the URLs of every remote
+            None => Ok((
+                None,
+                remote_names(r)
+                    .iter()
+                    .flat_map(|n| contacted_urls(r, n, Fetch))
+                    .collect(),
+            )),
         }
-        None => None,
-    };
+    })
+    .await?;
     gh.ensure_loaded().await;
     let had_token = token_present(gh);
     g.declare(&[ChangeKindEv::Refs]);
@@ -424,7 +446,10 @@ async fn fetch_locked(
         Some(r) => a.push(r),
         None => a.push("--all"),
     }
-    let opts = net_opts(&args.op_id, g.cancel_token(), label.to_string(), true);
+    let opts = RunOpts {
+        remote_urls: urls,
+        ..net_opts(&args.op_id, g.cancel_token(), label.to_string(), true)
+    };
     match runner::run(repo, &a, opts).await {
         Ok(_) => Ok(()),
         Err(e) => Err(decorate_net_error(
@@ -509,6 +534,8 @@ struct PullPlan {
     /// `origin/main`.
     upstream_label: String,
     remote_url: String,
+    /// URLs contacted by the fetch of the upstream (after `insteadOf`).
+    fetch_urls: Vec<String>,
     mode: PullMode,
 }
 
@@ -559,6 +586,11 @@ fn plan_pull(
             .map(|(f, _)| f)
             .ok_or_else(no_upstream)?
     };
+    let fetch_urls = if upstream.remote == "." {
+        Vec::new()
+    } else {
+        contacted_urls(r, &upstream.remote, gix::remote::Direction::Fetch)
+    };
     let mode = requested
         .or_else(|| local_pull_rebase(r))
         .unwrap_or(state_mode);
@@ -569,6 +601,7 @@ fn plan_pull(
         tracking_ref,
         upstream_label,
         remote_url,
+        fetch_urls,
         mode,
     })
 }
@@ -631,7 +664,10 @@ async fn pull_locked(
             "--no-recurse-submodules",
             plan.upstream.remote.as_str(),
         ];
-        let opts = net_opts(&args.op_id, g.cancel_token(), label.clone(), true);
+        let opts = RunOpts {
+            remote_urls: plan.fetch_urls.clone(),
+            ..net_opts(&args.op_id, g.cancel_token(), label.clone(), true)
+        };
         if let Err(e) = runner::run(repo, &a, opts).await {
             return Err(decorate_net_error(
                 gh,
@@ -764,7 +800,7 @@ async fn push_locked(
         args.branch.clone(),
         remote_branch.clone(),
     );
-    let remote_url = read(repo, move |r| {
+    let (remote_url, urls) = read(repo, move |r| {
         require_remote(r, "remote", &remote)?;
         if !valid_branch_name(&branch) {
             return Err(AppError::invalid_argument(
@@ -787,7 +823,10 @@ async fn push_locked(
                     .with_detail("name", branch),
             );
         }
-        Ok(remote_urls(r, &remote).map(|(_, p)| p).unwrap_or_default())
+        Ok((
+            remote_urls(r, &remote).map(|(_, p)| p).unwrap_or_default(),
+            contacted_urls(r, &remote, gix::remote::Direction::Push),
+        ))
     })
     .await?;
 
@@ -809,6 +848,7 @@ async fn push_locked(
     let opts = RunOpts {
         command: Some("remote_push"),
         rejected_operation: Some("push"),
+        remote_urls: urls,
         ..net_opts(&args.op_id, g.cancel_token(), label.to_string(), false)
     };
     match runner::run(repo, &a, opts).await {
