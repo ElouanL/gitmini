@@ -436,6 +436,9 @@ pub struct RepoHandle {
     /// "fresh" config git: repository reopened when a config file has changed since the last reading
     /// (voir [`RepoHandle::thread_repo`]).
     pub config_fresh: Mutex<ConfigFresh>,
+    /// Cancellation of the line counts of the last `commit_details` computed: replaced (and the previous one
+    /// raised) at each new request, see [`RepoHandle::supersede_commit_stats`].
+    pub commit_stats_cancel: Mutex<Arc<AtomicBool>>,
 }
 
 // - fresh confection ( thread_repo )
@@ -593,6 +596,18 @@ impl RepoHandle {
     /// Number of config reloads per `thread_repo` since opening (tests).
     pub fn config_reload_count(&self) -> u32 {
         self.config_fresh.lock().unwrap().reloads
+    }
+
+    /// New cancellation flag for the line counts of a `commit_details`; raises the flag of the previous request:
+    /// a quick commit selection (arrow keys in the graph) does not pile up up to 2,000 diffs per commit passed.
+    pub fn supersede_commit_stats(&self) -> Arc<AtomicBool> {
+        let fresh = Arc::new(AtomicBool::new(false));
+        let previous = std::mem::replace(
+            &mut *self.commit_stats_cancel.lock().unwrap(),
+            fresh.clone(),
+        );
+        previous.store(true, Ordering::Relaxed);
+        fresh
     }
 
     pub fn workdir(&self) -> &Path {

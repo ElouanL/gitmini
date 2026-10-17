@@ -270,6 +270,7 @@ pub fn open_handle(shared: Arc<Shared>, id: RepoId, path: &Path) -> AppResult<Ar
         watch_ready: tokio::sync::watch::channel(false).0,
         closed: AtomicBool::new(false),
         config_fresh: Mutex::new(crate::state::ConfigFresh::new(config_stamp)),
+        commit_stats_cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
     };
     Ok(Arc::new(handle))
 }

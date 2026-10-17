@@ -1,4 +1,6 @@
 //! Details of commit and diff : `commit_details`, `diff_file` [R] .
+use std::sync::Arc;
+
 use gitmini_core::AppError;
 use gitmini_core::read::diff::{CommitDetailsArgs, DiffFileArgs};
 use gitmini_core::types::{CommitDetails, FileDiff};
@@ -9,7 +11,7 @@ use super::{Args, Core, call};
 pub async fn commit_details(
     state: Core<'_>,
     args: Args<CommitDetailsArgs>,
-) -> Result<CommitDetails, AppError> {
+) -> Result<Arc<CommitDetails>, AppError> {
     call(
         "commit_details",
         gitmini_core::read::diff::commit_details(&state, args.0),
