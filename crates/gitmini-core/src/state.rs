@@ -466,48 +466,109 @@ fn file_id(path: &Path, _meta: &std::fs::Metadata) -> u64 {
 }
 
 /// Imprint of config files that feed a repository: `<common_dir>/config`, `<git_dir>/config.worktree`,
-/// the global config (`GIT_CONFIG_GLOBAL`, otherwise `~/.gitconfig` and `$XDG_CONFIG_HOME/git/config`) and, if
-/// `GIT_CONFIG_SYSTEM` is set, the system config. An absent file has the fingerprint `None`.
+/// the global config (`GIT_CONFIG_GLOBAL`, otherwise `<home>/.gitconfig` and `$XDG_CONFIG_HOME/git/config`, the home
+/// being resolved like gix: `HOME`, then the user profile on Windows), `GIT_CONFIG_SYSTEM` if set and, once the
+/// repository is open, every file the loaded config was read from (`[include]` / `[includeIf]`, installation
+/// config...), see [`ConfigStamp::track_loaded`]. An absent file has the fingerprint `None`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct ConfigStamp(Vec<Option<FileStamp>>);
+pub struct ConfigStamp(Vec<(PathBuf, Option<FileStamp>)>);
 
 impl ConfigStamp {
+    /// Fingerprint of the default files only (before gix opens the repository).
     pub fn read(common_dir: &Path, git_dir: &Path) -> Self {
-        let env = |name: &str| {
-            std::env::var_os(name)
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from)
-        };
-        let mut files = vec![common_dir.join("config"), git_dir.join("config.worktree")];
-        match env("GIT_CONFIG_GLOBAL") {
-            Some(global) => files.push(global),
-            None => {
-                let home = env("HOME");
-                if let Some(home) = &home {
-                    files.push(home.join(".gitconfig"));
-                }
-                let xdg = env("XDG_CONFIG_HOME").or_else(|| home.map(|h| h.join(".config")));
-                if let Some(xdg) = xdg {
-                    files.push(xdg.join("git/config"));
-                }
+        Self::stat(default_config_files(common_dir, git_dir))
+    }
+
+    /// Same files re-read from disk, plus the default files (the environment may have changed).
+    fn refresh(&self, common_dir: &Path, git_dir: &Path) -> Self {
+        let mut files = default_config_files(common_dir, git_dir);
+        for (path, _) in &self.0 {
+            if !files.contains(path) {
+                files.push(path.clone());
             }
         }
-        if let Some(system) = env("GIT_CONFIG_SYSTEM") {
-            files.push(system);
+        Self::stat(files)
+    }
+
+    /// Default files plus the files `repo`'s config was actually read from (origin of each section): the
+    /// includes, and the global config wherever gix found it. Fingerprints already taken are kept (they predate
+    /// the reading of `repo`), only newly discovered files are read now.
+    pub fn track_loaded(self, common_dir: &Path, git_dir: &Path, repo: &gix::Repository) -> Self {
+        let mut files = default_config_files(common_dir, git_dir);
+        let config = repo.config_snapshot();
+        for section in config.plumbing().sections() {
+            if let Some(path) = &section.meta().path
+                && !files.contains(path)
+            {
+                files.push(path.clone());
+            }
         }
         ConfigStamp(
             files
-                .iter()
-                .map(|p| {
-                    std::fs::metadata(p).ok().map(|m| FileStamp {
-                        mtime: m.modified().ok(),
-                        len: m.len(),
-                        id: file_id(p, &m),
-                    })
+                .into_iter()
+                .map(|path| match self.0.iter().find(|(p, _)| *p == path) {
+                    Some((_, stamp)) => (path, stamp.clone()),
+                    None => {
+                        let stamp = file_stamp(&path);
+                        (path, stamp)
+                    }
                 })
                 .collect(),
         )
     }
+
+    fn stat(files: Vec<PathBuf>) -> Self {
+        ConfigStamp(
+            files
+                .into_iter()
+                .map(|path| {
+                    let stamp = file_stamp(&path);
+                    (path, stamp)
+                })
+                .collect(),
+        )
+    }
+
+    /// Files covered by the fingerprint (tests).
+    pub fn files(&self) -> impl Iterator<Item = &Path> {
+        self.0.iter().map(|(p, _)| p.as_path())
+    }
+}
+
+fn file_stamp(path: &Path) -> Option<FileStamp> {
+    std::fs::metadata(path).ok().map(|m| FileStamp {
+        mtime: m.modified().ok(),
+        len: m.len(),
+        id: file_id(path, &m),
+    })
+}
+
+/// Config files watched even when absent (creating one must be seen), see [`ConfigStamp`].
+fn default_config_files(common_dir: &Path, git_dir: &Path) -> Vec<PathBuf> {
+    let env = |name: &str| {
+        std::env::var_os(name)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    };
+    let mut files = vec![common_dir.join("config"), git_dir.join("config.worktree")];
+    match env("GIT_CONFIG_GLOBAL") {
+        Some(global) => files.push(global),
+        None => {
+            // `HOME`, otherwise the user profile (Windows without `HOME`): same resolution as gix
+            let home = gix::path::env::home_dir().filter(|h| !h.as_os_str().is_empty());
+            if let Some(home) = &home {
+                files.push(home.join(".gitconfig"));
+            }
+            let xdg = env("XDG_CONFIG_HOME").or_else(|| home.map(|h| h.join(".config")));
+            if let Some(xdg) = xdg {
+                files.push(xdg.join("git").join("config"));
+            }
+        }
+    }
+    if let Some(system) = env("GIT_CONFIG_SYSTEM") {
+        files.push(system);
+    }
+    files
 }
 
 /// gix repository reopened after a config change, and the fingerprint from which it was read.
@@ -575,22 +636,33 @@ impl RepoHandle {
     /// The 16MB gix object cache is set here for all readings (log, status, diff, stash...);
     /// `if_unset` respects an explicit caller setting and never replaces it.
     pub fn thread_repo(&self) -> gix::Repository {
-        let stamp = ConfigStamp::read(&self.common_dir, &self.git_dir);
         let mut slot = self.config_fresh.lock().unwrap();
+        let stamp = slot.stamp.refresh(&self.common_dir, &self.git_dir);
         if slot.stamp != stamp {
             let mut local = slot.fresh.as_ref().unwrap_or(&self.repo).to_thread_local();
-            match local.reload() {
+            slot.stamp = match local.reload() {
                 Ok(_) => {
+                    // the includes may have changed: follow the files this config was read from
+                    let stamp = stamp.track_loaded(&self.common_dir, &self.git_dir, &local);
                     slot.fresh = Some(local.into_sync());
                     slot.reloads += 1;
+                    stamp
                 }
-                Err(e) => tracing::warn!("reloading Git configuration: {e}"),
-            }
-            slot.stamp = stamp;
+                Err(e) => {
+                    tracing::warn!("reloading Git configuration: {e}");
+                    stamp
+                }
+            };
         }
         let mut repo = slot.fresh.as_ref().unwrap_or(&self.repo).to_thread_local();
         repo.object_cache_size_if_unset(OBJECT_CACHE_BYTES);
         repo
+    }
+
+    /// Files whose fingerprint `thread_repo` compares (tests).
+    pub fn config_files(&self) -> Vec<PathBuf> {
+        let slot = self.config_fresh.lock().unwrap();
+        slot.stamp.files().map(Path::to_path_buf).collect()
     }
 
     /// Number of config reloads per `thread_repo` since opening (tests).

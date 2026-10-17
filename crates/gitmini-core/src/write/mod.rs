@@ -3,6 +3,7 @@ pub mod branch;
 pub mod clone;
 pub mod commit;
 pub mod errors;
+pub mod identity;
 pub mod index;
 pub mod init;
 pub mod merge;
