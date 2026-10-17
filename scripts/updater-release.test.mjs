@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { configuration, publicKey, replaceSignature, verifySignature, validateManifest } from './updater-release.mjs';
+import {
+  artifactNames, configuration, publicKey, replaceSignature, resignAll, verifySignature, validateManifest,
+} from './updater-release.mjs';
 
 function signer() {
   const pair = generateKeyPairSync('ed25519');
@@ -150,5 +152,54 @@ test('re-signing an Authenticode-signed installer updates every manifest entry f
     // A stale signature (computed before Authenticode signing) is rejected.
     manifest.platforms['windows-x86_64'].signature = unsigned;
     assert.throws(() => validateManifest(manifest, dir, '0.1.0', key.pubkey, 'test/gitmini', 'v0.1.0'), /differs from the asset/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('artifact names list each updater asset once and reject unsafe names', () => {
+  const url = (file) => 'https://github.com/test/gitmini/releases/download/v0.1.0/' + file;
+  const setup = { url: url('gitmini_0.1.0_x64-setup.exe'), signature: 's' };
+  const manifest = { version: '0.1.0', platforms: {
+    'windows-x86_64': setup, 'windows-x86_64-nsis': setup,
+    'darwin-aarch64': { url: url('gitmini_aarch64.app.tar.gz'), signature: 's' },
+  } };
+  assert.deepEqual(artifactNames(manifest), ['gitmini_0.1.0_x64-setup.exe', 'gitmini_aarch64.app.tar.gz']);
+  assert.throws(() => artifactNames({ platforms: {} }), /no updater artifact/);
+  for (const name of ['..', '-rf', 'a%2Fb', 'a%20b']) {
+    assert.throws(() => artifactNames({ platforms: { 'linux-x86_64': { url: url(name), signature: 's' } } }), /Invalid asset name/);
+  }
+});
+
+test('re-signing replaces every throwaway build signature with the release key, and only that', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gitmini-updater-resign-all-'));
+  try {
+    const throwaway = signer();
+    const release = signer();
+    const url = (file) => 'https://github.com/test/gitmini/releases/download/v0.1.0/' + file;
+    const files = { 'darwin-aarch64': 'a.app.tar.gz', 'darwin-x86_64': 'b.app.tar.gz', 'windows-x86_64': 'c-setup.exe',
+      'windows-x86_64-nsis': 'c-setup.exe', 'linux-x86_64': 'd.AppImage', 'linux-x86_64-deb': 'd.deb' };
+    const manifest = { version: '0.1.0', platforms: {} };
+    for (const [target, file] of Object.entries(files)) {
+      const signature = throwaway.sign(Buffer.from(file));
+      writeFileSync(join(dir, file), file);
+      writeFileSync(join(dir, file + '.sig'), signature);
+      manifest.platforms[target] = { url: url(file), signature };
+    }
+    const check = () => validateManifest(manifest, dir, '0.1.0', release.pubkey, 'test/gitmini', 'v0.1.0');
+    // As built: the manifest is coherent but signed with a key the application does not trust.
+    assert.throws(check, /different public key/);
+    const names = artifactNames(manifest);
+    assert.deepEqual(names, ['a.app.tar.gz', 'b.app.tar.gz', 'c-setup.exe', 'd.AppImage', 'd.deb']);
+    // One artifact left with its build signature fails, naming nothing else.
+    for (const file of names.slice(1)) writeFileSync(join(dir, file + '.sig'), release.sign(Buffer.from(file)) + '\n');
+    assert.throws(() => resignAll(structuredClone(manifest), dir, '0.1.0', release.pubkey), /different public key/);
+    writeFileSync(join(dir, 'a.app.tar.gz.sig'), release.sign(Buffer.from('a.app.tar.gz'), '0.0.9'));
+    assert.throws(() => resignAll(structuredClone(manifest), dir, '0.1.0', release.pubkey), /must cover the built version: a\.app/);
+    writeFileSync(join(dir, 'a.app.tar.gz.sig'), release.sign(Buffer.from('a.app.tar.gz')));
+    writeFileSync(join(dir, 'e.rpm.sig'), throwaway.sign(Buffer.from('e.rpm')));
+    assert.throws(() => resignAll(structuredClone(manifest), dir, '0.1.0', release.pubkey), /without a manifest entry: e\.rpm\.sig/);
+    rmSync(join(dir, 'e.rpm.sig'));
+    resignAll(manifest, dir, '0.1.0', release.pubkey);
+    assert.equal(manifest.platforms['windows-x86_64'].signature, manifest.platforms['windows-x86_64-nsis'].signature);
+    check();
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

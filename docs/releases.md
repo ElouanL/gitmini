@@ -2,6 +2,8 @@
 
 Release builds are produced from an existing `vX.Y.Z` tag. The workspace and root npm package versions must match the tag. The first version is `v0.1.0`.
 
+The tag must point to a commit of `master` whose `ci` check succeeded: the `prepare` job refuses any other tag before anything is built. Merge the release pull request, wait for `ci` to pass on `master`, then tag that commit. Every job then builds the commit resolved by `prepare`, even if the tag is moved during the run.
+
 ## Signing policy
 
 macOS uses an ad hoc signature (`bundle.macOS.signingIdentity = "-"`), without a paid Apple account or notarization. Test both Apple Silicon and Intel packages where available. The first launch needs explicit authorization in **System Settings → Privacy & Security**.
@@ -22,10 +24,22 @@ Configure GitHub Actions:
 
 | Kind | Name | Value |
 | --- | --- | --- |
-| Secret | `TAURI_SIGNING_PRIVATE_KEY` | Contents of the private key file |
-| Secret | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password chosen during generation |
+| `release` environment secret | `TAURI_SIGNING_PRIVATE_KEY` | Contents of the private key file |
+| `release` environment secret | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Password chosen during generation |
 | Variable | `GITMINI_UPDATER_PUBKEY` | Contents of the public `.pub` file |
 | Optional variable | `GITMINI_UPDATER_ENDPOINT` | Custom HTTPS update endpoint |
+
+### The `release` environment
+
+Only the `sign-updater` job reads the private key. The build jobs run third-party npm and Cargo code (`pnpm install`, Vite, build scripts), so they sign the updater artifacts with a throwaway key generated for the run; `sign-updater` installs no npm package, signs every updater artifact again with the release key and replaces the signatures in the draft and in `latest.json`. A signature left over from the build fails that job and the `assets` verification.
+
+Create the environment once, in **Settings → Environments → New environment**, named `release`:
+
+1. Add the two `TAURI_SIGNING_PRIVATE_KEY*` secrets above as environment secrets, then delete any repository secrets of the same names, which every job could read.
+2. Enable **Required reviewers** and add the maintainers allowed to approve a release. The `sign-updater` job then waits for an approval after the builds.
+3. Under **Deployment branches and tags**, choose **Selected branches and tags** and add the tag rule `v*` and the branch rule `master` (a manual dispatch runs on the branch it is started from), so that no other ref can reach the key.
+
+The workflow cannot create or check these protections: until the reviewers are set, `sign-updater` runs without waiting.
 
 By default, the workflow uses `https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/latest.json`. GitHub sign-in is disabled and does not require an OAuth client ID. No Apple or GPG signing secrets are required, and Windows signing is optional (see [Windows signing with SignPath](#windows-signing-with-signpath)).
 
@@ -33,7 +47,7 @@ The release workflow requires the updater key and public-key configuration. Ordi
 
 ## Build and verify
 
-Push the existing version tag or dispatch the `release` workflow with its name. The workflow creates a **draft**, builds macOS ARM64/x64 DMGs and updater archives, Windows x64 NSIS installer, and Linux x64 AppImage/DEB. It verifies the platform matrix, package signatures, signed versions, asset URLs and SHA256 checksums. Failed jobs leave the release unpublished. When SignPath is configured, the `sign-windows` job also replaces the Windows installer with its Authenticode-signed version before the checks run.
+Push the existing version tag or dispatch the `release` workflow with its name. The workflow creates a **draft**, builds macOS ARM64/x64 DMGs and updater archives, Windows x64 NSIS installer, and Linux x64 AppImage/DEB. It verifies the platform matrix, package signatures, signed versions, asset URLs and SHA256 checksums. Failed jobs leave the release unpublished. When SignPath is configured, the `sign-windows` job also replaces the Windows installer with its Authenticode-signed version before the updater signatures are computed. The `sign-updater` job waits for the `release` environment approval: review the run (tag, commit, build logs) before approving it.
 
 Run these smoke tests before publishing:
 
@@ -65,9 +79,17 @@ For each release the workflow:
 1. Uploads the unsigned installer from the Windows build as the `unsigned-windows-installer` artifact, so SignPath can verify that it comes from this workflow run.
 2. Submits it to SignPath and waits up to two hours for the manual approval described in the code signing policy.
 3. Verifies that the returned installer has a valid, timestamped Authenticode signature.
-4. Signs it again with the Tauri updater key (`--app-version` bound to the release), because the updater signature covers the installer's bytes, and replaces the installer, its `.sig` and the matching `latest.json` entries in the draft (`scripts/updater-release.mjs resign`).
+4. Replaces the installer in the draft. Its updater signature is computed afterwards by `sign-updater`, because it covers the installer's bytes.
 
 The `assets` job then verifies the final manifest and signatures exactly as for an unsigned release. If a step fails, re-run the failed jobs: the sign job starts again from the unsigned artifact.
+
+## Pinned tools
+
+The release depends on exact versions, updated deliberately rather than picked up by a new run:
+
+- **Actions** are pinned by commit SHA, with the version in a trailing comment. Dependabot (`.github/dependabot.yml`) proposes updates weekly, a week after their release; check the upstream changes before merging. `dtolnay/rust-toolchain` has no releases and is pinned to a commit of its `master` branch.
+- **Rust**: `rust-toolchain.toml` pins the toolchain. When raising it, update `RUST_TOOLCHAIN` in the three workflows too; the `lint` job of `ci` fails if they differ. The `msrv` job checks the workspace with the oldest supported version, the `rust-version` of `Cargo.toml`.
+- **Tauri CLI**: `TAURI_CLI_VERSION` in the three workflows (also checked by `lint`). Prefer a version published at least two weeks earlier.
 
 ## Publish
 

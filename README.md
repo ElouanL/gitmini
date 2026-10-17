@@ -22,7 +22,7 @@ Automatic updates use a separate cryptographic signature. They are supported by 
 
 ## Develop
 
-Prerequisites: Git ≥ 2.30, Rust stable (minimum 1.88), Node.js 24 or newer, pnpm 10.6.1, Python 3, Bash and [just](https://just.systems). Install the platform's Tauri build dependencies and Tauri CLI 2:
+Prerequisites: Git ≥ 2.30, Rust stable (minimum 1.93), Node.js 24 or newer, pnpm 10.6.1, Python 3, Bash and [just](https://just.systems). Install the platform's Tauri build dependencies and Tauri CLI 2:
 
 ```sh
 cargo install tauri-cli --locked --version '^2'

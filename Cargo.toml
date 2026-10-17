@@ -5,7 +5,7 @@ members = ["crates/gitmini-core", "crates/gitmini-bridge", "src-tauri"]
 [workspace.package]
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.93"
 license = "GPL-3.0-only"
 
 # Development Profiles: Most ~40 test binaries link gix + tauri; without complete debugging information

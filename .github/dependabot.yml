@@ -1,0 +1,16 @@
+# Workflow actions are pinned by commit SHA (the version is in the trailing comment); Dependabot proposes the
+# updates. The Rust toolchain and tauri-cli versions are updated by hand (see docs/releases.md).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # Leave new releases a week to be retracted before proposing them.
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
