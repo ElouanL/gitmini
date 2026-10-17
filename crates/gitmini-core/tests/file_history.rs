@@ -879,6 +879,9 @@ async fn the_command_is_reachable_through_the_generic_dispatcher() {
 /// `git clone --depth <depth>` of `t` (all branches), in a folder beside it.
 fn shallow_clone(t: &TestRepo, depth: u32) -> PathBuf {
     let dest = t.root().join(format!("shallow-{depth}"));
+    // `canonicalize` gives `\\?\C:\...` on Windows, which git cannot read as a `file://` URL.
+    let src = t.path.display().to_string();
+    let src = src.strip_prefix(r"\\?\").unwrap_or(&src);
     t.git_in(
         t.root(),
         &[
@@ -887,7 +890,7 @@ fn shallow_clone(t: &TestRepo, depth: u32) -> PathBuf {
             "--no-single-branch",
             "--depth",
             &depth.to_string(),
-            &format!("file://{}", t.path.display()),
+            &format!("file://{src}"),
             dest.to_str().unwrap(),
         ],
     );
