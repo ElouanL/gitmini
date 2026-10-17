@@ -861,7 +861,7 @@ async fn st_busy_when_the_write_lock_is_taken() {
     let o = t.open().await;
     let guard = o
         .repo
-        .begin_write(gitmini_core::state::WriteSpec::new("stage", "Indexation"))
+        .begin_write(gitmini_core::state::WriteSpec::new("stage", "Stage"))
         .unwrap();
     let err = stash_save(&o.state, save_args(&o, None, true, false, None))
         .await

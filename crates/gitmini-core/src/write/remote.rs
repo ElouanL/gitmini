@@ -228,7 +228,7 @@ pub fn valid_branch_name(name: &str) -> bool {
 }
 
 fn invalid_remote(field: &str, name: &str) -> AppError {
-    AppError::invalid_argument(field, format!("Nom de remote invalide : « {name} »."))
+    AppError::invalid_argument(field, format!("Invalid remote name: \"{name}\"."))
 }
 
 /// `INVALID_ARGUMENT { field }` if `name` is not the name of an existing remote.
@@ -902,7 +902,7 @@ pub async fn remote_add(state: &AppState, args: RemoteAddArgs) -> AppResult<Remo
         }
         let url = args.url.trim().to_string();
         if url.is_empty() || url.starts_with('-') || url.chars().any(char::is_control) {
-            return Err(AppError::invalid_argument("url", "URL invalide."));
+            return Err(AppError::invalid_argument("url", "Invalid URL."));
         }
         let name = args.name.clone();
         read(&repo, move |r| {

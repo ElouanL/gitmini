@@ -96,7 +96,7 @@ export function matchesKeys(e: KeyEventLike, keys: string, mac = isMac()): boole
   return normKey(e.key) === normKey(p.key);
 }
 
-/** Localized display: `⌘⇧F` under macOS, `Ctrl+Maj+F` elsewhere. */
+/** Localized display: `⌘⇧F` under macOS, `Ctrl+Shift+F` elsewhere. */
 export function formatKeys(keys: string, mac = isMac()): string {
   const p = parseKeys(keys);
   const key = p.key.length === 1 ? p.key.toUpperCase() : (p.key === 'Escape' ? "Escape" : p.key === 'Enter' ? "Enter" : p.key);
@@ -104,7 +104,7 @@ export function formatKeys(keys: string, mac = isMac()): string {
   const parts: string[] = [];
   if (p.mod || p.ctrl) parts.push('Ctrl');
   if (p.alt) parts.push('Alt');
-  if (p.shift) parts.push('Maj');
+  if (p.shift) parts.push('Shift');
   parts.push(key);
   return parts.join('+');
 }

@@ -77,7 +77,7 @@ describe("Shortcuts (03 Keyboard)", () => {
 
   it("localized display", () => {
     expect(formatKeys('Mod+Shift+F', true)).toBe('⇧⌘F');
-    expect(formatKeys('Mod+Shift+F', false)).toBe('Ctrl+Maj+F');
+    expect(formatKeys('Mod+Shift+F', false)).toBe('Ctrl+Shift+F');
   });
 
   it("input field detected (Mod+Z does not cancel the strike)", () => {

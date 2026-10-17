@@ -404,7 +404,7 @@ async fn execute(
             AppError::new(ErrorCode::GitMissing, "git is not found in the PATH.")
                 .with_details(serde_json::json!({}))
         } else {
-            AppError::internal(format!("Impossible de lancer git : {e}"))
+            AppError::internal(format!("Could not launch git: {e}"))
         }
     })?;
     let pid = child.id();
@@ -519,8 +519,7 @@ async fn execute(
             }
         }
     };
-    let status =
-        status.map_err(|e| AppError::internal(format!("Attente de git impossible : {e}")))?;
+    let status = status.map_err(|e| AppError::internal(format!("Could not wait for git: {e}")))?;
     let stdout_bytes = out_task.await.unwrap_or_default();
     let (stderr_text, _) = err_task.await.map_err(AppError::from)?;
     let code = status.code().unwrap_or(-1);

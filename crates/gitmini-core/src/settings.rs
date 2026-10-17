@@ -168,7 +168,7 @@ pub fn validate(key: &str, value: &Value) -> AppResult<Value> {
                 )
             {
                 return Err(invalid_value(
-                    "workspace.tabs : chemins ou onglet actif invalides.",
+                    "workspace.tabs: invalid paths or active tab.",
                 ));
             }
             Ok(value.clone())

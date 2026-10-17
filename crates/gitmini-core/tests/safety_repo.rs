@@ -80,7 +80,7 @@ async fn busy_without_op_id_omits_running_op_id() {
     let (_tmp, _repo, o) = opened_repo().await;
     let guard = o
         .repo
-        .begin_write(WriteSpec::new("stage", "Indexation"))
+        .begin_write(WriteSpec::new("stage", "Stage"))
         .unwrap();
     let err = o
         .repo
@@ -126,7 +126,7 @@ async fn finish_emits_one_repo_changed_with_the_declared_kinds() {
     let (_tmp, _repo, o) = opened_repo().await;
     let mut guard = o
         .repo
-        .begin_write(WriteSpec::new("stage", "Indexation").declares(&[Index]))
+        .begin_write(WriteSpec::new("stage", "Stage").declares(&[Index]))
         .unwrap();
     guard.declare(&[Worktree]);
     assert_eq!(
@@ -181,15 +181,11 @@ async fn dropping_a_guard_without_finish_still_releases_and_emits() {
     {
         let _guard = o
             .repo
-            .begin_write(WriteSpec::new("stage", "Indexation").declares(&[Index]))
+            .begin_write(WriteSpec::new("stage", "Stage").declares(&[Index]))
             .unwrap();
     }
     assert_eq!(o.app.sink.count("repo:changed"), 1);
-    assert!(
-        o.repo
-            .begin_write(WriteSpec::new("stage", "Indexation"))
-            .is_ok()
-    );
+    assert!(o.repo.begin_write(WriteSpec::new("stage", "Stage")).is_ok());
 }
 
 /// Echo of a writing: decided by the date of the files, not by the time of arrival of the event.
@@ -254,9 +250,7 @@ async fn write_echo_is_decided_by_file_mtime_not_by_arrival_time() {
     // buffer_if_writing: only during writing
     let mut kinds = set(&[Refs]);
     assert!(!h.buffer_if_writing(&mut kinds));
-    let guard = h
-        .begin_write(WriteSpec::new("stage", "Indexation"))
-        .unwrap();
+    let guard = h.begin_write(WriteSpec::new("stage", "Stage")).unwrap();
     assert!(h.buffer_if_writing(&mut kinds));
     assert!(kinds.is_empty());
     o.app.sink.clear();
@@ -406,7 +400,7 @@ async fn op_cancel_cancels_the_registered_operation() {
     // a command no [L] has no token
     let plain = o
         .repo
-        .begin_write(WriteSpec::new("stage", "Indexation"))
+        .begin_write(WriteSpec::new("stage", "Stage"))
         .unwrap();
     assert!(plain.cancel_token().is_none());
     plain.finish();
@@ -601,7 +595,7 @@ async fn git_missing_or_too_old_is_refused_by_repo_open_and_write_commands() {
     let handle =
         gitmini_core::repo::open_handle(state.shared.clone(), state.next_repo_id(), &repo).unwrap();
     let err = handle
-        .begin_write(WriteSpec::new("stage", "Indexation"))
+        .begin_write(WriteSpec::new("stage", "Stage"))
         .err()
         .unwrap();
     assert_eq!(err.code, ErrorCode::GitTooOld);
@@ -623,7 +617,7 @@ async fn git_missing_or_too_old_is_refused_by_repo_open_and_write_commands() {
     let handle =
         gitmini_core::repo::open_handle(state.shared.clone(), state.next_repo_id(), &repo).unwrap();
     let err = handle
-        .begin_write(WriteSpec::new("stage", "Indexation"))
+        .begin_write(WriteSpec::new("stage", "Stage"))
         .err()
         .unwrap();
     assert_eq!(err.code, ErrorCode::GitMissing);
@@ -634,7 +628,7 @@ async fn git_missing_or_too_old_is_refused_by_repo_open_and_write_commands() {
     state
         .repo(info.id)
         .unwrap()
-        .begin_write(WriteSpec::new("stage", "Indexation"))
+        .begin_write(WriteSpec::new("stage", "Stage"))
         .unwrap()
         .finish();
 }

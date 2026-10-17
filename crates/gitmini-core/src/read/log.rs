@@ -1632,7 +1632,7 @@ fn parse_target(args: &LogPageArgs) -> AppResult<Target> {
     }
     if let Some(c) = &args.cursor {
         let (epoch, offset) = decode_cursor(c)
-            .ok_or_else(|| AppError::invalid_argument("cursor", "Curseur invalide."))?;
+            .ok_or_else(|| AppError::invalid_argument("cursor", "Invalid cursor."))?;
         return Ok(Target::Cursor { epoch, offset });
     }
     if let Some(r) = args.start_row {
@@ -1640,7 +1640,7 @@ fn parse_target(args: &LogPageArgs) -> AppResult<Target> {
     }
     if let Some(o) = &args.around_oid {
         let id = ObjectId::from_hex(o.as_bytes())
-            .map_err(|_| AppError::invalid_argument("aroundOid", "Oid invalide."))?;
+            .map_err(|_| AppError::invalid_argument("aroundOid", "Invalid oid."))?;
         return Ok(Target::Around(id));
     }
     Ok(Target::First)
