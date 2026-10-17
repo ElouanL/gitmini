@@ -97,6 +97,13 @@ export const builtinActions: ActionDef[] = [
     run: () => openRepoFromPicker(),
   },
   {
+    id: 'repo.init',
+    label: () => t('action.repoInit'),
+    run: async () => {
+      await openDialog('repo-init-dialog');
+    },
+  },
+  {
     id: 'repo.clone',
     label: () => t('action.repoClone'),
     run: async () => {

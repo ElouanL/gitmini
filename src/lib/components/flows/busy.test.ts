@@ -58,8 +58,11 @@ describe.each(KINDS)('pendant un %s in progress', (kind) => {
     for (const id of ['cherry-pick', 'revert', 'interactive-rebase']) expect(disabled(ancestor, id), `commit/${id}`).toBe(true);
     const stranger = '0'.repeat(37) + '3e7';
     expect(disabled(resolveMenu({ menu: 'commit', oid: stranger, oids: [stranger] }), 'rebase-onto'), 'commit/rebase-onto').toBe(true);
+    // `squash` needs at least two consecutive commits of HEAD.
+    const pair = resolveMenu({ menu: 'commit', oid: fxOid(50), oids: [fxOid(50), fxOid(49)] });
+    expect(disabled(pair, 'squash'), 'commit/squash').toBe(true);
     graph.selectCommits([fxOid(50)]);
-    for (const id of ['drag.rebase', 'drag.merge', 'pick.cherry-pick', 'pick.revert']) {
+    for (const id of ['drag.rebase', 'drag.merge', 'pick.cherry-pick', 'pick.revert', 'rebase.squash']) {
       expect(actionDisabledReason(getAction(id)!), id).toBe(expected(kind));
     }
   });

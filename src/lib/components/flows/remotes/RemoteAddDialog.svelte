@@ -5,6 +5,7 @@
   // (`remote-add-tab-github`, repositories selector + https/ssh protocol). Default name `origin` if it is free, otherwise empty
   // (Tab GitHub: the owner). `remote_add`; if "fetch after addition" is checked, `remote_fetch` of the new remote.
   import type { DialogProps } from '$lib/dialogs/registry';
+  import { runAction } from '$lib/actions/registry';
   import { commands } from '$lib/ipc/commands';
   import { featureFlags } from '$lib/feature-flags';
   import type { AppError, GithubRepo } from '$lib/ipc/types';
@@ -35,6 +36,12 @@
     selected = repo;
     error = null;
     if (!nameTouched) name = defaultRemoteName(existing, ownerOf(repo.fullName));
+  }
+
+  /** `remote-add-create-github-btn`: no existing repository fits → create one (`github-publish-dialog`). */
+  function createOnGithub(): void {
+    close();
+    void runAction('github.publish');
   }
 
   function setTab(next: Tab): void {
@@ -103,6 +110,7 @@
     <div class="field">
       <GithubRepoPicker selected={selected?.fullName ?? null} onselect={pick} />
       {#if error?.field === 'repo'}<span class="field-error" data-testid="remote-add-error" role="alert">{error.message}</span>{/if}
+      <button type="button" class="btn create-github" data-testid="remote-add-create-github-btn" onclick={createOnGithub}>{t('github.publish.fromRemoteAdd')}</button>
     </div>
     <div class="field">
       <label for="remote-add-protocol">{t('remotes.add.protocol')}</label>
@@ -159,6 +167,10 @@
 </DialogShell>
 
 <style>
+  .create-github {
+    align-self: flex-start;
+    margin-top: 6px;
+  }
   .tabs {
     display: flex;
     gap: 2px;

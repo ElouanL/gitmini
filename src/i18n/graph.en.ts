@@ -62,6 +62,7 @@ export default {
   'graph.multi.title.other': "{n} commits selected",
   'graph.multi.cherryPick': "Cherry-pick {n} commits",
   'graph.multi.revert': "Revert {n} commits",
+  'graph.multi.squash': "Squash {n} commits...",
   'graph.multi.compare': 'Changes between the two commits',
   'graph.multi.compareHint': "{from} → {to}",
   'graph.multi.unavailable': 'Action not available',

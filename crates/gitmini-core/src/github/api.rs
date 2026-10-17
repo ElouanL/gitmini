@@ -1,4 +1,4 @@
-//! Client HTTP (`reqwest`, rustls/ring): `GET /user`, `GET /user/repos`, 401 management (10 "GitHub: API").
+//! Client HTTP (`reqwest`, rustls/ring): `GET /user`, `GET /user/repos`, `GET /user/orgs`, `POST` repos, 401 management (10 "GitHub: API").
 use std::sync::{Arc, Once, OnceLock};
 use std::time::Duration;
 
@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::{GithubReposResult, GithubState, GithubToken, bearer};
 use crate::error::{AppError, AppResult, ErrorCode};
+use crate::settings::ProxySetting;
 use crate::types::GithubRepo;
 
 pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
@@ -22,24 +23,38 @@ fn install_crypto_provider() {
     });
 }
 
-fn build_client(e2e: bool) -> Result<reqwest::Client, String> {
+fn build_client(e2e: bool, proxy: &ProxySetting) -> Result<reqwest::Client, String> {
     install_crypto_provider();
     let mut b = reqwest::Client::builder()
         .user_agent(format!("gitmini/{}", env!("CARGO_PKG_VERSION")))
         .timeout(REQUEST_TIMEOUT);
-    if e2e {
+    match proxy {
         // the mock is on 127.0.0.1: never via the proxy of the test machine
-        b = b.no_proxy();
+        _ if e2e => b = b.no_proxy(),
+        ProxySetting::None => b = b.no_proxy(),
+        ProxySetting::Manual(url) => {
+            b = b.proxy(reqwest::Proxy::all(url).map_err(|e| e.to_string())?);
+        }
+        ProxySetting::System => {}
     }
     b.build().map_err(|e| e.to_string())
 }
 
 impl GithubState {
     pub(crate) fn http(&self) -> AppResult<reqwest::Client> {
-        self.client
-            .get_or_init(|| build_client(self.e2e))
+        let mut slot = self.client.lock().unwrap();
+        slot.get_or_insert_with(|| build_client(self.e2e, &self.proxy.lock().unwrap()))
             .clone()
             .map_err(|e| AppError::internal(format!("HTTP client unavailable: {e}")))
+    }
+
+    /// New proxy: the client is rebuilt at its next use (requests in progress keep the old one).
+    pub(crate) fn set_proxy(&self, proxy: ProxySetting) {
+        let mut current = self.proxy.lock().unwrap();
+        if *current != proxy {
+            *current = proxy;
+            *self.client.lock().unwrap() = None;
+        }
     }
 }
 
@@ -124,6 +139,7 @@ fn check(gh: &GithubState, base: &str, reply: Reply) -> AppResult<Reply> {
             )
             .with_details(json!({ "reason": "forbidden", "host": host })))
         }
+        422 => Err(validation_failed(&reply)),
         s => {
             let host = host_of(base);
             Err(AppError::new(
@@ -135,6 +151,42 @@ fn check(gh: &GithubState, base: &str, reply: Reply) -> AppResult<Reply> {
     }
 }
 
+/// 422 "Validation Failed": `ALREADY_EXISTS { what: "github-repo" }` when the name is taken, otherwise
+/// `INVALID_ARGUMENT { field }` with GitHub's message (`errors[].message`, else `message`).
+fn validation_failed(reply: &Reply) -> AppError {
+    let v: Value = serde_json::from_slice(&reply.body).unwrap_or(Value::Null);
+    let first = v
+        .get("errors")
+        .and_then(Value::as_array)
+        .and_then(|a| a.first());
+    let field = first
+        .and_then(|e| e.get("field"))
+        .and_then(Value::as_str)
+        .unwrap_or("name")
+        .to_string();
+    let message = first
+        .and_then(|e| e.get("message"))
+        .and_then(Value::as_str)
+        .or_else(|| v.get("message").and_then(Value::as_str))
+        .unwrap_or("GitHub refused the request.")
+        .to_string();
+    if message.to_ascii_lowercase().contains("already exists") {
+        return AppError::already_exists("github-repo", message).with_detail("field", field);
+    }
+    AppError::invalid_argument(&field, message)
+}
+
+fn authed(
+    gh: &GithubState,
+    token: &GithubToken,
+    req: reqwest::RequestBuilder,
+) -> reqwest::RequestBuilder {
+    req.header(ACCEPT, "application/vnd.github+json")
+        .header("X-GitHub-Api-Version", API_VERSION)
+        .header(AUTHORIZATION, bearer(token))
+        .timeout(gh.request_timeout())
+}
+
 /// `GET <apiBase><path>` with `Authorization: Bearer`.
 pub(crate) async fn authed_get(
     gh: &GithubState,
@@ -142,13 +194,24 @@ pub(crate) async fn authed_get(
     path: &str,
 ) -> AppResult<Reply> {
     let base = gh.api_base();
-    let req = gh
-        .http()?
-        .get(format!("{base}{path}"))
-        .header(ACCEPT, "application/vnd.github+json")
-        .header("X-GitHub-Api-Version", API_VERSION)
-        .header(AUTHORIZATION, bearer(token))
-        .timeout(gh.request_timeout());
+    let req = authed(gh, token, gh.http()?.get(format!("{base}{path}")));
+    let reply = send(req, &base).await?;
+    check(gh, &base, reply)
+}
+
+/// `POST <apiBase><path>` with a JSON body and `Authorization: Bearer`.
+pub(crate) async fn authed_post_json(
+    gh: &GithubState,
+    token: &GithubToken,
+    path: &str,
+    body: &Value,
+) -> AppResult<Reply> {
+    let base = gh.api_base();
+    let req = authed(
+        gh,
+        token,
+        gh.http()?.post(format!("{base}{path}")).json(body),
+    );
     let reply = send(req, &base).await?;
     check(gh, &base, reply)
 }
@@ -181,10 +244,7 @@ pub async fn list_repos(
             "perPage must be between 1 and 100.",
         ));
     }
-    gh.ensure_loaded().await;
-    let Some(token) = gh.token_for_git() else {
-        return Err(auth_required_github("Connection to GitHub required."));
-    };
+    let token = require_token(gh).await?;
     let path = format!(
         "/user/repos?sort=updated&affiliation=owner,collaborator,organization_member&per_page={per_page}&page={page}"
     );
@@ -193,6 +253,73 @@ pub async fn list_repos(
     let repos = parse_repos(&reply.json(&gh.api_base())?)
         .ok_or_else(|| invalid_response(&gh.api_base()))?;
     Ok(GithubReposResult { repos, has_more })
+}
+
+async fn require_token(gh: &Arc<GithubState>) -> AppResult<GithubToken> {
+    gh.ensure_loaded().await;
+    gh.token_for_git()
+        .ok_or_else(|| auth_required_github("Connection to GitHub required."))
+}
+
+/// `GET /user/orgs`, one page of 100: the organizations where a repository can be created.
+pub async fn list_orgs(gh: &Arc<GithubState>) -> AppResult<Vec<String>> {
+    let token = require_token(gh).await?;
+    let reply = authed_get(gh, &token, "/user/orgs?per_page=100").await?;
+    let v = reply.json(&gh.api_base())?;
+    let orgs = v
+        .as_array()
+        .ok_or_else(|| invalid_response(&gh.api_base()))?
+        .iter()
+        .filter_map(|o| o.get("login").and_then(Value::as_str))
+        .map(String::from)
+        .collect();
+    Ok(orgs)
+}
+
+/// GitHub repository name: 1 to 100 ASCII letters, digits, `-`, `_`, `.`; never `.` or `..`.
+pub(crate) fn valid_repo_name(name: &str) -> bool {
+    (1..=100).contains(&name.len())
+        && name != "."
+        && name != ".."
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'))
+}
+
+/// `POST /user/repos`, or `POST /orgs/<owner>/repos` when `owner` is an organization. Empty repository
+/// (`auto_init: false`): the local branch is pushed onto it.
+pub async fn create_repo(
+    gh: &Arc<GithubState>,
+    owner: Option<&str>,
+    name: &str,
+    private: bool,
+    description: Option<&str>,
+) -> AppResult<GithubRepo> {
+    if !valid_repo_name(name) {
+        return Err(AppError::invalid_argument(
+            "name",
+            "Repository names can only contain letters, digits, '-', '_' and '.'.",
+        ));
+    }
+    if let Some(o) = owner
+        && (o.is_empty() || !o.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+    {
+        return Err(AppError::invalid_argument("owner", "Invalid owner."));
+    }
+    let token = require_token(gh).await?;
+    let mut body = json!({ "name": name, "private": private, "auto_init": false });
+    if let Some(d) = description.map(str::trim).filter(|d| !d.is_empty()) {
+        body["description"] = json!(d);
+    }
+    let path = match owner {
+        Some(o) => format!("/orgs/{o}/repos"),
+        None => "/user/repos".to_string(),
+    };
+    let reply = authed_post_json(gh, &token, &path, &body).await?;
+    let v = reply.json(&gh.api_base())?;
+    parse_repos(&Value::Array(vec![v]))
+        .and_then(|mut r| r.pop())
+        .ok_or_else(|| invalid_response(&gh.api_base()))
 }
 
 #[derive(Deserialize)]
@@ -249,6 +376,20 @@ mod tests {
     }
 
     #[test]
+    fn proxy_change_rebuilds_the_client() {
+        let gh =
+            GithubState::with_store(false, Box::new(crate::github::keyring::MemoryStore::new()));
+        assert!(gh.http().is_ok());
+        gh.set_proxy(ProxySetting::Manual("http://127.0.0.1:3128".into()));
+        assert!(gh.client.lock().unwrap().is_none());
+        assert!(gh.http().is_ok());
+        gh.set_proxy(ProxySetting::Manual("socks5h://127.0.0.1:1080".into()));
+        assert!(gh.http().is_ok());
+        gh.set_proxy(ProxySetting::None);
+        assert!(gh.http().is_ok());
+    }
+
+    #[test]
     fn link_header_next_detection() {
         assert!(link_has_next(
             r#"<https://api.github.com/user/repos?page=2>; rel="next", <https://api.github.com/user/repos?page=3>; rel="last""#
@@ -278,6 +419,46 @@ mod tests {
         assert_eq!(repos[1].default_branch, "main");
         assert_eq!(repos[1].updated_at, "");
         assert!(parse_repos(&json!({"message": "Bad credentials"})).is_none());
+    }
+
+    #[test]
+    fn repo_names() {
+        for ok in ["a", "my-repo", "x.y_z", "A1"] {
+            assert!(valid_repo_name(ok), "{ok}");
+        }
+        for bad in ["", ".", "..", "a b", "é", "a/b", &"x".repeat(101)] {
+            assert!(!valid_repo_name(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn validation_failed_maps_name_taken_and_other_errors() {
+        let gh = GithubState::new(true);
+        let reply = |body: Value| Reply {
+            status: 422,
+            link: None,
+            body: serde_json::to_vec(&body).unwrap(),
+        };
+        let e = check(
+            &gh,
+            "https://api.github.com",
+            reply(json!({ "message": "Repository creation failed.",
+                "errors": [{ "resource": "Repository", "code": "custom", "field": "name",
+                             "message": "name already exists on this account" }] })),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(e.code, ErrorCode::AlreadyExists);
+        assert_eq!(e.detail("what").unwrap(), "github-repo");
+        let e = check(
+            &gh,
+            "https://api.github.com",
+            reply(json!({ "message": "Validation Failed" })),
+        )
+        .err()
+        .unwrap();
+        assert_eq!(e.code, ErrorCode::InvalidArgument);
+        assert_eq!(e.message, "Validation Failed");
     }
 
     #[test]

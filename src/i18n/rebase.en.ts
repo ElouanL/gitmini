@@ -3,6 +3,7 @@ export default {
   //
   'rebase.op.start': 'Rebase',
   'rebase.op.interactive': 'Interactive rebase',
+  'rebase.op.squash': 'Squash commits',
   'rebase.op.continue': 'Rebase: continue',
   'rebase.op.skip': "Rebase: skip",
 
@@ -13,6 +14,8 @@ export default {
   'rebase.menu.rebaseOntoCommit': "Rebase {head} on this commit",
   'rebase.menu.interactiveOnto': "Interactive rebase of \"{head}\" on \"{name}\"...",
   'rebase.menu.interactiveFrom': 'Interactive rebase from here...',
+  'rebase.menu.squash.one': 'Squash {n} commit...',
+  'rebase.menu.squash.other': 'Squash {n} commits...',
 
   // ── Dialogue de rebase simple
   'rebase.confirm.title': 'Rebase',
@@ -86,4 +89,23 @@ export default {
   'rebase.todo.error.merges': 'Range containing merges: not supported in v1.',
   'rebase.todo.error.notInHead': 'This commit does not belong to the current branch.',
   'rebase.todo.error.dirty': "Tracked changes prevent rebase: enable Autostash.",
+
+  // ── Squash of selected commits
+  'rebase.squash.title.one': 'Squash {n} commit',
+  'rebase.squash.title.other': 'Squash {n} commits',
+  'rebase.squash.message': 'Message of the resulting commit',
+  'rebase.squash.confirm': 'Squash',
+  'rebase.squash.rewriteNote.one': "{n} later commit will be rewritten as well.",
+  'rebase.squash.rewriteNote.other': "{n} later commits will be rewritten as well.",
+  'rebase.squash.pushedWarning.one': "{n} of these commits is already on a remote. A force push (with lease) will be required and may affect your collaborators.",
+  'rebase.squash.pushedWarning.other': "{n} of these commits are already on a remote. A force push (with lease) will be required and may affect your collaborators.",
+  'rebase.squash.stale': "The branch changed since the selection: nothing was squashed. Select the commits again.",
+  'rebase.squash.loadFailed': 'Could not read the selected commits.',
+  'rebase.squash.done.one': "{n} commit squashed",
+  'rebase.squash.done.other': "{n} commits squashed into one",
+  'rebase.squash.disabled.too-few': 'Select at least two commits.',
+  'rebase.squash.disabled.not-consecutive': 'The selected commits must be consecutive.',
+  'rebase.squash.disabled.merge': 'Squashing is not available when the range up to HEAD contains a merge commit.',
+  'rebase.squash.disabled.not-in-head': 'The selected commits do not belong to the current branch.',
+  'rebase.squash.disabled.detached': 'Squashing requires being on a branch.',
 } satisfies Record<string, string>;

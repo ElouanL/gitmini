@@ -73,6 +73,8 @@
     "allow-github-logout",
     "allow-github-repos",
     "allow-github-open-pr",
+    "allow-github-orgs",
+    "allow-github-create-repo",
     "allow-repo-clone",
     "allow-repo-init",
     "allow-undo-last",

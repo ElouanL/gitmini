@@ -12,7 +12,7 @@
   import Icon from '$lib/components/ui/Icon.svelte';
 
   import { commands } from '$lib/ipc/commands';
-  import type { AppError, TodoAction, TodoPreview } from '$lib/ipc/types';
+  import type { TodoAction, TodoPreview } from '$lib/ipc/types';
 
   import { toast } from '$lib/stores/toast.svelte';
 
@@ -20,7 +20,7 @@
   import { isNoopSlot, moveBy, moveToSlot, slotAt, type RowRect } from './reorder';
   import { buildRows, summarize, toTodoItems, validateTodo, TODO_ACTIONS, type TodoProblem } from './todo';
   import { noteRebaseAutostash } from './autostash';
-  import { targetLabel } from './rebase-state';
+  import { loadErrorText, startErrorText, targetLabel } from './rebase-state';
 
   interface Props {
     /** rebase base (`main`, oid of the parent of a commit); `null` = `--root`. */
@@ -56,19 +56,6 @@
   const canStart = $derived(preview !== null && rows.length > 0 && problem === null && !running && !op.busy && loadError === null);
 
   // ── Chargement
-
-  function loadErrorText(e: AppError): string {
-    switch (e.code) {
-      case 'DETACHED_HEAD':
-        return t('rebase.todo.error.detached');
-      case 'UNSUPPORTED_MERGES':
-        return t('rebase.todo.error.merges');
-      case 'INVALID_ARGUMENT':
-        return e.details?.reason === 'not-in-head' ? t('rebase.todo.error.notInHead') : e.message;
-      default:
-        return e.message;
-    }
-  }
 
   async function load(): Promise<void> {
     const repoId = repo.id;
@@ -220,16 +207,6 @@
   }
 
   // ── Launch
-
-  function startErrorText(e: AppError): string | null {
-    if (e.code === 'INVALID_ARGUMENT' && e.details?.field === 'todo') {
-      const reason = e.details.reason;
-      return reason === 'all-dropped' || reason === 'first-is-squash' || reason === 'empty-message' ? t(`rebase.todo.error.${reason}`) : e.message;
-    }
-    if (e.code === 'DIRTY_WORKTREE') return t('rebase.todo.error.dirty');
-    if (e.code === 'DETACHED_HEAD' || e.code === 'UNSUPPORTED_MERGES') return loadErrorText(e);
-    return null;
-  }
 
   async function start(): Promise<void> {
     const repoId = repo.id;

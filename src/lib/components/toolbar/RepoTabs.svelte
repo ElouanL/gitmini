@@ -21,6 +21,8 @@
     })),
     { key: 'open', label: t('toolbar.openRepo'), testid: 'repo-tabs-open-btn', separatorBefore: repo.recents.length > 0,
       disabled: repo.opening, onselect: () => { menuOpen = false; void runAction('repo.open'); } },
+    { key: 'init', label: t('toolbar.initRepo'), testid: 'repo-tabs-init-btn',
+      onselect: () => { menuOpen = false; void runAction('repo.init'); } },
     { key: 'clone', label: t('toolbar.cloneRepo'), testid: 'repo-tabs-clone-btn',
       onselect: () => { menuOpen = false; void runAction('repo.clone'); } },
   ]);

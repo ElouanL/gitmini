@@ -45,6 +45,8 @@ pub fn defaults() -> Settings {
     m.insert("graph.dimUnreachable".into(), json!(true));
     m.insert("layout".into(), default_layout());
     m.insert("workspace.tabs".into(), Value::Null);
+    m.insert("network.proxy.mode".into(), json!("system"));
+    m.insert("network.proxy.url".into(), Value::Null);
     m
 }
 
@@ -130,6 +132,25 @@ pub fn parse_editor_template(template: &str) -> AppResult<Vec<String>> {
     Ok(argv)
 }
 
+/// Checks a proxy URL: `http`, `https`, `socks5` or `socks5h` scheme, a host, no path.
+fn parse_proxy_url(s: &str) -> AppResult<url::Url> {
+    let invalid = || {
+        invalid_value(
+            "Invalid proxy URL: expected scheme://host:port (http, https, socks5 or socks5h).",
+        )
+    };
+    let url = url::Url::parse(s).map_err(|_| invalid())?;
+    if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h")
+        || url.host_str().is_none_or(str::is_empty)
+        || !matches!(url.path(), "" | "/")
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(invalid());
+    }
+    Ok(url)
+}
+
 /// Validates and normalizes a key value. Unknown key (including `recent`) → `INVALID_ARGUMENT { field: "key" }`,
 /// valeur invalide → `INVALID_ARGUMENT { field: "value" }`. `editor.command` vide vaut `null`.
 pub fn validate(key: &str, value: &Value) -> AppResult<Value> {
@@ -149,6 +170,18 @@ pub fn validate(key: &str, value: &Value) -> AppResult<Value> {
             )),
         },
         "graph.dimUnreachable" => expect_bool(key, value),
+        "network.proxy.mode" => expect_enum(key, value, &["system", "none", "manual"]),
+        "network.proxy.url" => match value {
+            Value::Null => Ok(Value::Null),
+            Value::String(s) if s.trim().is_empty() => Ok(Value::Null),
+            Value::String(s) => {
+                parse_proxy_url(s.trim())?;
+                Ok(json!(s.trim()))
+            }
+            _ => Err(invalid_value(
+                "Invalid value for network.proxy.url: expected text or null.",
+            )),
+        },
         "layout" => expect_layout(value),
         "workspace.tabs" => {
             if value.is_null() {
@@ -326,7 +359,11 @@ pub async fn settings_set(state: &AppState, args: SettingsSetArgs) -> AppResult<
     update_file(&state.shared.cfg.config_dir, true, |map| {
         map.insert(args.key.clone(), value.clone());
     })?;
+    let proxy_changed = args.key.starts_with("network.proxy.");
     current.insert(args.key, value);
+    if proxy_changed {
+        state.shared.set_proxy(proxy_from(&current));
+    }
     Ok(())
 }
 
@@ -335,6 +372,30 @@ pub fn editor_command(state: &AppState) -> Option<String> {
     match state.settings.lock().unwrap().get("editor.command") {
         Some(Value::String(s)) if !s.trim().is_empty() => Some(s.clone()),
         _ => None,
+    }
+}
+
+/// Effective proxy for network traffic (git, GitHub API, updater).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ProxySetting {
+    /// Environment, `~/.gitconfig` and OS proxy (behavior without gitmini setting).
+    #[default]
+    System,
+    /// Direct connection, even if a proxy is configured elsewhere.
+    None,
+    /// Explicit proxy URL (validated by `validate`).
+    Manual(String),
+}
+
+/// `network.proxy.*` of a settings map. `manual` without URL is `System`.
+pub fn proxy_from(settings: &Settings) -> ProxySetting {
+    match settings.get("network.proxy.mode").and_then(Value::as_str) {
+        Some("none") => ProxySetting::None,
+        Some("manual") => match settings.get("network.proxy.url") {
+            Some(Value::String(url)) if !url.is_empty() => ProxySetting::Manual(url.clone()),
+            _ => ProxySetting::System,
+        },
+        _ => ProxySetting::System,
     }
 }
 

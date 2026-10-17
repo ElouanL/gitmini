@@ -51,6 +51,9 @@ export function createMockTransport(): Transport {
       if (key === 'editor.command' && typeof a.value === 'string' && !a.value.includes('{path}')) {
         throw err('INVALID_ARGUMENT', "The command must contain {path}", { field: 'value' });
       }
+      if (key === 'network.proxy.url' && typeof a.value === 'string' && !/^(https?|socks5h?):\/\/[^\s/?#]+\/?$/i.test(a.value)) {
+        throw err('INVALID_ARGUMENT', 'Invalid proxy URL', { field: 'value' });
+      }
       settings[key] = a.value;
       return null;
     },
@@ -68,6 +71,7 @@ export function createMockTransport(): Transport {
     repo_init: async (a) => {
       const path = String(a.path);
       await sleep(60);
+      if (path.includes('existing')) throw err('ALREADY_EXISTS', `${path} is already a Git repository.`, { what: 'repo', path });
       initialized.add(path);
       return repoInfo(path);
     },
@@ -124,6 +128,23 @@ export function createMockTransport(): Transport {
       }
       emit('repo:changed', { repoId: 1, kinds: ['head', 'refs'] });
       return refs;
+    },
+    rebase_todo_preview: (a) => {
+      // `upstream..HEAD` of the linear mock log (HEAD = 60, origin/main = 58): oldest first.
+      const from = a.upstream ? Number.parseInt(String(a.upstream), 16) + 1 : 1;
+      const rows = makeLogPage(60, 60).rows.filter((r) => Number.parseInt(r.oid, 16) >= from).reverse();
+      return {
+        base: a.upstream ?? null, head: oid(60),
+        items: rows.map((r) => ({
+          oid: r.oid, shortOid: r.oid.slice(0, 7), summary: r.summary, message: r.summary, author: 'Alice Martin',
+          pushed: Number.parseInt(r.oid, 16) <= 58,
+        })),
+      };
+    },
+    rebase_interactive_start: async () => {
+      await sleep(600);
+      emit('repo:changed', { repoId: 1, kinds: ['head', 'refs'] });
+      return { head: { branch: 'main', oid: oid(60), detached: false, unborn: false } };
     },
     rebase_abort: () => {
       opState = null;

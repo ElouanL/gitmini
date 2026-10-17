@@ -19,6 +19,7 @@ use crate::error::{AppError, AppResult, ErrorCode};
 use crate::events::{Event, EventSink, OpProgress};
 use crate::github::GithubState;
 use crate::github::credential;
+use crate::settings::ProxySetting;
 use crate::state::RepoHandle;
 
 const CAPTURE_LIMIT: usize = 4 * 1024 * 1024;
@@ -168,6 +169,17 @@ pub fn clear_spawn_journal() {
     journal().lock().unwrap().clear();
 }
 
+/// `http.proxy=scheme://user:pass@host` → `http.proxy=scheme://***@host` (journal and logs).
+fn mask_proxy_credentials(arg: &str) -> String {
+    if let Some(url) = arg.strip_prefix("http.proxy=")
+        && let Some((scheme, rest)) = url.split_once("://")
+        && let Some((_, host)) = rest.rsplit_once('@')
+    {
+        return format!("http.proxy={scheme}://***@{host}");
+    }
+    arg.to_string()
+}
+
 fn record_spawn(rec: SpawnRecord) {
     let mut j = journal().lock().unwrap();
     if j.len() >= 500 {
@@ -199,6 +211,7 @@ pub fn build_invocation(
     opts: &RunOpts,
     credential_args: &[String],
     ssh_command_defined: bool,
+    proxy: &ProxySetting,
 ) -> Invocation {
     let mut argv: Vec<String> = Vec::new();
     if let Some(dir) = workdir {
@@ -220,6 +233,13 @@ pub fn build_invocation(
     if opts.network {
         for c in NETWORK_CONFIG {
             push_c(c);
+        }
+        // `http.proxy` takes precedence over `~/.gitconfig` and over the `*_proxy` variables;
+        // empty, it disables the proxy (`remote.<name>.proxy` still wins).
+        match proxy {
+            ProxySetting::System => {}
+            ProxySetting::None => push_c("http.proxy="),
+            ProxySetting::Manual(url) => push_c(&format!("http.proxy={url}")),
         }
     }
     // credential_args is already a suite of `-c`, `valeur`
@@ -325,6 +345,7 @@ pub async fn run(repo: &RepoHandle, args: &[&str], opts: RunOpts) -> AppResult<G
         &opts,
         &cred,
         ssh_defined,
+        &repo.shared.proxy(),
     );
     let sink = Some(repo.shared.sink.clone());
     let span = tracing::info_span!("git.spawn", sub = %inv.logical_args.first().map(String::as_str).unwrap_or(""));
@@ -348,6 +369,7 @@ pub async fn run_global(
         &opts,
         &cred,
         ssh_defined,
+        &shared.proxy(),
     );
     let span = tracing::info_span!("git.spawn", sub = %inv.logical_args.first().map(String::as_str).unwrap_or(""));
     tracing::Instrument::instrument(execute(inv, opts, Some(shared.sink.clone()), None), span).await
@@ -528,7 +550,7 @@ async fn execute(
 
     record_spawn(SpawnRecord {
         argv: std::iter::once(inv.program.to_string_lossy().into_owned())
-            .chain(inv.argv.iter().cloned())
+            .chain(inv.argv.iter().map(|a| mask_proxy_credentials(a)))
             .collect(),
         env: filtered_env(&inv.env_set),
         exit_code: status.code(),
@@ -739,7 +761,70 @@ mod tests {
             &opts,
             cred,
             ssh,
+            &ProxySetting::System,
         )
+    }
+
+    fn inv_proxy(args: &[&str], network: bool, proxy: ProxySetting) -> Invocation {
+        build_invocation(
+            Path::new("git"),
+            Some(Path::new("/repo")),
+            args,
+            &RunOpts {
+                network,
+                ..Default::default()
+            },
+            &[],
+            false,
+            &proxy,
+        )
+    }
+
+    #[test]
+    fn proxy_setting_maps_to_http_proxy() {
+        let has = |i: &Invocation, v: &str| i.argv.windows(2).any(|w| w == ["-c", v]);
+        let any_proxy = |i: &Invocation| i.argv.iter().any(|a| a.starts_with("http.proxy"));
+        let url = "http://u:p@proxy:3128";
+        assert!(has(
+            &inv_proxy(&["fetch"], true, ProxySetting::Manual(url.into())),
+            &format!("http.proxy={url}")
+        ));
+        assert!(has(
+            &inv_proxy(&["fetch"], true, ProxySetting::None),
+            "http.proxy="
+        ));
+        assert!(!any_proxy(&inv_proxy(
+            &["fetch"],
+            true,
+            ProxySetting::System
+        )));
+        assert!(!any_proxy(&inv_proxy(
+            &["status"],
+            false,
+            ProxySetting::Manual(url.into())
+        )));
+        assert!(!any_proxy(&inv_proxy(
+            &["status"],
+            false,
+            ProxySetting::None
+        )));
+        // the proxy is not a logical argument (`details.args`)
+        let i = inv_proxy(&["fetch"], true, ProxySetting::Manual(url.into()));
+        assert_eq!(i.logical_args, ["fetch"]);
+    }
+
+    #[test]
+    fn proxy_credentials_are_masked_in_the_journal() {
+        assert_eq!(
+            mask_proxy_credentials("http.proxy=http://u:p@proxy:3128"),
+            "http.proxy=http://***@proxy:3128"
+        );
+        assert_eq!(
+            mask_proxy_credentials("http.proxy=http://proxy:3128"),
+            "http.proxy=http://proxy:3128"
+        );
+        assert_eq!(mask_proxy_credentials("http.proxy="), "http.proxy=");
+        assert_eq!(mask_proxy_credentials("fetch"), "fetch");
     }
 
     fn env_get<'a>(i: &'a Invocation, k: &str) -> Option<&'a str> {

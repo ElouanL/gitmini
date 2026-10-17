@@ -1,10 +1,10 @@
 <script lang="ts">
   // Settings (03): `settings-dialog`, `settings-theme-select`, `settings-pull-mode-select`, `settings-editor-command-input`,
-  // `settings-graph-dim-unreachable-checkbox`, `settings-close-btn`. Each change calls `settings_set` (debum 300 ms).
+  // `settings-graph-dim-unreachable-checkbox`, `settings-proxy-mode-select`, `settings-proxy-url-input`, `settings-close-btn`. Each change calls `settings_set` (debum 300 ms).
   import type { DialogProps } from '$lib/dialogs/registry';
   import { onMount } from 'svelte';
   import { updates } from '$lib/updates/global.svelte';
-  import type { PullModeSetting, ThemeSetting } from '$lib/ipc/settings-types';
+  import type { ProxyModeSetting, PullModeSetting, ThemeSetting } from '$lib/ipc/settings-types';
   import { app } from '$lib/stores/app.svelte';
   import { t } from '$i18n/index';
   import DialogShell from '../dialogs-base/DialogShell.svelte';
@@ -15,7 +15,13 @@
   let editorError = $state<string | null>(null);
   let editorToken = 0;
 
+  let proxyDraft = $state(app.get('network.proxy.url') ?? '');
+  let proxyError = $state<string | null>(null);
+  let proxyToken = 0;
+  const PROXY_URL = /^(https?|socks5h?):\/\/[^\s/?#]+\/?$/i;
+
   const theme = $derived(app.get('theme'));
+  const proxyMode = $derived(app.get('network.proxy.mode'));
   const pullMode = $derived(app.get('pull.mode'));
   const dim = $derived(app.get('graph.dimUnreachable'));
   onMount(() => { void updates.refresh(); });
@@ -36,6 +42,20 @@
     editorError = null;
     void app.set('editor.command', value === '' ? null : value, { optimistic: false }).then((err) => {
       if (token === editorToken) editorError = err ? err.message : null;
+    });
+  }
+
+  function onProxyInput(): void {
+    const value = proxyDraft.trim();
+    const token = ++proxyToken;
+    if (value !== '' && !PROXY_URL.test(value)) {
+      // Local validation: an obviously invalid URL is never sent (the backend checks it again).
+      proxyError = t('settings.proxy.invalid');
+      return;
+    }
+    proxyError = null;
+    void app.set('network.proxy.url', value === '' ? null : value, { optimistic: false }).then((err) => {
+      if (token === proxyToken) proxyError = err ? err.message : null;
     });
   }
 </script>
@@ -101,6 +121,41 @@
       />
       <span>{t('settings.dimUnreachable')}</span>
     </label>
+  </div>
+
+  <div class="field">
+    <label for="settings-proxy-mode">{t('settings.proxy')}</label>
+    <select
+      id="settings-proxy-mode"
+      class="select"
+      data-testid="settings-proxy-mode-select"
+      value={proxyMode}
+      aria-describedby="settings-proxy-hint"
+      onchange={(e) => void app.set('network.proxy.mode', e.currentTarget.value as ProxyModeSetting)}
+    >
+      <option value="system">{t('settings.proxy.system')}</option>
+      <option value="none">{t('settings.proxy.none')}</option>
+      <option value="manual">{t('settings.proxy.manual')}</option>
+    </select>
+    {#if proxyMode === 'manual'}
+      <input
+        id="settings-proxy-url"
+        class="input mono"
+        data-testid="settings-proxy-url-input"
+        type="text"
+        spellcheck="false"
+        autocomplete="off"
+        aria-label={t('settings.proxy.url')}
+        placeholder={t('settings.proxy.url.placeholder')}
+        aria-invalid={proxyError ? 'true' : 'false'}
+        bind:value={proxyDraft}
+        oninput={onProxyInput}
+      />
+      {#if proxyError}
+        <div class="field-error" data-testid="settings-proxy-url-error" role="alert">{proxyError}</div>
+      {/if}
+    {/if}
+    <div class="muted hint" id="settings-proxy-hint">{t('settings.proxy.hint')}</div>
   </div>
 
   {#snippet footer()}

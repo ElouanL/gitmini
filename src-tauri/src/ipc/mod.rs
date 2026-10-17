@@ -126,7 +126,7 @@ pub(crate) async fn call<T>(
 /// tests) and the manager `invoke_handler`.
 macro_rules! registry {
     ($($module:ident => [$($cmd:ident),+ $(,)?]),+ $(,)?; desktop $desktop:ident => [$($extra:ident),+ $(,)?]) => {
-        /// Common controls at the office and the HTTP bridge (: 67).
+        /// Common controls at the office and the HTTP bridge (: 69).
         pub const COMMAND_NAMES: &[&str] = &[$($(stringify!($cmd)),+),+];
         pub const DESKTOP_COMMAND_NAMES: &[&str] = &[$(stringify!($extra)),+];
         pub const ALL_COMMAND_NAMES: &[&str] = &[$($(stringify!($cmd)),+),+, $(stringify!($extra)),+];
@@ -153,7 +153,7 @@ registry! {
     stash => [stash_list, stash_show, stash_save, stash_apply, stash_pop, stash_drop, stash_branch],
     pick => [cherry_pick, revert_commit, sequencer_continue, sequencer_skip, sequencer_abort],
     remote => [remote_list, remote_fetch, remote_pull, remote_push, remote_add, remote_remove],
-    github => [github_status, github_login_start, github_login_poll, github_logout, github_repos, github_open_pr],
+    github => [github_status, github_login_start, github_login_poll, github_logout, github_repos, github_open_pr, github_orgs, github_create_repo],
     undo => [undo_peek, undo_last],
     op => [op_cancel],
     ; desktop updater => [app_update_status, app_update_check, app_update_download, app_update_install]

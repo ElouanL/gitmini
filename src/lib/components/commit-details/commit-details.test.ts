@@ -238,6 +238,7 @@ describe('multi-commit-panel', () => {
     expect(getAllByTestId('multi-commit-item').map((i) => i.dataset.oid)).toEqual([hex(1), hex(2), hex(3)]);
     expect(getByTestId('multi-commit-cherry-pick-btn')).toBeDisabled();
     expect(getByTestId('multi-commit-revert-btn')).toBeDisabled();
+    expect(getByTestId('multi-commit-squash-btn')).toBeDisabled();
     expect(fake.callsOf('commit_details')).toHaveLength(0); // no list of files beyond 2 commits
   });
 
@@ -255,6 +256,25 @@ describe('multi-commit-panel', () => {
     await settle();
     const target = { menu: 'commit', oid: hex(1), oids: [hex(1), hex(3)] };
     expect(got).toEqual([['cp', target], ['rv', target]]);
+  });
+
+  it("squash button: calls rebase.squash with the target, the disabled reason in its tooltip", async () => {
+    const got: unknown[] = [];
+    registerAction({ id: 'rebase.squash', label: 'Squash', run: (ctx) => void got.push(ctx.target) });
+    graph.selectCommits([hex(1), hex(2)], hex(1));
+    const { getByTestId } = render(MultiCommitPanel);
+    await settle();
+    expect(getByTestId('multi-commit-squash-btn')).toBeEnabled();
+    expect(getByTestId('multi-commit-squash-btn').textContent).toContain('Squash 2 commits');
+    await fireEvent.click(getByTestId('multi-commit-squash-btn'));
+    await settle();
+    expect(got).toEqual([{ menu: 'commit', oid: hex(1), oids: [hex(1), hex(2)] }]);
+
+    registerAction({ id: 'rebase.squash', label: 'Squash', disabledReason: () => 'The selected commits must be consecutive.', run: () => {} });
+    graph.selectCommits([hex(1), hex(3)], hex(1));
+    await settle();
+    expect(getByTestId('multi-commit-squash-btn')).toBeDisabled();
+    expect(getByTestId('multi-commit-squash-btn')).toHaveAttribute('title', 'The selected commits must be consecutive.');
   });
 
   it("exactly 2 commits: files modified between them (commit_details { oid: récent, against: ancien }), diff \"range\"", async () => {

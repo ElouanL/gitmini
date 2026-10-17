@@ -1,9 +1,11 @@
 <script lang="ts">
   // `github-menu` (10 §GitHub): popover `toolbar-github-btn`. Connected: `github-account-badge` (login), `github-repos-btn`
-  // ("My repositories..." → `clone-dialog` on the GitHub tab), `github-logout-btn`. Disconnected: `github-login-btn`.
+  // ("My repositories..." → `clone-dialog` on the GitHub tab), `github-publish-btn` (repository open → `github.publish`), `github-logout-btn`. Disconnected: `github-login-btn`.
   // The status is only read at the opening (never on startup: no access to the keychain).
   import { onMount } from 'svelte';
   import { openDialog } from '$lib/dialogs/registry';
+  import { runAction } from '$lib/actions/registry';
+  import { activeSession } from '$lib/stores/session.svelte';
   import { github } from '$lib/stores/github.svelte';
   import { t } from '$i18n/index';
 
@@ -23,6 +25,11 @@
     void openDialog('clone-dialog', { tab: 'github' });
   }
 
+  function publish(): void {
+    close();
+    void runAction('github.publish');
+  }
+
   async function logout(): Promise<void> {
     close();
     await github.logout();
@@ -38,6 +45,9 @@
       <span class="badge" data-testid="github-account-badge">{github.login ?? ''}</span>
     </div>
     <button type="button" role="menuitem" class="item" data-testid="github-repos-btn" onclick={repos}>{t('github.menu.repos')}</button>
+    {#if activeSession.current.repoId !== null}
+      <button type="button" role="menuitem" class="item" data-testid="github-publish-btn" onclick={publish}>{t('github.publish.action')}</button>
+    {/if}
     <div class="sep" role="separator"></div>
     <button type="button" role="menuitem" class="item" data-testid="github-logout-btn" onclick={() => void logout()}>{t('github.menu.logout')}</button>
   {:else}

@@ -1,4 +1,4 @@
-// Remote domain (10): push, pull, remote management, clone, PR opening.
+// Remote domain (10): push, pull, remote management, clone, new repository, PR opening.
 // Replaces the actions of the `git.pull`, `git.pullFfOnly`, `git.pullRebase`, `git.push` (same id) and the `push` / `pull` entries of the
 // `branch` menu (which called the functions of the base). `git.fetch` and the `remote > fetch` menu of the base remain unchanged.
 // Lazy loading dialogs, logical (`sync`, `remote-ops`) imported on execution (initial JS budget, `pnpm size`).
@@ -16,6 +16,7 @@ registerDialog('pull-diverged-dialog', () => import('./PullDivergedDialog.svelte
 registerDialog('pull-autostash-dialog', () => import('./PullAutostashDialog.svelte'));
 registerDialog('remote-add-dialog', () => import('./RemoteAddDialog.svelte'));
 registerDialog('clone-dialog', () => import('./CloneDialog.svelte'));
+registerDialog('repo-init-dialog', () => import('./RepoInitDialog.svelte'));
 
 // `trackActivity` : `window.__gitmini.idle` also awaits loading of the action chunk (if not it resolves before the start of the command).
 const sync = () => trackActivity('chunk:remotes-sync', import('./sync'));

@@ -54,6 +54,8 @@ async fn defaults_without_a_file() {
         "editor.command": null,
         "graph.dimUnreachable": true,
         "updates.auto": true,
+        "network.proxy.mode": "system",
+        "network.proxy.url": null,
         "layout": { "left": 240, "right": 360, "leftCollapsed": false, "rightCollapsed": false }
     });
     assert_eq!(Value::Object(got), expected);
@@ -410,4 +412,86 @@ async fn workspace_tabs_roundtrip_and_validation() {
         .await
         .unwrap();
     assert_eq!(read_json(&config)["workspace.tabs"], empty);
+}
+
+#[tokio::test]
+async fn network_proxy_is_validated_and_applied_to_the_shared_state() {
+    use gitmini_core::settings::ProxySetting;
+    init();
+    let (_tmp, root) = tempdir();
+    let config = root.join("config");
+    let app = app(&config);
+    let s = &app.state;
+    assert_eq!(s.shared.proxy(), ProxySetting::System);
+
+    settings_set(
+        s,
+        set("network.proxy.url", json!("  http://u:p@proxy.corp:3128  ")),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        settings_get(s).await.unwrap()["network.proxy.url"],
+        "http://u:p@proxy.corp:3128"
+    );
+    // the URL alone does not activate the proxy
+    assert_eq!(s.shared.proxy(), ProxySetting::System);
+    settings_set(s, set("network.proxy.mode", json!("manual")))
+        .await
+        .unwrap();
+    assert_eq!(
+        s.shared.proxy(),
+        ProxySetting::Manual("http://u:p@proxy.corp:3128".into())
+    );
+    settings_set(s, set("network.proxy.mode", json!("none")))
+        .await
+        .unwrap();
+    assert_eq!(s.shared.proxy(), ProxySetting::None);
+
+    // manual without URL is system
+    settings_set(s, set("network.proxy.mode", json!("manual")))
+        .await
+        .unwrap();
+    settings_set(s, set("network.proxy.url", json!("")))
+        .await
+        .unwrap();
+    assert_eq!(
+        settings_get(s).await.unwrap()["network.proxy.url"],
+        Value::Null
+    );
+    assert_eq!(s.shared.proxy(), ProxySetting::System);
+
+    for url in ["socks5h://127.0.0.1:1080", "https://proxy:443/"] {
+        settings_set(s, set("network.proxy.url", json!(url)))
+            .await
+            .unwrap();
+    }
+    for bad in [
+        json!("proxy:3128"),
+        json!("ftp://proxy:21"),
+        json!("http://proxy:3128/path"),
+        json!("http://proxy?x=1"),
+        json!("not a url"),
+        json!(3128),
+    ] {
+        let err = settings_set(s, set("network.proxy.url", bad.clone()))
+            .await
+            .unwrap_err();
+        expect_invalid(err, "value");
+    }
+    let err = settings_set(s, set("network.proxy.mode", json!("auto")))
+        .await
+        .unwrap_err();
+    expect_invalid(err, "value");
+
+    // reopened: the proxy is reloaded from settings.json
+    settings_set(s, set("network.proxy.url", json!("http://proxy.corp:8080")))
+        .await
+        .unwrap();
+    drop(app);
+    let reopened = repo_support::app(&config);
+    assert_eq!(
+        reopened.state.shared.proxy(),
+        ProxySetting::Manual("http://proxy.corp:8080".into())
+    );
 }

@@ -382,7 +382,7 @@ async fn handle(req: Request<Incoming>, sh: Arc<Shared>) -> Result<Resp, std::co
         auth_ok,
         held: false,
         status: 0,
-        body: if path.starts_with("/login/") {
+        body: if path.starts_with("/login/") || (method == "POST" && path.ends_with("/repos")) {
             String::from_utf8_lossy(&body).into_owned()
         } else {
             String::new()
@@ -577,6 +577,56 @@ async fn route(
                     .insert("link", link.join(", ").parse().unwrap());
             }
             r
+        }
+        ("GET", "/user/orgs") => {
+            if auth.scheme.as_deref() != Some("bearer") || !auth_ok {
+                return json_resp(401, &json!({"message": "Bad credentials"}));
+            }
+            json_resp(200, &json!([{"login": "org", "id": 2}]))
+        }
+        ("POST", p) if p == "/user/repos" || (p.starts_with("/orgs/") && p.ends_with("/repos")) => {
+            let mut st = sh.state.lock().unwrap();
+            let forced = st.unauthorized.iter().any(|u| path.starts_with(u.as_str()));
+            if forced || auth.scheme.as_deref() != Some("bearer") || !auth_ok {
+                return json_resp(401, &json!({"message": "Bad credentials"}));
+            }
+            let req: Value = serde_json::from_slice(body).unwrap_or(Value::Null);
+            let Some(name) = req.get("name").and_then(Value::as_str) else {
+                return json_resp(422, &json!({"message": "Validation Failed"}));
+            };
+            let owner = match p
+                .strip_prefix("/orgs/")
+                .and_then(|r| r.strip_suffix("/repos"))
+            {
+                Some(o) => o.to_string(),
+                None => st.login.clone(),
+            };
+            let full = format!("{owner}/{name}");
+            let bare = sh.root.join(&owner).join(format!("{name}.git"));
+            if bare.exists() || st.repos.iter().any(|r| r["full_name"] == full.as_str()) {
+                return json_resp(
+                    422,
+                    &json!({"message": "Repository creation failed.", "errors": [{
+                        "resource": "Repository", "code": "custom", "field": "name",
+                        "message": "name already exists on this account"}]}),
+                );
+            }
+            let out = Command::new(git_bin())
+                .args(["init", "-q", "--bare"])
+                .arg(&bare)
+                .output()
+                .expect("git init --bare");
+            assert!(out.status.success(), "mock: git init --bare failed");
+            let private = req.get("private").and_then(Value::as_bool).unwrap_or(false);
+            let repo = json!({
+                "full_name": full, "name": name,
+                "clone_url": format!("{}/{full}.git", sh.base),
+                "ssh_url": format!("git@127.0.0.1:{full}.git"),
+                "private": private, "fork": false, "description": req.get("description"),
+                "updated_at": "2024-05-06T07:08:09Z", "default_branch": "main"
+            });
+            st.repos.push(repo.clone());
+            json_resp(201, &repo)
         }
         _ if path.contains(".git/") => {
             smart_http(sh, method, path, query, headers, auth, auth_ok, body, call).await

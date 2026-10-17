@@ -1,15 +1,15 @@
 //! Generic IPC command splitter: `invoke(state, "stage_paths", json)`.
 //!
 //! Serves at the HTTP (`gitmini-bridge`) and contract tests. `src-tauri` displays the same
-//! 67 commands via `#[tauri::command]`. The list [`COMMANDS`] is that of
+//! 69 commands via `#[tauri::command]`. The list [`COMMANDS`] is that of
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
-/// The 67 orders in the contract.
-pub const COMMANDS: [&str; 67] = [
+/// The 69 orders in the contract.
+pub const COMMANDS: [&str; 69] = [
     "app_info",
     "repo_open",
     "repo_close",
@@ -73,6 +73,8 @@ pub const COMMANDS: [&str; 67] = [
     "github_logout",
     "github_repos",
     "github_open_pr",
+    "github_orgs",
+    "github_create_repo",
     "repo_clone",
     "repo_init",
     "undo_last",
@@ -169,6 +171,8 @@ pub async fn invoke(state: &AppState, command: &str, args: Value) -> AppResult<V
         "github_logout" => ser(crate::github::github_logout(state).await?),
         "github_repos" => ser(crate::github::github_repos(state, de(args)?).await?),
         "github_open_pr" => ser(crate::github::github_open_pr(state, de(args)?).await?),
+        "github_orgs" => ser(crate::github::github_orgs(state).await?),
+        "github_create_repo" => ser(crate::github::github_create_repo(state, de(args)?).await?),
         "repo_clone" => ser(crate::write::clone::repo_clone(state, de(args)?).await?),
         "repo_init" => ser(crate::write::init::repo_init(state, de(args)?).await?),
         "undo_last" => ser(crate::write::undo::undo_last(state, de(args)?).await?),
@@ -185,10 +189,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sixty_seven_unique_commands() {
+    fn sixty_nine_unique_commands() {
         let mut v = COMMANDS.to_vec();
         v.sort_unstable();
         v.dedup();
-        assert_eq!(v.len(), 67);
+        assert_eq!(v.len(), 69);
     }
 }
