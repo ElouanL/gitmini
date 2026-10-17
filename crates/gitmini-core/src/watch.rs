@@ -37,7 +37,7 @@ use notify::event::{CreateKind, ModifyKind, RemoveKind};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::{mpsc as tmpsc, watch as twatch};
 
-use crate::events::ChangeKindEv;
+use crate::events::{ChangeKindEv, MAX_CHANGED_PATHS};
 use crate::state::RepoHandle;
 
 pub type KindSet = BTreeSet<ChangeKindEv>;
@@ -47,6 +47,12 @@ pub const PER_DIR_WATCHES: bool = cfg!(not(any(target_os = "macos", windows)));
 
 fn all_kinds() -> KindSet {
     ChangeKindEv::ALL.into_iter().collect()
+}
+
+/// `rel` (relative to the workdir) in contract form, `/` separators; `None` if it is not UTF-8.
+pub fn rel_path_string(rel: &Path) -> Option<String> {
+    let parts: Option<Vec<&str>> = rel.components().map(|c| c.as_os_str().to_str()).collect();
+    Some(parts?.join("/"))
 }
 
 // ── Configuration
@@ -239,8 +245,10 @@ pub fn ignore_source(layout: &Layout, path: &Path) -> Option<IgnoreSource> {
 /// Message from the classification thread to the bust task.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Raw {
-    /// Kinds observed (all Kinds for an overflow).
+    /// Kinds observed (all Kinds for an overflow); a `worktree` here has unknown paths.
     Kinds(KindSet),
+    /// Kinds observed, whose `worktree` part only concerns these paths (relative to the workdir, `/`).
+    Changes(KindSet, Vec<String>),
     /// The root of the repository has disappeared.
     RootGone,
 }
@@ -250,6 +258,9 @@ pub enum Raw {
 pub struct Flush {
     pub kinds: KindSet,
     pub root_gone: bool,
+    /// Worktree paths of the window; `None`: unknown (a `worktree` without paths, or more than
+    /// [`MAX_CHANGED_PATHS`]).
+    pub paths: Option<BTreeSet<String>>,
 }
 
 /// Debunk of: emission after `quiet` calm, and at most `max_wait` after the first event of the
@@ -265,6 +276,7 @@ pub async fn run_debounce<F, Fut>(
 {
     use tokio::time::{Instant, sleep_until};
     let mut acc = KindSet::new();
+    let mut paths: Option<BTreeSet<String>> = Some(BTreeSet::new());
     let mut root_gone = false;
     let mut first: Option<Instant> = None;
     let mut last = Instant::now();
@@ -273,7 +285,11 @@ pub async fn run_debounce<F, Fut>(
         tokio::select! {
             biased;
             _ = sleep_until(deadline.unwrap_or_else(Instant::now)), if deadline.is_some() => {
-                let batch = Flush { kinds: std::mem::take(&mut acc), root_gone: std::mem::take(&mut root_gone) };
+                let batch = Flush {
+                    kinds: std::mem::take(&mut acc),
+                    root_gone: std::mem::take(&mut root_gone),
+                    paths: paths.replace(BTreeSet::new()),
+                };
                 first = None;
                 flush(batch).await;
             }
@@ -283,9 +299,24 @@ pub async fn run_debounce<F, Fut>(
                 first.get_or_insert(now);
                 last = now;
                 match raw {
-                    Raw::Kinds(k) => acc.extend(k),
+                    Raw::Kinds(k) => {
+                        if k.contains(&ChangeKindEv::Worktree) {
+                            paths = None;
+                        }
+                        acc.extend(k);
+                    }
+                    Raw::Changes(k, p) => {
+                        if let Some(set) = paths.as_mut() {
+                            set.extend(p);
+                            if set.len() > MAX_CHANGED_PATHS {
+                                paths = None;
+                            }
+                        }
+                        acc.extend(k);
+                    }
                     Raw::RootGone => {
                         root_gone = true;
+                        paths = None;
                         acc.extend(all_kinds());
                     }
                 }
@@ -542,6 +573,24 @@ impl Worker {
         let _ = self.out.send(Raw::Kinds(kinds));
     }
 
+    /// Like [`Self::send_kinds`], with the worktree paths behind a `worktree` kind (`None`: unknown).
+    fn send_changes(&self, mut kinds: KindSet, paths: Option<BTreeSet<String>>) {
+        let Some(paths) = paths else {
+            return self.send_kinds(kinds);
+        };
+        if kinds.is_empty() {
+            return;
+        }
+        if let Some(h) = self.handle.upgrade()
+            && !h.absorb_watch_kinds(&mut kinds)
+        {
+            return;
+        }
+        let _ = self
+            .out
+            .send(Raw::Changes(kinds, paths.into_iter().collect()));
+    }
+
     fn root_gone(&self) {
         if let Some(h) = self.handle.upgrade() {
             h.missing.store(true, Ordering::SeqCst);
@@ -617,6 +666,8 @@ impl Worker {
                 .is_some_and(|h| h.is_write_echo(path, kinds))
         };
         let mut found = KindSet::new();
+        // Worktree paths behind `found`'s `worktree` (`None` as soon as one is not UTF-8).
+        let mut paths = Some(BTreeSet::new());
         for path in &ev.paths {
             if removal
                 && (*path == self.layout.workdir || *path == self.layout.git_dir)
@@ -649,12 +700,18 @@ impl Worker {
                         let k = kinds(&[ChangeKindEv::Worktree]);
                         if !echo(path, &k) {
                             found.extend(k);
+                            match (paths.as_mut(), rel_path_string(&rel)) {
+                                (Some(set), Some(p)) => {
+                                    set.insert(p);
+                                }
+                                _ => paths = None,
+                            }
                         }
                     }
                 }
             }
         }
-        self.send_kinds(found);
+        self.send_changes(found, paths);
     }
 
     /// `info/exclude` or the config changed: exclusion stack rebuilt, watches re-laid (a folder may no
@@ -1089,7 +1146,7 @@ async fn on_flush(
     if stop.load(Ordering::SeqCst) || h.buffer_if_writing(&mut kinds) {
         return;
     }
-    h.emit_changed(kinds);
+    h.emit_changed_paths(kinds, batch.paths);
 }
 
 #[cfg(test)]
@@ -1344,6 +1401,84 @@ mod tests {
         assert!(!got[0].1.root_gone);
         assert_eq!(got[1].1.kinds, all_kinds());
         assert!(got[1].1.root_gone);
+    }
+
+    fn paths(list: &[&str]) -> Vec<String> {
+        list.iter().map(|p| p.to_string()).collect()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn debounce_merges_worktree_paths_of_a_window() {
+        let (tx, out, _task) = start_debounce();
+        push(
+            &tx,
+            Raw::Changes(k(&[Worktree]), paths(&["b.txt", "dir/a.txt"])),
+        )
+        .await;
+        push(&tx, Raw::Changes(k(&[Worktree]), paths(&["b.txt"]))).await;
+        push(&tx, Raw::Kinds(k(&[Index]))).await;
+        ms(200).await;
+        push(&tx, Raw::Changes(k(&[Worktree]), paths(&["c.txt"]))).await;
+        ms(200).await;
+        let got = out.lock().unwrap().clone();
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].1.kinds, k(&[Worktree, Index]));
+        let first: Vec<String> = got[0].1.paths.clone().unwrap().into_iter().collect();
+        assert_eq!(first, paths(&["b.txt", "dir/a.txt"]));
+        let second: Vec<String> = got[1].1.paths.clone().unwrap().into_iter().collect();
+        assert_eq!(
+            second,
+            paths(&["c.txt"]),
+            "the paths restart with each window"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn debounce_paths_become_unknown_on_overflow_root_gone_or_bound() {
+        let (tx, out, _task) = start_debounce();
+        // a `worktree` without paths (overflow, watcher error) in the window: unknown
+        push(&tx, Raw::Changes(k(&[Worktree]), paths(&["a.txt"]))).await;
+        push(&tx, Raw::Kinds(all_kinds())).await;
+        push(&tx, Raw::Changes(k(&[Worktree]), paths(&["b.txt"]))).await;
+        ms(200).await;
+        // more than the bound: unknown
+        let many: Vec<String> = (0..=MAX_CHANGED_PATHS).map(|i| format!("f{i}")).collect();
+        push(&tx, Raw::Changes(k(&[Worktree]), many)).await;
+        ms(200).await;
+        // exactly the bound: kept
+        let bound: Vec<String> = (0..MAX_CHANGED_PATHS).map(|i| format!("f{i}")).collect();
+        push(&tx, Raw::Changes(k(&[Worktree]), bound)).await;
+        ms(200).await;
+        push(&tx, Raw::Changes(k(&[Worktree]), paths(&["a.txt"]))).await;
+        push(&tx, Raw::RootGone).await;
+        ms(200).await;
+        // a window of git kinds only keeps an empty (known) list
+        push(&tx, Raw::Kinds(k(&[Refs]))).await;
+        ms(200).await;
+        let got = out.lock().unwrap().clone();
+        assert_eq!(got.len(), 5);
+        assert_eq!(got[0].1.paths, None);
+        assert_eq!(got[1].1.paths, None);
+        assert_eq!(
+            got[2].1.paths.as_ref().map(BTreeSet::len),
+            Some(MAX_CHANGED_PATHS)
+        );
+        assert_eq!(got[3].1.paths, None);
+        assert_eq!(got[4].1.paths, Some(BTreeSet::new()));
+    }
+
+    #[test]
+    fn rel_path_string_uses_slashes() {
+        assert_eq!(
+            rel_path_string(&Path::new("dir").join("sub").join("a b.txt")).as_deref(),
+            Some("dir/sub/a b.txt")
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            let bad = Path::new(std::ffi::OsStr::from_bytes(b"caf\xe9.txt"));
+            assert_eq!(rel_path_string(bad), None);
+        }
     }
 
     #[tokio::test(start_paused = true)]

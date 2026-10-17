@@ -168,6 +168,7 @@ fn events_are_the_three_of_the_contract() {
         Event::RepoChanged(RepoChanged {
             repo_id: 1,
             kinds: vec![],
+            paths: None,
         }),
         Event::OpProgress(OpProgress {
             op_id: "x".into(),

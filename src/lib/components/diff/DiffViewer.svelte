@@ -3,7 +3,9 @@
   const { reportError: handleError, op, runWrite, session, status, ui } = captureStores();
   // Unified diff Viewer (05 "diff Viewer"), central view `diff` (`ui.openCenter('diff', { path, source })`).
   // Sources : unstaged, staged, commit (parent en base 1), range, stash, conflict (markers | ours | theirs).
-  // Refreshing: `repo:changed { worktree | index | head }` restarts `diff_file` of the displayed file (mutable sources only).
+  // Refreshing: `repo:changed { index | head }`, or `{ worktree }` whose `paths` concern the displayed file (or its old
+  // name), restarts `diff_file` of the displayed file (mutable sources only), with `ifNoneMatch`: same diff, nothing
+  // is transferred.
   import { onMount, untrack } from 'svelte';
   import { commands } from '$lib/ipc/commands';
   import type { AppError, ConflictView, DiffSource, FileDiff } from '$lib/ipc/types';
@@ -58,10 +60,19 @@
     const mine = ++seq;
     const gen = session.gen;
     if (!opts.silent) loading = true;
+    // Silent reload of the diff on screen: its hash is enough for the backend to answer "unchanged".
+    const etag = opts.silent && diff ? diff.hash : null;
     try {
-      const d = await commands.diffFile({ repoId, path, source: effective, ...(forced ? { force: true } : {}) });
+      const d = await commands.diffFile({
+        repoId,
+        path,
+        source: effective,
+        ...(forced ? { force: true } : {}),
+        ...(etag ? { ifNoneMatch: etag } : {}),
+      });
       if (mine !== seq || !session.isCurrent(gen)) return;
       loadError = null;
+      if ('unchanged' in d) return;
       if (!sameDiff(diff, d)) diff = d;
     } catch (e) {
       if (mine !== seq) return;
@@ -106,7 +117,7 @@
 
   onMount(() =>
     onEvent('repo:changed', (ev) => {
-      if (ev.repoId !== session.repoId || !eventAffectsDiff(ev.kinds, sourceKind)) return;
+      if (ev.repoId !== session.repoId || !eventAffectsDiff(ev.kinds, sourceKind, ev.paths ?? null, [path, diff?.path, diff?.oldPath])) return;
       void refresher.trigger();
     }),
   );

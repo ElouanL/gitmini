@@ -87,6 +87,66 @@ async fn rob_01_external_worktree_edit_emits_worktree_only() {
     assert_eq!(o.app.sink.repo_changed()[0].repo_id, o.info.id);
 }
 
+/// A worktree change carries its paths (relative, `/`), so the front only rereads the diffs it concerns.
+#[tokio::test]
+async fn external_worktree_edit_carries_its_paths() {
+    init();
+    let (_tmp, root) = tempdir();
+    let repo = root.join("proj");
+    init_repo(&repo, true);
+    std::fs::create_dir_all(repo.join("sub/dir")).unwrap();
+    let o = open_quiet(&root, &repo).await;
+    std::fs::write(repo.join("sub/dir/b.txt"), "new\n").unwrap();
+    wait_changed(&o.app.sink, 1).await;
+    settle(&o.app.sink, QUIET).await;
+    let events = o.app.sink.repo_changed();
+    let paths: BTreeSet<String> = events
+        .iter()
+        .flat_map(|e| {
+            assert!(e.kinds.contains(&Worktree), "{e:?}");
+            e.paths.clone().expect("known paths")
+        })
+        .collect();
+    assert!(paths.contains("sub/dir/b.txt"), "{paths:?}");
+    assert!(
+        paths
+            .iter()
+            .all(|p| "sub/dir/b.txt".starts_with(p.as_str())),
+        "only the file (or its folders): {paths:?}"
+    );
+}
+
+/// An overflow (or any `worktree` of unknown origin) makes the paths unknown.
+#[tokio::test]
+async fn overflow_and_large_bursts_carry_no_paths() {
+    init();
+    let (_tmp, root) = tempdir();
+    let repo = root.join("proj");
+    init_repo(&repo, true);
+    let o = open_quiet(&root, &repo).await;
+    o.repo.simulate_watch_overflow();
+    wait_changed(&o.app.sink, 1).await;
+    settle(&o.app.sink, QUIET).await;
+    assert!(o.app.sink.repo_changed().iter().all(|e| e.paths.is_none()));
+    o.app.sink.clear();
+    // beyond the bound: unknown
+    for i in 0..300 {
+        std::fs::write(repo.join(format!("f{i:03}.txt")), "x\n").unwrap();
+    }
+    wait_changed(&o.app.sink, 1).await;
+    settle(&o.app.sink, QUIET).await;
+    let events = o.app.sink.repo_changed();
+    assert!(
+        events.iter().any(|e| e.paths.is_none()),
+        "300 files never fit in one bounded list: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .all(|e| e.paths.as_ref().is_none_or(|p| p.len() <= 256))
+    );
+}
+
 #[tokio::test]
 async fn rob_02_external_commit_emits_refs_and_index() {
     init();

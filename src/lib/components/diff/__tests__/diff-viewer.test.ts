@@ -291,6 +291,35 @@ describe("refreshment (B10)", () => {
     await waitFor(() => expect(lines()).toHaveLength(1));
   });
 
+  it("repo:changed { worktree, paths }: rereads only if the displayed file (or a folder of it) is concerned", async () => {
+    mount({ kind: 'unstaged' });
+    await waitFor(() => expect(lines()).toHaveLength(8));
+    const before = fake.callsOf('diff_file').length;
+    fake.emit('repo:changed', { repoId: 1, kinds: ['worktree'], paths: ['other.txt', 'mod.txt.bak'] });
+    await whenIdle();
+    expect(fake.callsOf('diff_file')).toHaveLength(before);
+    fake.emit('repo:changed', { repoId: 1, kinds: ['worktree'], paths: ['mod.txt'] });
+    await waitFor(() => expect(fake.callsOf('diff_file').length).toBe(before + 1));
+    fake.emit('repo:changed', { repoId: 1, kinds: ['worktree', 'index'], paths: ['other.txt'] });
+    await waitFor(() => expect(fake.callsOf('diff_file').length).toBe(before + 2));
+    fake.emit('repo:changed', { repoId: 1, kinds: ['worktree'], paths: null });
+    await waitFor(() => expect(fake.callsOf('diff_file').length).toBe(before + 3));
+  });
+
+  it("silent reload sends ifNoneMatch = hash; { unchanged: true } keeps the diff on screen", async () => {
+    mount({ kind: 'unstaged' });
+    await waitFor(() => expect(lines()).toHaveLength(8));
+    expect(fake.callsOf('diff_file')[0]!.args).not.toHaveProperty('ifNoneMatch');
+    const first = lines()[0];
+    fake.on('diff_file', () => ({ unchanged: true }));
+    fake.emit('repo:changed', { repoId: 1, kinds: ['worktree'] });
+    await waitFor(() => expect(fake.callsOf('diff_file').at(-1)!.args).toMatchObject({ path: 'mod.txt', ifNoneMatch: 'h-mod' }));
+    await whenIdle();
+    expect(lines()).toHaveLength(8);
+    expect(lines()[0]).toBe(first);
+    expect(screen.queryByTestId('diff-error')).toBeNull();
+  });
+
   it("watcher gradient: a new status rereads the displayed diff (no repo:changed will come)", async () => {
     mount({ kind: 'unstaged' });
     await waitFor(() => expect(lines()).toHaveLength(8));

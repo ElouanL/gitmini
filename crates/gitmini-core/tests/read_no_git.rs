@@ -197,7 +197,8 @@ async fn sec_01_no_read_command_spawns_git() {
                     repo_id: id,
                     path: path.into(),
                     source,
-                    force: None
+                    force: None,
+                    if_none_match: None
                 }
             )
             .await
@@ -333,9 +334,12 @@ async fn sec_01_user_clean_filter_is_the_only_allowed_subprocess() {
             path: "f.dat".into(),
             source: DiffSource::Unstaged,
             force: None,
+            if_none_match: None,
         },
     )
     .await
+    .unwrap()
+    .into_diff()
     .unwrap();
     assert_eq!(d.stats.added, 1);
     assert!(

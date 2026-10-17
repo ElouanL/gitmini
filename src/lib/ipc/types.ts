@@ -80,6 +80,12 @@ export type ConflictKind = "both-modified" | "both-added" | "both-deleted" | "ad
 
 export type ConflictView = "markers" | "ours" | "theirs";
 
+/**
+ *  Reply of `diff_file`: the diff, or `{ unchanged: true }` when its `hash` equals the `ifNoneMatch` sent
+ *  (silent reload of the displayed diff: nothing to transfer nor redraw).
+ */
+export type DiffFileReply = DiffUnchanged | FileDiff;
+
 export type DiffLine = {
 	kind: DiffLineKind,
 	oldNo: number | null,
@@ -94,6 +100,10 @@ export type DiffSource = { kind: "unstaged" } | { kind: "staged" } | { kind: "co
 export type DiffStats = {
 	added: number,
 	removed: number,
+};
+
+export type DiffUnchanged = {
+	unchanged: boolean,
 };
 
 export type ErrorCode = "CONFLICT" | "UNRESOLVED_CONFLICTS" | "DIRTY_WORKTREE" | "UNTRACKED_WOULD_BE_OVERWRITTEN" | "INDEX_CONFLICT" | "AUTH_REQUIRED" | "REJECTED_NON_FF" | "NETWORK" | "GIT_FAILED" | "IDENTITY_MISSING" | "NOT_FOUND" | "NOT_A_REPO" | "UNSUPPORTED_REPO_FORMAT" | "ALREADY_EXISTS" | "NOT_MERGED" | "BUSY" | "CANCELLED" | "INVALID_ARGUMENT" | "STALE" | "DETACHED_HEAD" | "UNSUPPORTED_MERGES" | "UNDO_UNAVAILABLE" | "GIT_MISSING" | "GIT_TOO_OLD";
@@ -327,6 +337,11 @@ export type RemoteInfo = {
 export type RepoChanged = {
 	repoId: number,
 	kinds: ChangeKindEv[],
+	/**
+	 *  With `worktree` only: the worktree paths concerned (files or folders, relative to the workdir, `/`
+	 *  separators, sorted), at most [`MAX_CHANGED_PATHS`]. `None`: unknown, any path may have changed.
+	 */
+	paths?: string[] | null,
 };
 
 export type RepoInfo = {

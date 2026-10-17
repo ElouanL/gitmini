@@ -21,6 +21,7 @@ pub fn contract_types() -> Types {
         .register::<StatusSnapshot>()
         .register::<DiffSource>()
         .register::<FileDiff>()
+        .register::<DiffFileReply>()
         .register::<RefsSnapshot>()
         .register::<ReflogEntry>()
         .register::<BranchCompare>()
