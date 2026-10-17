@@ -5,7 +5,7 @@ A small, fast desktop Git client built with Tauri, Svelte and Rust. Git reads us
 ## Features
 
 - Commit graph, history search and diffs.
-- Staging, commits, branches, merges, rebase, cherry-pick and revert.
+- Staging, commits, branches, merges, rebase, cherry-pick, revert and branch reset.
 - Stashes, remotes, fetch, pull and push.
 - Multiple repository tabs and recovery tools for supported operations.
 - Automatic updates in configured release builds.

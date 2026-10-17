@@ -1,0 +1,31 @@
+// Strings of the "reset" flow.
+export default {
+  'reset.menu': 'Reset {branch} to here...',
+  'reset.action': 'Reset the current branch to the selected commit',
+  'reset.disabled.detached': 'Reset requires a branch: HEAD is detached.',
+  'reset.disabled.noSelection': 'Select a single commit',
+
+  'reset.dialog.title': 'Reset {branch}',
+  'reset.dialog.target': 'Move {branch} to',
+  'reset.dialog.mode': 'Mode',
+  'reset.mode.soft': 'Soft',
+  'reset.mode.soft.desc': 'Keep the index and working files; the changes of the removed commits stay staged.',
+  'reset.mode.mixed': 'Mixed',
+  'reset.mode.mixed.desc': 'Keep working files, reset the index; the changes of the removed commits become unstaged.',
+  'reset.mode.keep': 'Keep',
+  'reset.mode.keep.desc': 'Update working files, keep your local changes; refused if one of them would be lost.',
+  'reset.mode.hard': 'Hard',
+  'reset.mode.hard.desc': 'Discard the index and all changes to tracked files. Cannot be undone.',
+  'reset.dialog.hardClean': 'The working files will be replaced by those of the commit. This cannot be undone.',
+  'reset.dialog.hardDirty.one': 'Local changes to {n} tracked file will be lost. This cannot be undone.',
+  'reset.dialog.hardDirty.other': 'Local changes to {n} tracked files will be lost. This cannot be undone.',
+  'reset.dialog.cancel': 'Cancel',
+  'reset.dialog.confirm': 'Reset',
+
+  'reset.op.soft': 'Soft reset of {branch}',
+  'reset.op.mixed': 'Mixed reset of {branch}',
+  'reset.op.keep': 'Keep reset of {branch}',
+  'reset.op.hard': 'Hard reset of {branch}',
+  'reset.done': '{branch} reset to {sha}',
+  'reset.error.stale': 'The branch moved since the dialog opened. Try again.',
+} satisfies Record<string, string>;

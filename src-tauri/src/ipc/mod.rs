@@ -126,7 +126,7 @@ pub(crate) async fn call<T>(
 /// tests) and the manager `invoke_handler`.
 macro_rules! registry {
     ($($module:ident => [$($cmd:ident),+ $(,)?]),+ $(,)?; desktop $desktop:ident => [$($extra:ident),+ $(,)?]) => {
-        /// Common controls at the office and the HTTP bridge (: 66).
+        /// Common controls at the office and the HTTP bridge (: 67).
         pub const COMMAND_NAMES: &[&str] = &[$($(stringify!($cmd)),+),+];
         pub const DESKTOP_COMMAND_NAMES: &[&str] = &[$(stringify!($extra)),+];
         pub const ALL_COMMAND_NAMES: &[&str] = &[$($(stringify!($cmd)),+),+, $(stringify!($extra)),+];
@@ -147,7 +147,7 @@ registry! {
     status => [status_get],
     index => [stage_paths, unstage_paths, discard_paths, stage_hunk, unstage_hunk, discard_hunk],
     commit => [commit_create, config_set_identity],
-    branch => [refs_list, reflog_list, branch_compare, branch_create, branch_checkout, branch_rename, branch_delete],
+    branch => [refs_list, reflog_list, branch_compare, branch_create, branch_checkout, branch_rename, branch_delete, branch_reset],
     merge => [merge_branch, merge_continue, merge_abort],
     rebase => [rebase_todo_preview, rebase_start, rebase_interactive_start, rebase_continue, rebase_skip, rebase_abort],
     stash => [stash_list, stash_show, stash_save, stash_apply, stash_pop, stash_drop, stash_branch],

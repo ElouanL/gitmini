@@ -17,6 +17,9 @@ export default {
   "undo.confirm.description.pull.noUpstream": "Cancel pull; {branch} returns to {sha}. Remote commits remains available in the remote branch.",
   "undo.confirm.description.branch-delete": "Restore the {branch} branch on {sha} (without its upstream).",
   "undo.confirm.description.stash-drop": "Restore the stash \"{message}\" to stash@{0}.",
+  "undo.confirm.description.reset-soft": "Cancel reset of {branch}; {branch} returns to {sha}. The index is kept.",
+  "undo.confirm.description.reset-mixed": "Cancel reset of {branch}; {branch} returns to {sha} and the index is restored. Working files are kept.",
+  "undo.confirm.description.reset-keep": "Cancel reset of {branch}; {branch} returns to {sha}. Your local changes are preserved.",
   'undo.kind.cherry-pick': "cherry-pick",
   'undo.kind.revert': 'revert',
 

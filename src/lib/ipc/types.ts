@@ -456,7 +456,7 @@ export type UndoEntry = {
 	time: number,
 };
 
-export type UndoKind = "commit" | "amend" | "merge" | "rebase" | "cherry-pick" | "revert" | "pull" | "branch-delete" | "stash-drop";
+export type UndoKind = "commit" | "amend" | "merge" | "rebase" | "cherry-pick" | "revert" | "pull" | "branch-delete" | "stash-drop" | "reset-soft" | "reset-mixed" | "reset-keep";
 
 export type UndoStatus = {
 	entry: UndoEntry | null,

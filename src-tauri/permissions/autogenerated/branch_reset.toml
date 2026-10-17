@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-branch-reset"
+description = "Enables the branch_reset command without any pre-configured scope."
+commands.allow = ["branch_reset"]
+
+[[permission]]
+identifier = "deny-branch-reset"
+description = "Denies the branch_reset command without any pre-configured scope."
+commands.deny = ["branch_reset"]

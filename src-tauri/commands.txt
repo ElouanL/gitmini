@@ -31,6 +31,7 @@ branch_create
 branch_checkout
 branch_rename
 branch_delete
+branch_reset
 merge_branch
 merge_continue
 merge_abort

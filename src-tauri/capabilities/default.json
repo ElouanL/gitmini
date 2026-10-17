@@ -43,6 +43,7 @@
     "allow-branch-checkout",
     "allow-branch-rename",
     "allow-branch-delete",
+    "allow-branch-reset",
     "allow-merge-branch",
     "allow-merge-continue",
     "allow-merge-abort",
