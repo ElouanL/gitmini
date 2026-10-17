@@ -212,6 +212,23 @@ export async function typeInto(id: string, text: string, opts: { clear?: boolean
   }
 }
 
+/**
+ * Sets the value of a field from the page and fires `input` (what `bind:value` listens to). For text the Linux driver
+ * does not type faithfully: after a right click, CI got "second release" for "Second release".
+ */
+export async function fillText(id: string, text: string, attrs?: Attrs): Promise<void> {
+  const element = await waitForTestId(id, { attrs });
+  await browser.execute(
+    (el: HTMLInputElement | HTMLTextAreaElement, value: string) => {
+      const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      Object.getOwnPropertyDescriptor(proto, 'value')!.set!.call(el, value);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    },
+    element as unknown as HTMLInputElement,
+    text,
+  );
+}
+
 export async function textOf(id: string, attrs?: Attrs): Promise<string> {
   const element = await waitForTestId(id, { attrs });
   // WebKitWebDriver's getText can return an empty string for visible clipped/flex text.

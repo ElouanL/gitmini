@@ -1,11 +1,14 @@
 // PAL-02 — Palette: fuzzy search, commands run last (kept across a restart) and `/` for open and recent repositories.
 // Fixture `with-remote`; the collaborator's clone `other` is a recent repository (pal-02.with-remote.setup.ts).
 import { realpathSync } from 'node:fs';
-import { basename } from 'node:path';
+import { basename, toNamespacedPath } from 'node:path';
 import { expect } from '@wdio/globals';
 import { currentSession } from '../helpers';
 import { allByTid, appReady, attrOf, countOf, idle, press, typeInto, until, waitForGone, waitForTestId } from '../../support/ui';
 import { activeTestId, htmlTheme, readSettings } from './ui-support';
+
+/** The path the backend exposes for an opened repository: canonical, with the Windows verbatim prefix. */
+const canonical = (path: string): string => toNamespacedPath(realpathSync.native(path));
 
 /** Open the palette with `text` typed after Mod+K. */
 async function openPalette(text = ''): Promise<void> {
@@ -83,7 +86,7 @@ describe('PAL-02 — Palette: fuzzy search, recent commands and repositories', (
     await waitForTestId('palette', { attrs: { mode: 'repos' } });
     await expectData('label', [repoName, 'other']);
     expect(await itemsData('current')).toEqual(['true', null]);
-    expect(await itemsData('path')).toContain(realpathSync(repo));
+    expect(await itemsData('path')).toContain(canonical(repo));
 
     // 7. Pick the recent repository by name: it opens in a second tab, which becomes the active one.
     await typeInto('palette-input', '/oth');
@@ -92,7 +95,7 @@ describe('PAL-02 — Palette: fuzzy search, recent commands and repositories', (
     await waitForGone('palette');
     await idle();
     await until(async () => (await countOf('repo-tab')) === 2, { message: 'the repository should open in a second tab' });
-    const otherPath = realpathSync(fx.other);
+    const otherPath = canonical(fx.other);
     expect(await attrOf('repo-tab', 'aria-selected', { path: otherPath })).toBe('true');
 
     // 8. Both are open now: the palette lists the two tabs, and picking the other one switches to it, with focus on its tab.
@@ -102,7 +105,7 @@ describe('PAL-02 — Palette: fuzzy search, recent commands and repositories', (
     await press('Enter'); // the first one, the repository that is not the active tab
     await waitForGone('palette');
     await idle();
-    expect(await attrOf('repo-tab', 'aria-selected', { path: realpathSync(repo) })).toBe('true');
+    expect(await attrOf('repo-tab', 'aria-selected', { path: canonical(repo) })).toBe('true');
     expect(await attrOf('repo-tab', 'aria-selected', { path: otherPath })).toBe('false');
     expect(await activeTestId()).toBe('repo-tab');
     expect(await countOf('repo-tab')).toBe(2); // switching did not open a third

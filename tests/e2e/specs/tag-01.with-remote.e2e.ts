@@ -5,7 +5,7 @@ import { expect } from '@wdio/globals';
 import { currentSession } from '../helpers';
 import { clickRow } from '../../support/graph';
 import { git, gitOk, revParse, revParseOpt } from '../../support/git-state';
-import { appReady, attrOf, byTid, chooseContextItem, click, contextMenuActions, countOf, idle, isEnabled, isShown, press, rightClick, textOf, typeInto, waitForGone, waitForTestId, waitForToast, waitForToastText } from '../../support/ui';
+import { appReady, attrOf, byTid, chooseContextItem, click, contextMenuActions, countOf, fillText, idle, isEnabled, isShown, press, rightClick, textOf, typeInto, waitForGone, waitForTestId, waitForToast, waitForToastText } from '../../support/ui';
 
 describe('TAG-01 — Tags', () => {
   it('TAG-01 — annotated tag from a commit, lightweight tag from the sidebar, push, remote clash and its deletion, delete and undo', async () => {
@@ -25,7 +25,7 @@ describe('TAG-01 — Tags', () => {
     expect(await isEnabled('tag-create-submit-btn')).toBe(false);
     await typeInto('tag-create-name-input', 'v2.0');
     expect(await isShown('tag-create-error')).toBe(false);
-    await typeInto('tag-create-message-input', 'Second release');
+    await fillText('tag-create-message-input', 'Second release');
     await waitForTestId('tag-create-dialog', { attrs: { annotated: true } });
     await click('tag-create-submit-btn');
     await idle();

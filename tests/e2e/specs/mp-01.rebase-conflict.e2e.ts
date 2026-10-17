@@ -20,9 +20,18 @@ describe('MP-01 — Merge preview: conflicts', () => {
     await appReady();
     const before = gitState(repo);
 
-    // 1. Merge dialog: the file that would conflict is listed, the merge stays possible, and nothing was started.
-    await rightClick('sidebar-branch-item', { ref: 'refs/heads/feature' });
-    await chooseContextItem('merge');
+    // 1. Drag feature onto main: the menu says the file would conflict under its merge entry, and links the two for screen readers.
+    // The drag comes first: on Linux CI the drop menu did not appear when the drag followed a right click.
+    await dragRef('feature', 'main');
+    await waitForTestId('graph-drop-menu');
+    await waitForTestId('graph-drop-menu-preview', { attrs: { kind: 'conflicts' } });
+    expect(await textOf('graph-drop-menu-preview-summary')).toBe('1 file would conflict');
+    expect(await attrOf('graph-drop-menu-item-merge', 'aria-describedby')).toBe('graph-drop-menu-preview');
+    await idle();
+    expect(gitState(repo)).toEqual(before);
+
+    // 2. Merge from the menu: the dialog repeats the preview, the merge stays possible, and nothing was started.
+    await click('graph-drop-menu-item-merge');
     await waitForTestId('merge-dialog');
     await waitForTestId('merge-preview', { attrs: { kind: 'conflicts' } });
     expect(await textOf('merge-preview-summary')).toBe('1 file would conflict');
@@ -35,17 +44,9 @@ describe('MP-01 — Merge preview: conflicts', () => {
     await click('merge-cancel-btn');
     await waitForGone('merge-dialog');
 
-    // 2. Drag feature onto main: the menu says the same under its merge entry, and links the two for screen readers.
-    await dragRef('feature', 'main');
-    await waitForTestId('graph-drop-menu');
-    await waitForTestId('graph-drop-menu-preview', { attrs: { kind: 'conflicts' } });
-    expect(await textOf('graph-drop-menu-preview-summary')).toBe('1 file would conflict');
-    expect(await attrOf('graph-drop-menu-item-merge', 'aria-describedby')).toBe('graph-drop-menu-preview');
-    await idle();
-    expect(gitState(repo)).toEqual(before);
-
-    // 3. Merge from the menu: the dialog repeats the preview, and the real merge stops on exactly that file.
-    await click('graph-drop-menu-item-merge');
+    // 3. The same dialog from the sidebar, then the real merge stops on exactly that file.
+    await rightClick('sidebar-branch-item', { ref: 'refs/heads/feature' });
+    await chooseContextItem('merge');
     await waitForTestId('merge-dialog');
     await waitForTestId('merge-preview-file', { attrs: { path: 'conflict.txt' } });
     await click('merge-submit-btn');

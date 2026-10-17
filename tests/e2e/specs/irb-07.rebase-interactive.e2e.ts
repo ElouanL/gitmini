@@ -4,7 +4,7 @@ import { expect } from '@wdio/globals';
 import { currentSession } from '../helpers';
 import { clickRow } from '../../support/graph';
 import { commitMessage, logFormat, logSubjects, revParse } from '../../support/git-state';
-import { appReady, chooseContextItem, click, idle, valueOf, waitForGone, waitForTestId } from '../../support/ui';
+import { appReady, chooseContextItem, click, fillText, idle, valueOf, waitForGone, waitForTestId } from '../../support/ui';
 
 describe('IRB-07 — Interactive rebase: squash from the graph', () => {
   it("IRB-07 — C then Shift+click B, squash with edited message: one commit, author of B, identical final tree", async () => {
@@ -23,7 +23,7 @@ describe('IRB-07 — Interactive rebase: squash from the graph', () => {
     // Message pre-filled: subject of the oldest, blank line, then the subjects of the others (oldest → newest).
     await waitForTestId('squash-message-input');
     expect(await valueOf('squash-message-input')).toBe("B: typo\n\nC: adds c.txt");
-    await (await waitForTestId('squash-message-input')).setValue("B: typo and c.txt\n\nMerged from the graph.");
+    await fillText('squash-message-input', "B: typo and c.txt\n\nMerged from the graph.");
 
     await click('squash-confirm-btn');
     await idle();
