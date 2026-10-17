@@ -1802,7 +1802,7 @@ dependencies = [
 
 [[package]]
 name = "gitmini"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.23.1",
  "gitmini-core",
@@ -1824,7 +1824,7 @@ dependencies = [
 
 [[package]]
 name = "gitmini-bridge"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "axum",
  "futures-util",
@@ -1845,7 +1845,7 @@ dependencies = [
 
 [[package]]
 name = "gitmini-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
