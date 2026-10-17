@@ -15,6 +15,7 @@
 //! - **Worktree** (Linux): a non-recursive watch per folder not ignored, placed **after** the first screen (as soon as
 //!   The graph index has published its first page, at most [`WatchConfig::worktree_defer`] = 1 s], in the background task; the ignored folders are neither monitored nor searched.
 //!   macOS / Windows: Events under an ignored path are thrown by the same exclusion stack.
+//!   A tracked path (index) is never ignored; the stack is rebuilt on `.gitignore`, `info/exclude` and config changes.
 //! - **Gitmini writing**: Kinds observed during `repo.write_active` leave in `repo.pending_kinds`
 //!   (seen only once by `WriteGuard::finish`); "Echos" arrived after the end of a script (file
 //!   unmodified since, already announced Kinds) are discarded (`RepoHandle::is_write_echo`); an external change
@@ -23,7 +24,7 @@
 //! **Limited inotify**: `RepoHandle::set_watch_degraded` (readable by `repo_watch_degraded`, taken by
 //!   `StatusSnapshot.watcherDegraded`) and a `repo:changed` with all Kinds for the front to reread the status.
 //!   **Racin disappeared**: `repo.missing = true` and then all the Kinds.
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,6 +32,7 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
+use gix::bstr::{BStr, BString, ByteSlice};
 use notify::event::{CreateKind, ModifyKind, RemoveKind};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::{mpsc as tmpsc, watch as twatch};
@@ -207,6 +209,31 @@ pub fn classify(layout: &Layout, path: &Path) -> Class {
     Class::Ignored
 }
 
+/// A repository file that feeds the exclusion stack besides the `.gitignore` files of the worktree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IgnoreSource {
+    /// `<common_dir>/info/exclude` (or the `info/` folder itself).
+    Exclude,
+    /// `<common_dir>/config` or `<git_dir>/config.worktree` (`core.excludesFile`).
+    Config,
+}
+
+/// Which exclusion source `path` is, if any (classified [`Class::Ignored`] by [`classify`], yet it changes
+/// which worktree files are ignored).
+pub fn ignore_source(layout: &Layout, path: &Path) -> Option<IgnoreSource> {
+    if let Ok(rel) = path.strip_prefix(&layout.common_dir) {
+        match names(rel).as_slice() {
+            ["info"] | ["info", "exclude"] => return Some(IgnoreSource::Exclude),
+            ["config"] => return Some(IgnoreSource::Config),
+            _ => {}
+        }
+    }
+    if path.strip_prefix(&layout.git_dir).ok() == Some(Path::new("config.worktree")) {
+        return Some(IgnoreSource::Config);
+    }
+    None
+}
+
 // ── Debounce
 
 /// Message from the classification thread to the bust task.
@@ -269,20 +296,100 @@ pub async fn run_debounce<F, Fut>(
 
 // ── Pile d'exclusion (.gitignore, info/exclude, core.excludesFile) ───
 
-/// gix exclusion battery of worktree, rebuilt when a `.gitignore` changes.
+/// Paths of the index (`/`-separated): tracked files and every parent folder of one.
+#[derive(Debug, Default)]
+struct Tracked {
+    files: HashSet<BString>,
+    dirs: HashSet<BString>,
+}
+
+impl Tracked {
+    fn read(repo: &gix::Repository) -> Self {
+        let mut tracked = Self::default();
+        // read from disk each time (not the shared snapshot, refreshed by mtime only): called on change only
+        let index = match repo.open_index() {
+            Ok(index) => index,
+            Err(e) => {
+                // no index yet (empty repository), or unreadable: nothing is tracked
+                tracing::debug!("watcher: index not read, nothing counted as tracked: {e}");
+                return tracked;
+            }
+        };
+        for entry in index.entries() {
+            let path = entry.path(&index);
+            let mut end = path.len();
+            while let Some(slash) = path[..end].rfind_byte(b'/') {
+                if !tracked.dirs.insert(path[..slash].into()) {
+                    break; // its parents are already in
+                }
+                end = slash;
+            }
+            tracked.files.insert(path.to_owned());
+        }
+        tracked
+    }
+
+    fn contains(&self, rel: &Path) -> bool {
+        let rel = gix::path::to_unix_separators_on_windows(gix::path::into_bstr(rel));
+        let rel: &BStr = rel.as_ref();
+        self.files.contains(rel) || self.dirs.contains(rel)
+    }
+}
+
+/// gix exclusion battery of worktree, rebuilt when a `.gitignore`, `info/exclude` or the config changes.
+/// A tracked path (or a parent folder of one) is never excluded, as for Git: `.gitignore` only applies to
+/// untracked files.
 pub struct IgnoreChecker {
     repo: gix::Repository,
     stack: Option<gix::worktree::Stack>,
+    /// Read from the index on demand, dropped on each index change.
+    tracked: Option<Tracked>,
 }
 
 impl IgnoreChecker {
     pub fn new(repo: gix::Repository) -> Self {
-        Self { repo, stack: None }
+        Self {
+            repo,
+            stack: None,
+            tracked: None,
+        }
     }
 
-    /// To call when a `.gitignore` has changed: the stack is rebuilt at the next request.
+    /// To call when a `.gitignore` or `info/exclude` has changed: the stack is rebuilt at the next request.
     pub fn invalidate(&mut self) {
         self.stack = None;
+    }
+
+    /// To call when the repository config has changed (`core.excludesFile`): config reread from disk, stack
+    /// rebuilt at the next request.
+    pub fn reload_config(&mut self) {
+        if let Err(e) = self.repo.reload() {
+            tracing::warn!("watcher: reloading Git configuration: {e}");
+        }
+        self.stack = None;
+    }
+
+    /// To call when the index has changed: the tracked paths are reread at the next request.
+    pub fn invalidate_tracked(&mut self) {
+        self.tracked = None;
+    }
+
+    /// Rereads the tracked paths now; `true` if a folder became the parent of a tracked file (an ignored
+    /// folder may then need its watch).
+    pub fn refresh_tracked(&mut self) -> bool {
+        let fresh = Tracked::read(&self.repo);
+        let gained = self
+            .tracked
+            .as_ref()
+            .is_none_or(|old| fresh.dirs.iter().any(|d| !old.dirs.contains(d)));
+        self.tracked = Some(fresh);
+        gained
+    }
+
+    fn is_tracked(&mut self, rel: &Path) -> bool {
+        self.tracked
+            .get_or_insert_with(|| Tracked::read(&self.repo))
+            .contains(rel)
     }
 
     /// Build the battery as needed; `false` if gix cannot provide it.
@@ -302,9 +409,12 @@ impl IgnoreChecker {
         self.stack.is_some()
     }
 
-    /// `rel` (related to workdir) is excluded, either he or one of his parent soldiers? Without usable stack,
-    /// Nothing is excluded.
+    /// `rel` (related to workdir) is excluded, either he or one of his parent soldiers? A tracked path, or a
+    /// folder holding one, never is. Without usable stack, Nothing is excluded.
     pub fn is_ignored(&mut self, rel: &Path, is_dir: bool) -> bool {
+        if self.is_tracked(rel) {
+            return false;
+        }
         let mode = if is_dir {
             Some(gix::index::entry::Mode::DIR)
         } else {
@@ -514,9 +624,21 @@ impl Worker {
             {
                 return self.root_gone();
             }
+            if let Some(source) = ignore_source(&self.layout, path) {
+                // the set of ignored files may change: the status is reread
+                self.on_ignore_source(path, source, &ev.kind);
+                let k = kinds(&[ChangeKindEv::Worktree]);
+                if !echo(path, &k) {
+                    found.extend(k);
+                }
+                continue;
+            }
             match classify(&self.layout, path) {
                 Class::Ignored => {}
                 Class::Kinds(k) => {
+                    if *path == self.layout.git_dir.join("index") {
+                        self.on_index_changed();
+                    }
                     self.on_git_path(path, &ev.kind);
                     if !echo(path, &k) {
                         found.extend(k);
@@ -533,6 +655,36 @@ impl Worker {
             }
         }
         self.send_kinds(found);
+    }
+
+    /// `info/exclude` or the config changed: exclusion stack rebuilt, watches re-laid (a folder may no
+    /// longer be ignored). A created `info/` folder is monitored (Linux).
+    fn on_ignore_source(&mut self, path: &Path, source: IgnoreSource, kind: &EventKind) {
+        match source {
+            IgnoreSource::Exclude => self.ignore.invalidate(),
+            IgnoreSource::Config => self.ignore.reload_config(),
+        }
+        self.schedule_walk(Duration::from_millis(200));
+        if self.per_dir
+            && matches!(
+                kind,
+                EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(_))
+            )
+            && *path == self.layout.common_dir.join("info")
+            && path.is_dir()
+        {
+            let _ = self.watcher.watch(path, RecursiveMode::NonRecursive);
+        }
+    }
+
+    /// The index changed: tracked paths reread (lazily, except in `per_dir` mode where a folder that became
+    /// the parent of a tracked file, even an ignored one, must receive its watch).
+    fn on_index_changed(&mut self) {
+        if !self.per_dir {
+            self.ignore.invalidate_tracked();
+        } else if self.ignore.refresh_tracked() {
+            self.schedule_walk(Duration::from_millis(200));
+        }
     }
 
     /// Operation folders appeared in `<git_dir>`: monitored as soon as they appeared (Linux).
@@ -792,6 +944,7 @@ fn install_core(
         &layout.common_dir.join("logs/refs"),
         RecursiveMode::NonRecursive,
     );
+    watch(&layout.common_dir.join("info"), RecursiveMode::NonRecursive);
     for dir in ["rebase-merge", "rebase-apply", "sequencer"] {
         let path = layout.git_dir.join(dir);
         if path.is_dir() {
@@ -1053,6 +1206,33 @@ mod tests {
         }
     }
 
+    #[test]
+    fn ignore_sources_plain_and_linked() {
+        use IgnoreSource::{Config, Exclude};
+        let cases: &[(&Layout, &str, Option<IgnoreSource>)] = &[
+            (&plain_layout(), "/w/.git/info/exclude", Some(Exclude)),
+            (&plain_layout(), "/w/.git/info", Some(Exclude)),
+            (&plain_layout(), "/w/.git/config", Some(Config)),
+            (&plain_layout(), "/w/.git/config.worktree", Some(Config)),
+            (&plain_layout(), "/w/.git/config.lock", None),
+            (&plain_layout(), "/w/.git/info/refs", None),
+            (&plain_layout(), "/w/info/exclude", None),
+            (&plain_layout(), "/w/config", None),
+            (&linked_layout(), "/main/.git/info/exclude", Some(Exclude)),
+            (&linked_layout(), "/main/.git/config", Some(Config)),
+            (
+                &linked_layout(),
+                "/main/.git/worktrees/linked/config.worktree",
+                Some(Config),
+            ),
+            (&linked_layout(), "/main/.git/worktrees/linked/config", None),
+            (&linked_layout(), "/main/.git/config.worktree", None),
+        ];
+        for (layout, path, expected) in cases {
+            assert_eq!(ignore_source(layout, Path::new(path)), *expected, "{path}");
+        }
+    }
+
     // ── debounce
 
     type Flushes = Arc<StdMutex<Vec<(Duration, Flush)>>>;
@@ -1259,6 +1439,71 @@ mod tests {
         c.invalidate();
         assert!(c.is_ignored(Path::new("src/main.rs"), false));
         assert!(!c.is_ignored(Path::new("node_modules"), true));
+    }
+
+    #[test]
+    fn ignore_checker_never_excludes_tracked_paths() {
+        let (_tmp, root, repo) = temp_repo();
+        std::fs::write(root.join(".gitignore"), "*.lock\nvendor/\n").unwrap();
+        std::fs::create_dir_all(root.join("vendor/pkg")).unwrap();
+        for f in ["Cargo.lock", "vendor/pkg/lib.js", "vendor/pkg/extra.js"] {
+            std::fs::write(root.join(f), "x").unwrap();
+        }
+        git(&root, &["add", "-f", "Cargo.lock", "vendor/pkg/lib.js"]);
+        let mut c = IgnoreChecker::new(repo);
+        assert!(!c.is_ignored(Path::new("Cargo.lock"), false));
+        assert!(!c.is_ignored(Path::new("vendor/pkg/lib.js"), false));
+        assert!(
+            !c.is_ignored(Path::new("vendor"), true),
+            "parent of a tracked file"
+        );
+        assert!(!c.is_ignored(Path::new("vendor/pkg"), true));
+        assert!(c.is_ignored(Path::new("other.lock"), false));
+        assert!(c.is_ignored(Path::new("vendor/pkg/extra.js"), false));
+        // a file added to the index is only seen as tracked after the index change is reported
+        git(&root, &["add", "-f", "vendor/pkg/extra.js"]);
+        assert!(!c.refresh_tracked(), "no new folder");
+        assert!(!c.is_ignored(Path::new("vendor/pkg/extra.js"), false));
+        std::fs::create_dir_all(root.join("gen")).unwrap();
+        std::fs::write(root.join(".gitignore"), "gen/\n").unwrap();
+        std::fs::write(root.join("gen/out.rs"), "x").unwrap();
+        c.invalidate();
+        assert!(c.is_ignored(Path::new("gen"), true));
+        git(&root, &["add", "-f", "gen/out.rs"]);
+        c.invalidate_tracked();
+        assert!(!c.is_ignored(Path::new("gen"), true));
+        git(&root, &["rm", "-q", "--cached", "gen/out.rs"]);
+        assert!(!c.refresh_tracked(), "a folder removed is not a gain");
+        assert!(c.is_ignored(Path::new("gen"), true));
+        std::fs::create_dir_all(root.join("gen2")).unwrap();
+        std::fs::write(root.join("gen2/x"), "x").unwrap();
+        git(&root, &["add", "-f", "gen2/x"]);
+        assert!(c.refresh_tracked(), "new parent folder");
+    }
+
+    #[test]
+    fn ignore_checker_rereads_info_exclude_and_config() {
+        let (_tmp, root, repo) = temp_repo();
+        let mut c = IgnoreChecker::new(repo);
+        assert!(!c.is_ignored(Path::new("a.gm-tmp"), false));
+        assert!(!c.is_ignored(Path::new("gm-build"), true));
+        std::fs::create_dir_all(root.join(".git/info")).unwrap();
+        std::fs::write(root.join(".git/info/exclude"), "gm-build/\n").unwrap();
+        c.invalidate();
+        assert!(c.is_ignored(Path::new("gm-build"), true));
+        let excludes = root.parent().unwrap().join("excludes");
+        std::fs::write(&excludes, "*.gm-tmp\n").unwrap();
+        git(
+            &root,
+            &["config", "core.excludesFile", excludes.to_str().unwrap()],
+        );
+        c.invalidate();
+        assert!(
+            !c.is_ignored(Path::new("a.gm-tmp"), false),
+            "config not reread without reload"
+        );
+        c.reload_config();
+        assert!(c.is_ignored(Path::new("a.gm-tmp"), false));
     }
 
     #[test]
