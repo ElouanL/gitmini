@@ -102,17 +102,29 @@ export async function startMock(opts = {}) {
     return out.replace(TOKEN_LIKE, '***');
   }
 
+  /**
+   * `Scheme value` of an Authorization header, split at its first whitespace (no regular expression: the header is
+   * untrusted input).
+   * @param {string} header
+   * @returns {{ scheme: string, value: string } | null}
+   */
+  function splitAuth(header) {
+    const text = header.trim();
+    const i = text.search(/\s/);
+    return i <= 0 ? null : { scheme: text.slice(0, i), value: text.slice(i).trim() };
+  }
+
   /** @param {string | undefined} header */
   function describeAuth(header) {
     if (!header) return null;
-    const m = /^(\S+)\s+(.*)$/.exec(header.trim());
-    if (!m) return { scheme: 'unknown' };
-    if (/^basic$/i.test(m[1])) {
-      const decoded = Buffer.from(m[2], 'base64').toString('utf8');
+    const auth = splitAuth(header);
+    if (!auth) return { scheme: 'unknown' };
+    if (auth.scheme.toLowerCase() === 'basic') {
+      const decoded = Buffer.from(auth.value, 'base64').toString('utf8');
       const i = decoded.indexOf(':');
       return { scheme: 'Basic', login: sanitize(i < 0 ? decoded : decoded.slice(0, i)) };
     }
-    return { scheme: sanitize(m[1]).slice(0, 32) };
+    return { scheme: sanitize(auth.scheme).slice(0, 32) };
   }
 
   /** @param {URLSearchParams} params */
@@ -168,15 +180,15 @@ export async function startMock(opts = {}) {
 
   /** @param {http.IncomingMessage} req */
   function bearerOk(req) {
-    const m = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization ?? ''));
-    return !!m && m[1] === token;
+    const auth = splitAuth(String(req.headers.authorization ?? ''));
+    return auth !== null && auth.scheme.toLowerCase() === 'bearer' && auth.value === token;
   }
 
   /** @param {http.IncomingMessage} req */
   function basicCreds(req) {
-    const m = /^Basic\s+(.+)$/i.exec(String(req.headers.authorization ?? ''));
-    if (!m) return null;
-    const decoded = Buffer.from(m[1], 'base64').toString('utf8');
+    const auth = splitAuth(String(req.headers.authorization ?? ''));
+    if (auth === null || auth.scheme.toLowerCase() !== 'basic' || auth.value === '') return null;
+    const decoded = Buffer.from(auth.value, 'base64').toString('utf8');
     const i = decoded.indexOf(':');
     return i < 0 ? { user: decoded, pass: '' } : { user: decoded.slice(0, i), pass: decoded.slice(i + 1) };
   }
