@@ -492,6 +492,88 @@ async fn stage_02_hunks_are_refused_on_submodules_binaries_and_conflicts() {
     assert_eq!(detail_str(&e, "reason").as_deref(), Some("submodule"));
 }
 
+/// Latin-1 content (`caf\xe9`): the lines are decoded with U+FFFD, a hunk patch would rewrite the bytes
+/// (each hunk below applies cleanly and would write `EF BF BD` without the guard). Stage / unstage / discard
+/// of a hunk are refused and the index and the worktree stay byte for byte.
+#[tokio::test]
+async fn stage_02_hunks_are_refused_on_non_utf8_content() {
+    // 30 lines; the changed lines are 10 apart, so each one is its own hunk with ASCII context.
+    let lines = |over: &[(usize, &[u8])]| -> Vec<u8> {
+        let mut out = Vec::new();
+        for n in 1..=30 {
+            match over.iter().find(|(i, _)| *i == n) {
+                Some((_, l)) => out.extend_from_slice(l),
+                None => out.extend_from_slice(format!("l{n}").as_bytes()),
+            }
+            out.push(b'\n');
+        }
+        out
+    };
+    let fx = Fx::empty_repo();
+    fx.write_bytes(
+        "latin1.txt",
+        &lines(&[(5, b"l5 caf\xe9"), (15, b"l15 caf\xe9")]),
+    );
+    fx.write("utf8.txt", "caf\u{e9}\nline 2\n");
+    fx.git(&["add", "."]);
+    fx.git(&["commit", "-q", "-m", "init"]);
+    // Staged hunk 0: `-l5 caf\xe9` (unstage would restore it).
+    let staged = lines(&[(5, b"l5 ok"), (15, b"l15 caf\xe9")]);
+    fx.write_bytes("latin1.txt", &staged);
+    fx.git(&["add", "latin1.txt"]);
+    // Unstaged hunk 0: `-l15 caf\xe9` (discard would restore it); hunk 1: `+l25 na\xefve` (stage would add it).
+    let worktree = lines(&[(5, b"l5 ok"), (15, b"l15 ok"), (25, b"l25 na\xefve")]);
+    fx.write_bytes("latin1.txt", &worktree);
+    fx.write("utf8.txt", "caf\u{e9}\nline 2 changed\n");
+    let o = fx.open().await;
+    let index_blob = |fx: &Fx| fx.git_raw(&["cat-file", "blob", ":latin1.txt"]).stdout;
+    assert_eq!(index_blob(&fx), staged);
+
+    for source in [DiffSource::Unstaged, DiffSource::Staged] {
+        let d = diff_for(&o.repo, "latin1.txt", &source, false)
+            .await
+            .unwrap();
+        assert!(d.lossy, "invalid UTF-8 is flagged");
+        assert!(!d.binary);
+    }
+    let d = diff_for(&o.repo, "utf8.txt", &DiffSource::Unstaged, false)
+        .await
+        .unwrap();
+    assert!(!d.lossy, "valid UTF-8 (é) is not lossy");
+
+    for (source, index, op) in [
+        (DiffSource::Unstaged, 1, "stage"),
+        (DiffSource::Staged, 0, "unstage"),
+        (DiffSource::Unstaged, 0, "discard"),
+    ] {
+        let args = hunk_args(&o, "latin1.txt", source, index).await;
+        let e = match op {
+            "stage" => stage_hunk(&o.state, args).await,
+            "unstage" => unstage_hunk(&o.state, args).await,
+            _ => discard_hunk(&o.state, args).await,
+        }
+        .unwrap_err();
+        assert_eq!(code(&e), "INVALID_ARGUMENT", "{op}");
+        assert_eq!(
+            detail_str(&e, "reason").as_deref(),
+            Some("non-utf8"),
+            "{op}"
+        );
+        assert_eq!(index_blob(&fx), staged, "{op}: index unchanged");
+        assert_eq!(
+            fx.read_bytes("latin1.txt"),
+            worktree,
+            "{op}: worktree unchanged"
+        );
+    }
+
+    // The whole file still goes through: bytes preserved.
+    stage_paths(&o.state, paths(&o, &["latin1.txt"]))
+        .await
+        .unwrap();
+    assert_eq!(index_blob(&fx), worktree);
+}
+
 // ── STAGE-05
 
 #[tokio::test]

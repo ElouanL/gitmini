@@ -255,6 +255,11 @@
     <div class="banner" role="note" data-testid="diff-lfs-pointer-banner">{t('diff.lfs')}</div>
   {/if}
 
+  <!-- Lines decoded with U+FFFD: a hunk patch would rewrite the invalid bytes (the backend refuses it). -->
+  {#if diff?.lossy && (sourceKind === 'unstaged' || sourceKind === 'staged')}
+    <div class="banner" role="note" data-testid="diff-lossy-banner">{t('diff.lossy')}</div>
+  {/if}
+
   {#if diff === null}
     {#if loadError}
       <div class="state" data-testid="diff-error">

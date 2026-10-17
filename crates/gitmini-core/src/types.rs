@@ -340,6 +340,9 @@ pub struct FileDiff {
     pub old_mode: Option<u32>,
     pub new_mode: Option<u32>,
     pub binary: bool,
+    /// Text not valid UTF-8 on one side: the lines are decoded with U+FFFD, so the hunks cannot be turned
+    /// back into an exact patch (stage / unstage / discard of a hunk refused, whole file only).
+    pub lossy: bool,
     pub too_large: Option<TooLarge>,
     #[specta(type = Option<specta_typescript::Number>)]
     pub old_size: Option<u64>,

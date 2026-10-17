@@ -116,6 +116,7 @@ mod tests {
             old_mode: None,
             new_mode: None,
             binary: false,
+            lossy: false,
             too_large: None,
             old_size: None,
             new_size: None,
