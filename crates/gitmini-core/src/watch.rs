@@ -621,7 +621,9 @@ impl Worker {
     }
 
     fn schedule_walk(&mut self, delay: Duration) {
-        if self.per_dir && self.walk_due.is_none() {
+        // While the first screen is awaited, the initial complete course covers what this event would add:
+        // an early course would lay the watches before the graph index has published its first page.
+        if self.per_dir && self.walk_due.is_none() && self.graph_wait_until.is_none() {
             self.walk_due = Some(Instant::now() + delay);
         }
     }
