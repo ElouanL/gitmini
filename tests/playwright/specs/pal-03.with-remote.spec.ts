@@ -14,9 +14,9 @@ test.describe('PAL-03 — Palette: recent commands, from nothing', () => {
   test.use({ scenario: { fixture: 'with-remote' } });
 
   test('PAL-03 — a command run from the palette outranks an equal match, and the memory survives a restart', async ({ app }) => {
-    // 1. Without memory, "new" finds both creation commands, the shorter one first.
+    // 1. Without memory, "new" finds the three "New ..." commands (tag, branch, repository), the shorter one first.
     await app.openPalette('new');
-    await expectIds(app, ['tag.create', 'branch.create']);
+    await expectIds(app, ['tag.create', 'branch.create', 'repo.init']);
     await app.press('Escape');
     await app.waitGone('palette');
 
@@ -30,16 +30,16 @@ test.describe('PAL-03 — Palette: recent commands, from nothing', () => {
     await app.waitGone('branch-create-dialog');
     await expect.poll(() => app.readSettings()['palette.recent']).toEqual(['branch.create']);
 
-    // 3. The same query now puts the command run last first.
+    // 3. The same query now puts the command run last first; the other two keep their order.
     await app.openPalette('new');
-    await expectIds(app, ['branch.create', 'tag.create']);
+    await expectIds(app, ['branch.create', 'tag.create', 'repo.init']);
     await app.press('Escape');
     await app.waitGone('palette');
 
     // 4. A new bridge reading the same settings.json ranks the same.
     await app.restart();
     await app.openPalette('new');
-    await expectIds(app, ['branch.create', 'tag.create']);
+    await expectIds(app, ['branch.create', 'tag.create', 'repo.init']);
   });
 });
 
@@ -63,9 +63,9 @@ test.describe('PAL-03 — Palette: recent commands, hand-edited settings.json', 
     await app.press('Escape');
     await app.waitGone('palette');
 
-    // 2. A recent command outranks an equal match: "new" puts New branch (recent) before the shorter New tag (not).
+    // 2. A recent command outranks an equal match: "new" puts New branch (recent) before the shorter New tag (not), and New repository (not recent, longest) last.
     await app.openPalette('new');
-    await expectIds(app, ['branch.create', 'tag.create']);
+    await expectIds(app, ['branch.create', 'tag.create', 'repo.init']);
     await app.press('Escape');
     await app.waitGone('palette');
 
