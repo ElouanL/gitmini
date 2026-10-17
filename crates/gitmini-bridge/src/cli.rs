@@ -20,7 +20,8 @@ OPTIONS
 -V, --version displays the version
 
 The indicated repository is opened at the start by the frontend (app_info.initialPath).
-Variables: RUST_LOG (log level), GITMINI_* of building e2e (see ).
+Variables: RUST_LOG (log level), GITMINI_BRIDGE_TOKEN (shared with the Vite dev proxy, 16 characters
+minimum; without it, the Vite dev server on port 1420 is refused), GITMINI_* of building e2e (see ).
 ";
 
 #[derive(Debug, PartialEq, Eq)]

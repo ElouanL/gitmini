@@ -1,13 +1,21 @@
-//! Guards of a local HTTP server that drives git: only the development browser and its pages
-//! (`http://127.0.0.1:*`, `http://localhost:*`) peuvent l'appeler.
+//! Guards of a local HTTP server that drives git: only the pages it serves itself and the Vite dev
+//! server (through its proxy, which proves itself with a shared token) can call it.
 //!
-//! - `Host` must be a closure address (anti DNS rebinding);
-//! - a `Origin` present must be a source of closure: without this, any web page opened in
-//!   the same browser could send a `POST text/plain` (request "simple", without preflight) to
-//!   `/__gitmini/invoke/repo_clone`, `commit_create`... even if she can't read the answer;
-//! - CORS: same closure origins only (Vite serves frontend on port 1420, bridge is on 1430).
+//! - `Host` must be a loopback address (anti DNS rebinding);
+//! - a `Origin` present must be in an exact list: without this, any web page opened in the same
+//!   browser (another local dev server on `http://localhost:3000` included) could send a
+//!   `POST text/plain` (request "simple", without preflight) to `/__gitmini/invoke/repo_clone`,
+//!   `commit_create`... even if she can't read the answer. The list:
+//!   - the bridge's own origins (`http://127.0.0.1:<port>`, `http://localhost:<port>`): `--static-dir` pages;
+//!   - the Vite dev origins (port 1420), only with the header `x-gitmini-bridge-token` equal to
+//!     `GITMINI_BRIDGE_TOKEN`: the Vite proxy (`vite.config.ts`) adds it, a page cannot (custom header =
+//!     preflight, and the proxy overwrites it). Vite also forwards the requests of foreign pages that
+//!     reach its port: the token alone is not enough, the origin must also be the one of Vite;
+//! - CORS: same accepted origins only.
+use std::sync::Arc;
+
 use axum::Json;
-use axum::extract::Request;
+use axum::extract::{Request, State};
 use axum::http::header::{
     ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS, ACCESS_CONTROL_ALLOW_ORIGIN,
     ACCESS_CONTROL_MAX_AGE, ACCESS_CONTROL_REQUEST_HEADERS, ACCESS_CONTROL_REQUEST_METHOD, HOST,
@@ -23,6 +31,15 @@ const ALLOW_PRIVATE_NETWORK: HeaderName =
     HeaderName::from_static("access-control-allow-private-network");
 const REQUEST_PRIVATE_NETWORK: HeaderName =
     HeaderName::from_static("access-control-request-private-network");
+
+/// Header added by the Vite dev proxy to the requests it forwards.
+pub const TOKEN_HEADER: HeaderName = HeaderName::from_static("x-gitmini-bridge-token");
+/// Environment variable shared by `gitmini-bridge` and `vite.config.ts`.
+pub const TOKEN_ENV: &str = "GITMINI_BRIDGE_TOKEN";
+/// Below that, the token is guessable: the bridge refuses to start.
+pub const MIN_TOKEN_LEN: usize = 16;
+/// Origins of the Vite dev server (`server.port` 1420, `strictPort`), accepted only with the token.
+pub const VITE_DEV_ORIGINS: [&str; 2] = ["http://localhost:1420", "http://127.0.0.1:1420"];
 
 /// `127.0.0.1`, `localhost` or `[::1]`, with or without port.
 pub fn is_loopback_authority(authority: &str) -> bool {
@@ -56,11 +73,59 @@ fn valid_port(tail: &str) -> bool {
     }
 }
 
-/// `http://127.0.0.1:1420`, `http://localhost`... (`Origin: null` and `https:` are refused).
-pub fn is_loopback_origin(origin: &str) -> bool {
-    origin
-        .strip_prefix("http://")
-        .is_some_and(is_loopback_authority)
+/// Who may call the bridge (see the module documentation).
+pub struct Policy {
+    /// Exact origins of the pages the bridge serves itself.
+    own_origins: [String; 2],
+    /// `None`: the Vite dev origins are refused.
+    proxy_token: Option<String>,
+}
+
+impl Policy {
+    /// `port`: port actually linked. `proxy_token`: `GITMINI_BRIDGE_TOKEN`, validated by `check_token`.
+    pub fn new(port: u16, proxy_token: Option<String>) -> Self {
+        Self {
+            own_origins: [
+                format!("http://127.0.0.1:{port}"),
+                format!("http://localhost:{port}"),
+            ],
+            proxy_token,
+        }
+    }
+
+    /// Byte-for-byte comparison: browsers serialize `Origin` in lowercase, without a trailing slash.
+    fn allows(&self, origin: &str, headers: &HeaderMap) -> bool {
+        if self.own_origins.iter().any(|o| o == origin) {
+            return true;
+        }
+        VITE_DEV_ORIGINS.contains(&origin) && self.has_proxy_token(headers)
+    }
+
+    fn has_proxy_token(&self, headers: &HeaderMap) -> bool {
+        let (Some(expected), Some(got)) = (&self.proxy_token, headers.get(&TOKEN_HEADER)) else {
+            return false;
+        };
+        constant_time_eq(expected.as_bytes(), got.as_bytes())
+    }
+}
+
+/// `Err`: reason why `GITMINI_BRIDGE_TOKEN` is refused.
+pub fn check_token(token: &str) -> Result<(), String> {
+    if token.len() < MIN_TOKEN_LEN {
+        return Err(format!(
+            "{TOKEN_ENV} is too short ({} characters, {MIN_TOKEN_LEN} minimum)",
+            token.len()
+        ));
+    }
+    if HeaderValue::from_str(token).is_err() {
+        return Err(format!("{TOKEN_ENV} is not a valid HTTP header value"));
+    }
+    Ok(())
+}
+
+/// Comparison without early exit: the response time does not reveal the length of the common prefix.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 fn forbidden(field: &str, message: &str) -> Response {
@@ -72,7 +137,7 @@ fn header_str<'a>(headers: &'a HeaderMap, name: &HeaderName) -> Option<&'a str> 
 }
 
 /// Middleware applied to all routes (API and static files).
-pub async fn guard(req: Request, next: Next) -> Response {
+pub async fn guard(State(policy): State<Arc<Policy>>, req: Request, next: Next) -> Response {
     if let Some(host) = req.headers().get(HOST)
         && !host.to_str().is_ok_and(is_loopback_authority)
     {
@@ -85,11 +150,12 @@ pub async fn guard(req: Request, next: Next) -> Response {
     let origin = match req.headers().get(ORIGIN) {
         None => None,
         Some(v) => match v.to_str() {
-            Ok(o) if is_loopback_origin(o) => Some(v.clone()),
+            Ok(o) if policy.allows(o, req.headers()) => Some(v.clone()),
             _ => {
                 return forbidden(
                     "origin",
-                    "Origin refused: only pages 127.0.0.1 / localhost are allowed.",
+                    "Origin refused: only the bridge's own pages and the Vite dev proxy \
+(with GITMINI_BRIDGE_TOKEN) are allowed.",
                 );
             }
         },
@@ -176,28 +242,73 @@ mod tests {
         }
     }
 
-    #[test]
-    fn loopback_origins() {
-        for ok in [
-            "http://127.0.0.1:1420",
-            "http://localhost:1420",
-            "http://localhost",
-            "http://[::1]:5173",
-        ] {
-            assert!(is_loopback_origin(ok), "{ok}");
+    const TOKEN: &str = "0123456789abcdef-token";
+
+    fn headers(token: Option<&str>) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        if let Some(t) = token {
+            h.insert(TOKEN_HEADER, HeaderValue::from_str(t).unwrap());
         }
+        h
+    }
+
+    #[test]
+    fn own_origins_are_exact() {
+        let p = Policy::new(1430, Some(TOKEN.to_string()));
+        for ok in ["http://127.0.0.1:1430", "http://localhost:1430"] {
+            assert!(p.allows(ok, &headers(None)), "{ok}");
+        }
+        // Even with the token: any other loopback page or port is refused.
         for bad in [
             "null",
-            "https://localhost:1420",
-            "https://evil.example",
-            "http://evil.example",
-            "http://127.0.0.1.evil.example",
-            "file://",
+            "http://127.0.0.1:1431",
+            "http://localhost:3000",
+            "http://localhost",
+            "http://[::1]:1430",
+            "https://localhost:1430",
+            "http://127.0.0.1:1430/",
+            "http://LOCALHOST:1430",
+            "http://127.0.0.1.evil.example:1430",
+            "http://localhost@evil.example:1430",
             "tauri://localhost",
-            "http://localhost@evil.example",
-            "127.0.0.1",
+            "127.0.0.1:1430",
         ] {
-            assert!(!is_loopback_origin(bad), "{bad}");
+            assert!(!p.allows(bad, &headers(Some(TOKEN))), "{bad}");
         }
+    }
+
+    #[test]
+    fn vite_origins_require_the_proxy_token() {
+        let with = Policy::new(1430, Some(TOKEN.to_string()));
+        let without = Policy::new(1430, None);
+        for origin in VITE_DEV_ORIGINS {
+            assert!(with.allows(origin, &headers(Some(TOKEN))), "{origin}");
+            assert!(!with.allows(origin, &headers(None)), "{origin}");
+            assert!(!with.allows(origin, &headers(Some("0123456789abcdef-tokeN"))));
+            assert!(!with.allows(origin, &headers(Some("0123456789abcdef"))));
+            assert!(!without.allows(origin, &headers(Some(TOKEN))), "{origin}");
+        }
+        // The token never opens another origin (Vite forwards the requests of any page reaching its port).
+        assert!(!with.allows("http://localhost:3000", &headers(Some(TOKEN))));
+        assert!(!with.allows("http://localhost:1421", &headers(Some(TOKEN))));
+    }
+
+    #[test]
+    fn token_validation() {
+        assert!(check_token(TOKEN).is_ok());
+        assert!(check_token("short").unwrap_err().contains("too short"));
+        assert!(
+            check_token("0123456789abcdef\n")
+                .unwrap_err()
+                .contains("header")
+        );
+    }
+
+    #[test]
+    fn constant_time_comparison() {
+        assert!(constant_time_eq(b"abc", b"abc"));
+        assert!(!constant_time_eq(b"abc", b"abd"));
+        assert!(!constant_time_eq(b"abc", b"abcd"));
+        assert!(!constant_time_eq(b"", b"a"));
     }
 }

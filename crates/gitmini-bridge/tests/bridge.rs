@@ -12,6 +12,9 @@ use gitmini_core::events::{ChangeKindEv, Event, OpProgress, OpStateEvent, RepoCh
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+/// `GITMINI_BRIDGE_TOKEN` of the test bridges (what the Vite dev proxy would add).
+const TOKEN: &str = "test-proxy-token-0123456789";
+
 struct Bridge {
     handle: BridgeHandle,
     http: Http,
@@ -46,6 +49,7 @@ impl Bridge {
             static_dir: Some(static_dir),
             config_dir,
             initial_path,
+            proxy_token: Some(TOKEN.to_string()),
         })
         .await
         .expect("Start of the bridge");
@@ -92,6 +96,7 @@ async fn binds_loopback_only_and_refuses_other_addresses() {
             static_dir: None,
             config_dir: tmp.path().to_path_buf(),
             initial_path: None,
+            proxy_token: None,
         })
         .await
         .err()
@@ -264,22 +269,34 @@ async fn foreign_origin_is_refused_before_any_command_runs() {
     let b = Bridge::start().await;
     let repo = make_repo(b.tmp.path());
     let body = json!({ "path": repo.to_string_lossy() }).to_string();
+    let other_port = format!("http://127.0.0.1:{}", b.handle.addr.port() + 1);
     // "Simple request" of any web page: text/plain, without preflight, but with `Origin`.
-    for origin in [
-        "https://evil.example",
-        "http://evil.example",
-        "null",
-        "http://127.0.0.1.evil.example",
+    // Loopback pages are not trusted either (another local dev server, any port), nor is the Vite
+    // origin without the proxy token, nor the token from another origin (Vite forwards every page).
+    for (origin, token) in [
+        ("https://evil.example", None),
+        ("http://evil.example", None),
+        ("null", None),
+        ("http://127.0.0.1.evil.example", None),
+        ("http://localhost:3000", None),
+        ("http://localhost", None),
+        (other_port.as_str(), None),
+        ("http://localhost:1420", None),
+        ("http://127.0.0.1:1420", None),
+        ("http://localhost:1420", Some("test-proxy-token-012345678X")),
+        ("http://localhost:1420", Some("")),
+        ("http://localhost:3000", Some(TOKEN)),
+        ("https://evil.example", Some(TOKEN)),
     ] {
+        let mut headers = vec![("content-type", "text/plain"), ("origin", origin)];
+        if let Some(t) = token {
+            headers.push(("x-gitmini-bridge-token", t));
+        }
         let r = b
             .http
-            .post(
-                "/__gitmini/invoke/repo_open",
-                &[("content-type", "text/plain"), ("origin", origin)],
-                &body,
-            )
+            .post("/__gitmini/invoke/repo_open", &headers, &body)
             .await;
-        assert_eq!(r.status, StatusCode::FORBIDDEN, "{origin}");
+        assert_eq!(r.status, StatusCode::FORBIDDEN, "{origin} {token:?}");
         let j = r.json();
         assert_eq!(j["code"], "INVALID_ARGUMENT", "{origin}");
         assert_eq!(j["details"]["field"], "origin", "{origin}");
@@ -324,8 +341,72 @@ async fn foreign_host_header_is_refused() {
 }
 
 #[tokio::test]
-async fn vite_dev_origin_gets_cors_headers_and_preflight() {
+async fn own_origin_runs_commands_without_token() {
     let b = Bridge::start().await;
+    let repo = make_repo(b.tmp.path());
+    let body = json!({ "path": repo.to_string_lossy() }).to_string();
+    let port = b.handle.addr.port();
+    // Page of `--static-dir` opened on `http://127.0.0.1:<port>` or `http://localhost:<port>`.
+    for origin in [
+        format!("http://127.0.0.1:{port}"),
+        format!("http://localhost:{port}"),
+    ] {
+        let r = b
+            .http
+            .post(
+                "/__gitmini/invoke/repo_open",
+                &[("content-type", "application/json"), ("origin", &origin)],
+                &body,
+            )
+            .await;
+        assert_eq!(r.status, StatusCode::OK, "{origin}: {}", r.text());
+        assert_eq!(
+            r.header("access-control-allow-origin"),
+            Some(origin.as_str())
+        );
+    }
+    b.stop().await;
+}
+
+#[tokio::test]
+async fn without_token_the_vite_origin_is_refused_and_short_tokens_do_not_start() {
+    let tmp = tempfile::tempdir().unwrap();
+    let opts = |proxy_token: Option<&str>| BridgeOptions {
+        addr: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+        static_dir: None,
+        config_dir: tmp.path().to_path_buf(),
+        initial_path: None,
+        proxy_token: proxy_token.map(str::to_string),
+    };
+
+    // Bridge launched without `GITMINI_BRIDGE_TOKEN`: whatever header the request carries.
+    let handle = gitmini_bridge::start(opts(None)).await.unwrap();
+    let http = Http::new(handle.url());
+    for token in [None, Some(TOKEN)] {
+        let mut headers = vec![("origin", "http://localhost:1420")];
+        if let Some(t) = token {
+            headers.push(("x-gitmini-bridge-token", t));
+        }
+        let r = http
+            .request(Method::GET, "/__gitmini/health", &headers, None)
+            .await;
+        assert_eq!(r.status, StatusCode::FORBIDDEN, "{token:?}");
+        assert_eq!(r.json()["details"]["field"], "origin");
+    }
+    handle.shutdown().await;
+
+    let err = gitmini_bridge::start(opts(Some("too-short")))
+        .await
+        .err()
+        .expect("token refused");
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    assert!(err.to_string().contains("GITMINI_BRIDGE_TOKEN"), "{err}");
+}
+
+#[tokio::test]
+async fn vite_dev_proxy_origin_with_token_gets_cors_headers_and_preflight() {
+    let b = Bridge::start().await;
+    // As forwarded by the Vite proxy: browser `Origin` kept, token added.
     for origin in ["http://localhost:1420", "http://127.0.0.1:1420"] {
         let pre = b
             .http
@@ -334,6 +415,7 @@ async fn vite_dev_origin_gets_cors_headers_and_preflight() {
                 "/__gitmini/invoke/app_info",
                 &[
                     ("origin", origin),
+                    ("x-gitmini-bridge-token", TOKEN),
                     ("access-control-request-method", "POST"),
                     ("access-control-request-headers", "content-type"),
                     ("access-control-request-private-network", "true"),
@@ -362,7 +444,11 @@ async fn vite_dev_origin_gets_cors_headers_and_preflight() {
             .http
             .post(
                 "/__gitmini/invoke/nope",
-                &[("content-type", "application/json"), ("origin", origin)],
+                &[
+                    ("content-type", "application/json"),
+                    ("origin", origin),
+                    ("x-gitmini-bridge-token", TOKEN),
+                ],
                 "{}",
             )
             .await;
@@ -376,7 +462,7 @@ async fn vite_dev_origin_gets_cors_headers_and_preflight() {
             .request(
                 Method::GET,
                 "/__gitmini/health",
-                &[("origin", origin)],
+                &[("origin", origin), ("x-gitmini-bridge-token", TOKEN)],
                 None,
             )
             .await;
@@ -563,7 +649,13 @@ async fn sse_broadcasts_to_every_client_and_only_events_after_subscription() {
         state: None,
     })); // before: no one listens
     let mut one = b.http.sse(&[]).await;
-    let mut two = b.http.sse(&[("origin", "http://localhost:1420")]).await;
+    let mut two = b
+        .http
+        .sse(&[
+            ("origin", "http://localhost:1420"),
+            ("x-gitmini-bridge-token", TOKEN),
+        ])
+        .await;
     assert_eq!(
         two.headers.get("access-control-allow-origin").unwrap(),
         "http://localhost:1420"
