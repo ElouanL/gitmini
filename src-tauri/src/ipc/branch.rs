@@ -1,12 +1,13 @@
 //! Refs and branches : `refs_list`, `reflog_list`, `branch_compare` [R] ; `branch_create`, `branch_checkout`,
-//! `branch_rename`, `branch_delete` [W] .
+//! `branch_rename`, `branch_delete`, `branch_reset` [W] .
 use gitmini_core::AppError;
 use gitmini_core::read::refs::{BranchCompareArgs, ReflogListArgs};
 use gitmini_core::read::status::RepoArgs;
-use gitmini_core::types::{BranchCompare, ReflogEntry, RefsSnapshot};
+use gitmini_core::types::{BranchCompare, ReflogEntry, RefsSnapshot, WriteResult};
 use gitmini_core::write::branch::{
     BranchCheckoutArgs, BranchCreateArgs, BranchDeleteArgs, BranchDeleteResult, BranchRenameArgs,
 };
+use gitmini_core::write::reset::BranchResetArgs;
 
 use super::{Args, Core, call};
 
@@ -87,6 +88,18 @@ pub async fn branch_delete(
     call(
         "branch_delete",
         gitmini_core::write::branch::branch_delete(&state, args.0),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn branch_reset(
+    state: Core<'_>,
+    args: Args<BranchResetArgs>,
+) -> Result<WriteResult, AppError> {
+    call(
+        "branch_reset",
+        gitmini_core::write::reset::branch_reset(&state, args.0),
     )
     .await
 }

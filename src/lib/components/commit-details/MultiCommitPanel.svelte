@@ -2,7 +2,8 @@
   import { captureStores } from '$lib/stores/context';
   const { graph, ui } = captureStores();
   // Multi-commits panel (03, 09): "n commits selected", grouped buttons `multi-commit-cherry-pick-btn` /
-  // `multi-commit-revert-btn` (registry actions `pick.cherry-pick` / `pick.revert`, domain flows), and with EXACTEMENT 2 commits the
+  // `multi-commit-revert-btn` (registry actions `pick.cherry-pick` / `pick.revert`, domain flows), `multi-commit-squash-btn`
+  // (action `rebase.squash`; consecutive commits only, the reason in its tooltip otherwise), and with EXACTEMENT 2 commits the
   // list of files modified between them (`commit_details { oid: <newer>, against: <older> }`, diff `range` at click).
   import { actionContext, actionDisabledReason, getAction, runAction } from '$lib/actions/registry';
   import { formatDate, shortOid } from '$lib/format';
@@ -54,6 +55,7 @@
   }
   const pickOff = $derived(reason('pick.cherry-pick'));
   const revertOff = $derived(reason('pick.revert'));
+  const squashOff = $derived(reason('rebase.squash'));
 </script>
 
 <section class="panel" data-testid="multi-commit-panel" data-count={oids.length}>
@@ -65,6 +67,9 @@
       </button>
       <button type="button" class="btn" data-testid="multi-commit-revert-btn" disabled={revertOff !== null} title={revertOff ?? undefined} onclick={() => void runAction('pick.revert', target)}>
         {t('graph.multi.revert', { n: oids.length })}
+      </button>
+      <button type="button" class="btn" data-testid="multi-commit-squash-btn" disabled={squashOff !== null} title={squashOff ?? undefined} onclick={() => void runAction('rebase.squash', target)}>
+        {t('graph.multi.squash', { n: oids.length })}
       </button>
     </div>
   </header>
@@ -85,7 +90,7 @@
       <h3>{t('graph.multi.compare')}</h3>
       <p class="muted range">{t('graph.multi.compareHint', { from: shortOid(pair.older), to: shortOid(pair.newer) })}</p>
       {#if data}
-        <FileList files={data.files} truncated={data.truncated} onopen={openFile} selectedPath={openedPath} />
+        <FileList files={data.files} truncated={data.truncated} onopen={openFile} selectedPath={openedPath} menuOid={pair.newer} />
       {:else if ds.status === 'error'}
         <div class="muted err" role="alert">{ds.error.message}</div>
       {:else}

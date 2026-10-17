@@ -10,6 +10,7 @@ import { installErrorRouting } from './errors/handle';
 import { perfMarkAfterPaint, startPerfIfRequested } from './perf';
 import { t } from '../i18n/index';
 import { app } from './stores/app.svelte';
+import { autoFetch } from './stores/auto-fetch';
 import { updates } from './updates/global.svelte';
 import { updaterAvailable } from './ipc/updater';
 import { toast } from './stores/toast.svelte';
@@ -28,6 +29,7 @@ async function maybeInstallMock(): Promise<void> {
 
 export async function bootstrap(): Promise<void> {
   updates.stop();
+  autoFetch.stop();
   installErrorRouting();
   wireEvents();
   app.bootError = null;
@@ -83,7 +85,10 @@ export async function bootstrap(): Promise<void> {
   if (info.settingsRecovered) toast.info(t('toast.settingsRecovered'));
   // `gitmini:app-ready` at the first real paint (double rAF), before opening the repository: B1 measures what the user sees.
   await perfMarkAfterPaint('gitmini:app-ready');
-  if (settingsLoaded) updates.start();
+  if (settingsLoaded) {
+    updates.start();
+    autoFetch.start();
+  }
 
   // An explicit `gitmini <path>` always takes priority. Otherwise the first recent entry is
   // the most recently opened repository (the backend persists it in that order).

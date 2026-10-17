@@ -1,6 +1,8 @@
 // Pure derivatives of rebase single dialog from `BranchCompare` (, 07 "rebase single dialog").
 // For a rebase: `ahead` = commits of `branch` replayed (target..branche), `behind` = commits of `target` absent from `branch`.
-import type { BranchCompare } from '$lib/ipc/types';
+// Also the error texts shared by `rebase-todo-panel` and `squash-dialog`.
+import { t } from '$i18n/index';
+import type { AppError, BranchCompare } from '$lib/ipc/types';
 
 /** `nothing`: `branch` already contains `target`; `advance`: simple fast advance; `replay`: commits will be replayed. */
 export type RebaseKind = 'nothing' | 'advance' | 'replay';
@@ -35,4 +37,29 @@ export function canConfirmRebase(
   if (rebaseKind(c) === 'nothing') return false;
   if (opts.defaultBranch && !opts.defaultChecked) return false;
   return true;
+}
+
+/** Text of an error from `rebase_todo_preview` (interactive rebase panel, squash dialog). */
+export function loadErrorText(e: AppError): string {
+  switch (e.code) {
+    case 'DETACHED_HEAD':
+      return t('rebase.todo.error.detached');
+    case 'UNSUPPORTED_MERGES':
+      return t('rebase.todo.error.merges');
+    case 'INVALID_ARGUMENT':
+      return e.details?.reason === 'not-in-head' ? t('rebase.todo.error.notInHead') : e.message;
+    default:
+      return e.message;
+  }
+}
+
+/** Text of an error from `rebase_interactive_start` shown by the caller; `null` = left to the base handler. */
+export function startErrorText(e: AppError): string | null {
+  if (e.code === 'INVALID_ARGUMENT' && e.details?.field === 'todo') {
+    const reason = e.details.reason;
+    return reason === 'all-dropped' || reason === 'first-is-squash' || reason === 'empty-message' ? t(`rebase.todo.error.${reason}`) : e.message;
+  }
+  if (e.code === 'DIRTY_WORKTREE') return t('rebase.todo.error.dirty');
+  if (e.code === 'DETACHED_HEAD' || e.code === 'UNSUPPORTED_MERGES') return loadErrorText(e);
+  return null;
 }

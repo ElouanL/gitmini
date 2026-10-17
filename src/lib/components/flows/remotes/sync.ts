@@ -10,6 +10,7 @@ import { confirmAction } from '$lib/dialogs/confirm';
 import { hasDialog } from '$lib/dialogs/registry';
 import { commands, type PullMode } from '$lib/ipc/commands';
 
+import { autoFetch } from '$lib/stores/auto-fetch';
 import { toast } from '$lib/stores/toast.svelte';
 import { offerUndo } from '../undo/offer-undo';
 import { decidePush, forcePushMessage } from './remote-logic';
@@ -20,6 +21,8 @@ export interface PushArgs {
   remoteBranch?: string;
   setUpstream: boolean;
   forceWithLease: boolean;
+  /** `--follow-tags`: also pushes the annotated tags reachable from the branch (`push-follow-tags-toggle`). */
+  followTags?: boolean;
   /** `Everything up-to-date` does not see itself in the answer (`void`): the caller knows if the branch was already published. */
   expectUpToDate?: boolean;
 }
@@ -130,6 +133,7 @@ export async function pullRun(opts: PullOptions = {}, owner: Session = activeSes
     { long: true, command: 'remote_pull', data: { mode: opts.mode ?? null, autostash: opts.autostash === true } },
   );
   if (!res.ok) return false;
+  autoFetch.noteFetched(owner);
   if (opts.autostash) await announceKeptAutostash(repoId, stashBefore, owner);
   if (res.value.head.oid === before) toast.info(t('remotes.toast.upToDate'));
   else await offerUndo(t('remotes.toast.pullDone'), 'pull', owner);

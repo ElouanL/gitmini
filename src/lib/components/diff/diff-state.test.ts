@@ -32,6 +32,32 @@ describe('eventAffectsDiff', () => {
   it("immutable sources: never", () => {
     for (const k of ['commit', 'range', 'stash']) expect(eventAffectsDiff(['worktree', 'index', 'head'], k)).toBe(false);
   });
+  it("worktree with known paths: only when they concern the displayed file, its old name or their folders", () => {
+    const shown = ['src/a.ts', 'old/a.ts'];
+    expect(eventAffectsDiff(['worktree'], 'unstaged', ['src/a.ts'], shown)).toBe(true);
+    expect(eventAffectsDiff(['worktree'], 'unstaged', ['old/a.ts'], shown)).toBe(true);
+    expect(eventAffectsDiff(['worktree'], 'unstaged', ['src'], shown)).toBe(true); // folder renamed / removed
+    expect(eventAffectsDiff(['worktree'], 'unstaged', ['other.ts', 'src/a.tsx', 'sr'], shown)).toBe(false);
+    expect(eventAffectsDiff(['worktree'], 'unstaged', [], shown)).toBe(false);
+    // a submodule: a change inside it changes its diff
+    expect(eventAffectsDiff(['worktree'], 'unstaged', ['lib/x.c'], ['lib'])).toBe(true);
+  });
+  it("worktree paths: attributes files, decomposed Unicode and case differences still reload", () => {
+    expect(eventAffectsDiff(['worktree'], 'unstaged', ['.gitattributes'], ['src/a.ts'])).toBe(true);
+    expect(eventAffectsDiff(['worktree'], 'unstaged', ['src/.gitattributes'], ['src/a.ts'])).toBe(true);
+    expect(eventAffectsDiff(['worktree'], 'unstaged', ['.gitmodules'], ['lib'])).toBe(true);
+    expect(eventAffectsDiff(['worktree'], 'unstaged', ['café.txt'], ['café.txt'])).toBe(true);
+    expect(eventAffectsDiff(['worktree'], 'unstaged', ['README.MD'], ['README.md'])).toBe(true);
+    expect(eventAffectsDiff(['worktree'], 'unstaged', ['x.gitattributes'], ['src/a.ts'])).toBe(false);
+  });
+  it("unknown paths, no displayed path, index or head: always", () => {
+    expect(eventAffectsDiff(['worktree'], 'unstaged', null, ['a.ts'])).toBe(true);
+    expect(eventAffectsDiff(['worktree'], 'unstaged', ['b.ts'], [])).toBe(true);
+    expect(eventAffectsDiff(['worktree'], 'unstaged', ['b.ts'], [null, undefined])).toBe(true);
+    expect(eventAffectsDiff(['worktree', 'index'], 'staged', ['b.ts'], ['a.ts'])).toBe(true);
+    expect(eventAffectsDiff(['worktree', 'head'], 'conflict', ['b.ts'], ['a.ts'])).toBe(true);
+    expect(eventAffectsDiff(['stash', 'refs'], 'unstaged', null, ['a.ts'])).toBe(false);
+  });
 });
 
 describe('hunkActionsAllowed', () => {
@@ -40,8 +66,9 @@ describe('hunkActionsAllowed', () => {
     expect(hunkActionsAllowed(text, 'unstaged', false)).toBe(true);
     expect(hunkActionsAllowed(text, 'staged', false)).toBe(true);
   });
-  it("masked: binary, big, submodule, conflict, commit, no UTF-8, single mode", () => {
+  it("masked: binary, non-UTF-8 content, big, submodule, conflict, commit, no UTF-8, single mode", () => {
     expect(hunkActionsAllowed({ ...text, binary: true }, 'unstaged', false)).toBe(false);
+    expect(hunkActionsAllowed({ ...text, lossy: true }, 'staged', false)).toBe(false);
     expect(hunkActionsAllowed({ ...text, tooLarge: { bytes: 1, lines: 1, hardLimit: false } }, 'unstaged', false)).toBe(false);
     expect(hunkActionsAllowed({ ...text, submodule: { oldOid: null, newOid: null, dirty: false } }, 'unstaged', false)).toBe(false);
     expect(hunkActionsAllowed(text, 'conflict', false)).toBe(false);

@@ -82,6 +82,9 @@ describe('derivedDescription : textes de 11 §2.5 (repli)', () => {
   it('branch-delete', () => {
     expect(derivedDescription(entry({ kind: 'branch-delete', refName: 'refs/heads/feature' }))).toBe("Restore the feature branch on abc1234 (without its upstream).");
   });
+  it('tag-delete: names the tag, not the branch', () => {
+    expect(derivedDescription(entry({ kind: 'tag-delete', refName: 'refs/tags/v1.0' }))).toBe('Restore the v1.0 tag (local only).');
+  });
   it("stash-drop: full message from refrog", () => {
     expect(derivedDescription(entry({ kind: 'stash-drop', refName: null, stashMessage: 'On main: wip parser' }))).toBe(
       'Restore the stash "On main: wip parser" to stash@{0}.',

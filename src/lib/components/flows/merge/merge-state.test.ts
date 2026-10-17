@@ -53,4 +53,9 @@ describe('canSubmitMerge', () => {
     expect(canSubmitMerge(ff, { busy: false, serverDirty: true })).toBe(false);
     expect(canSubmitMerge(ff, { busy: false, serverDirty: false })).toBe(true);
   });
+  it("refuses a merge that the dry run says git would refuse", () => {
+    const diverged = cmp({ ahead: 1, behind: 2 });
+    expect(canSubmitMerge(diverged, { busy: false, serverDirty: false, refused: true })).toBe(false);
+    expect(canSubmitMerge(diverged, { busy: false, serverDirty: false, refused: false })).toBe(true);
+  });
 });

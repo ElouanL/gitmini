@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FileStatus } from '$lib/ipc/types';
-import { discardable, isReadonly, isWritable, partition, rowLabel, splitPath, stageable, unstageable } from './list-model';
+import { discardable, isReadonly, isWritable, offersSides, partition, resolvable, rowLabel, splitPath, stageable, unstageable } from './list-model';
 
 function f(path: string, over: Partial<FileStatus> = {}): FileStatus {
   return { path, oldPath: null, staged: null, unstaged: null, conflict: null, oldMode: null, newMode: null, submodule: null, nonUtf8: null, ...over };
@@ -68,5 +68,24 @@ describe("wording", () => {
     expect(rowLabel(file, 'staged').full).toBe('old.txt → new.txt');
     expect(rowLabel(file, 'unstaged').full).toBe('new.txt');
     expect(rowLabel(file, 'unstaged').oldPath).toBeNull();
+  });
+});
+
+describe('"Take ours / theirs" targets', () => {
+  const both = f('a.txt', { conflict: 'both-modified' });
+  const gone = f('gone.txt', { conflict: 'both-deleted' });
+
+  it('only conflicted files that are not read only can be resolved with a side', () => {
+    const files = [both, f('plain.txt', { unstaged: 'modified' }), f('lib', { conflict: 'both-modified', submodule: true }), f('bad', { conflict: 'both-added', nonUtf8: true }), gone];
+    expect(resolvable(files).map((x) => x.path)).toEqual(['a.txt', 'gone.txt']);
+  });
+
+  it('the menu entries need every file in conflict and at least one with a version to take', () => {
+    expect(offersSides([both])).toBe(true);
+    expect(offersSides([both, gone])).toBe(true);
+    expect(offersSides([gone])).toBe(false);
+    expect(offersSides([])).toBe(false);
+    expect(offersSides([both, f('plain.txt', { unstaged: 'modified' })])).toBe(false);
+    expect(offersSides([f('lib', { conflict: 'both-modified', submodule: true })])).toBe(false);
   });
 });

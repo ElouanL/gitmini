@@ -1,5 +1,5 @@
 //! GitHub (, ) at the service level, against the GitHub Rust mock : Device Flow,
-//! API, credential inline, clone, PR opening, GitHub remote. Scenarios: GH-01 to GH-07.
+//! API, credential inline, clone, PR opening, GitHub remote, new repository. Scenarios: GH-01 to GH-08.
 mod common;
 #[path = "common/github_mock.rs"]
 mod github_mock;
@@ -15,15 +15,19 @@ use github_mock::{
 use gitmini_core::error::{AppError, ErrorCode};
 use gitmini_core::events::CollectSink;
 use gitmini_core::github::{
-    GithubLoginPollArgs, GithubOpenPrArgs, GithubReposArgs, github_login_poll, github_login_start,
-    github_logout, github_open_pr, github_repos, github_status,
+    GithubCreateRepoArgs, GithubLoginPollArgs, GithubOpenPrArgs, GithubReposArgs,
+    github_create_repo, github_login_poll, github_login_start, github_logout, github_open_pr,
+    github_orgs, github_repos, github_status,
 };
 use gitmini_core::ops::{OpCancelArgs, op_cancel};
 use gitmini_core::repo::{RepoOpenArgs, repo_open};
 use gitmini_core::state::{AppConfig, AppState, GitInfo};
 use gitmini_core::types::{GithubPollStatus, RepoId};
 use gitmini_core::write::clone::{RepoCloneArgs, repo_clone};
-use gitmini_core::write::remote::{RemoteAddArgs, RemoteFetchArgs, remote_add, remote_fetch};
+use gitmini_core::write::init::{RepoInitArgs, repo_init};
+use gitmini_core::write::remote::{
+    RemoteAddArgs, RemoteFetchArgs, RemotePushArgs, remote_add, remote_fetch, remote_push,
+};
 use gitmini_core::write::runner::{SpawnRecord, spawn_journal};
 use secrecy::ExposeSecret;
 
@@ -751,6 +755,7 @@ async fn gh_02_fetch_with_token_sends_the_credential_and_other_host_gets_nothing
             op_id: op_id(),
             remote: None,
             prune: true,
+            background: None,
         },
     )
     .await
@@ -1427,4 +1432,209 @@ async fn gh_slow_github_answers_with_a_network_error_after_the_request_timeout()
     let e = github_login_start(&state).await.unwrap_err();
     assert_eq!(code(&e), ErrorCode::Network, "{e:?}");
     assert!(t0.elapsed() < Duration::from_secs(3));
+}
+
+// ── GH-08: new repository, created on GitHub and published
+
+fn init_args(path: &Path, readme: bool) -> RepoInitArgs {
+    RepoInitArgs {
+        path: path.to_string_lossy().into_owned(),
+        initial_branch: None,
+        readme,
+    }
+}
+
+fn create_args(owner: Option<&str>, name: &str) -> GithubCreateRepoArgs {
+    GithubCreateRepoArgs {
+        owner: owner.map(String::from),
+        name: name.to_string(),
+        private: true,
+        description: Some("Fresh".into()),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gh_08_init_create_on_github_and_push_with_upstream() {
+    let fx = Fx::load("linear");
+    let mock = GithubMock::start(&fx.root).await;
+    let (state, _) = state_with_mock(&fx.root, &mock, true);
+    let dir = fx.root.join("work/fresh");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("main.txt"), "hello\n").unwrap();
+
+    let info = repo_init(&state, init_args(&dir, true)).await.unwrap();
+    assert!(info.head.unborn, "a new repository has no commit yet");
+    assert_eq!(info.head.branch.as_deref(), Some("main"));
+    assert_eq!(
+        std::fs::read_to_string(dir.join("README.md")).unwrap(),
+        "# fresh\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.join("main.txt")).unwrap(),
+        "hello\n",
+        "existing files are kept"
+    );
+
+    let created = github_create_repo(&state, create_args(None, "fresh"))
+        .await
+        .unwrap();
+    assert_eq!(created.full_name, "octo-test/fresh");
+    assert!(created.private);
+    let call = mock
+        .calls_to("/user/repos")
+        .into_iter()
+        .find(|c| c.method == "POST")
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_str(&call.body).unwrap();
+    assert_eq!(body["auto_init"], false);
+    assert_eq!(body["description"], "Fresh");
+
+    let added = remote_add(
+        &state,
+        RemoteAddArgs {
+            repo_id: info.id,
+            name: "origin".into(),
+            url: created.clone_url.clone(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(added.github_slug.as_deref(), Some("octo-test/fresh"));
+
+    git(&dir, &["add", "-A"]);
+    git(
+        &dir,
+        &[
+            "-c",
+            "user.name=T",
+            "-c",
+            "user.email=t@example.com",
+            "commit",
+            "-q",
+            "-m",
+            "Initial commit",
+        ],
+    );
+    remote_push(
+        &state,
+        RemotePushArgs {
+            repo_id: info.id,
+            op_id: op_id(),
+            remote: "origin".into(),
+            branch: "main".into(),
+            remote_branch: None,
+            set_upstream: true,
+            force_with_lease: false,
+            follow_tags: false,
+        },
+    )
+    .await
+    .unwrap();
+    let bare = fx.root.join("octo-test/fresh.git");
+    assert_eq!(
+        git(&bare, &["rev-parse", "refs/heads/main"]),
+        git(&dir, &["rev-parse", "HEAD"])
+    );
+    assert_eq!(
+        git(&dir, &["rev-parse", "--abbrev-ref", "main@{upstream}"]),
+        "origin/main"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gh_08_create_repo_errors_and_organizations() {
+    let fx = Fx::load("linear");
+    let mock = GithubMock::start(&fx.root).await;
+    let (state, _) = state_with_mock(&fx.root, &mock, false);
+
+    // logged out: no request
+    let e = github_create_repo(&state, create_args(None, "x"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (code(&e), e.detail("github").cloned()),
+        (ErrorCode::AuthRequired, Some(true.into()))
+    );
+    assert!(mock.calls_to("/user/repos").is_empty());
+
+    state.shared.github.store_token(MOCK_TOKEN).unwrap();
+    assert_eq!(github_orgs(&state).await.unwrap(), vec!["org".to_string()]);
+
+    // invalid name: refused before the network
+    let e = github_create_repo(&state, create_args(None, "a b"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (code(&e), detail_str(&e, "field")),
+        (ErrorCode::InvalidArgument, Some("name"))
+    );
+    assert!(mock.calls_to("/user/repos").is_empty());
+
+    // name taken (422)
+    let e = github_create_repo(&state, create_args(None, "alpha"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (code(&e), detail_str(&e, "what")),
+        (ErrorCode::AlreadyExists, Some("github-repo"))
+    );
+
+    // organization
+    let r = github_create_repo(&state, create_args(Some("org"), "delta"))
+        .await
+        .unwrap();
+    assert_eq!(r.full_name, "org/delta");
+    assert!(fx.root.join("org/delta.git").is_dir());
+
+    // revoked token
+    mock.force_unauthorized(&["/user/repos"]);
+    let e = github_create_repo(&state, create_args(None, "zeta"))
+        .await
+        .unwrap_err();
+    assert_eq!(code(&e), ErrorCode::AuthRequired);
+    assert!(!state.shared.github.has_token(), "a 401 clears the token");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gh_08_init_destination_rules() {
+    let fx = Fx::load("linear");
+    let (state, _) = new_state(&fx.root);
+
+    // already a repository
+    let e = repo_init(&state, init_args(&fx.repo, false))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        (code(&e), detail_str(&e, "what")),
+        (ErrorCode::AlreadyExists, Some("repo"))
+    );
+    // relative path, invalid branch
+    let e = repo_init(&state, init_args(Path::new("rel/dir"), false))
+        .await
+        .unwrap_err();
+    assert_eq!(detail_str(&e, "reason"), Some("not-absolute"));
+    let mut a = init_args(&fx.root.join("b"), false);
+    a.initial_branch = Some("bad..name".into());
+    let e = repo_init(&state, a).await.unwrap_err();
+    assert_eq!(detail_str(&e, "field"), Some("initialBranch"));
+    assert!(
+        !fx.root.join("b").exists(),
+        "nothing created on a refused request"
+    );
+
+    // missing folder: created, custom branch, no README, existing README untouched
+    let dir = fx.root.join("new/deep");
+    let mut a = init_args(&dir, false);
+    a.initial_branch = Some("trunk".into());
+    let info = repo_init(&state, a).await.unwrap();
+    assert_eq!(info.head.branch.as_deref(), Some("trunk"));
+    assert!(!dir.join("README.md").exists());
+    let other = fx.root.join("withreadme");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("README.md"), "mine\n").unwrap();
+    repo_init(&state, init_args(&other, true)).await.unwrap();
+    assert_eq!(
+        std::fs::read_to_string(other.join("README.md")).unwrap(),
+        "mine\n"
+    );
 }

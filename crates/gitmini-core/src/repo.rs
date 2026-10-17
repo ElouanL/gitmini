@@ -45,6 +45,11 @@ pub const REPO_ENV_VARS: [&str; 5] = [
     "GIT_OBJECT_DIRECTORY",
 ];
 
+/// `CREATE_NO_WINDOW`: the release build has no console (`windows_subsystem = "windows"`), so every
+/// console child (git, `git --version`, `code.cmd`...) would otherwise open its own terminal window.
+#[cfg(windows)]
+pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// Removes from the process environment `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR` and
 /// `GIT_OBJECT_DIRECTORY`. To be called first in `main`, **before** creating any thread
 /// (the process environment is not protected from competing access).
@@ -223,7 +228,8 @@ pub fn open_handle(shared: Arc<Shared>, id: RepoId, path: &Path) -> AppResult<Ar
         .with_detail("path", path.to_string_lossy().into_owned()));
     }
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    // fingerprint of the config recorded before gix: see `ConfigFresh::new`
+    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    // fingerprint of the config recorded before gix: see `ConfigFresh::new` (canonical paths, like the handle's)
     let mut config_stamp = crate::state::ConfigStamp::default();
     if let Ok((found, _trust)) = gix::discover::upwards(&path) {
         let (git_dir, workdir) = found.into_repository_and_work_tree_directories();
@@ -231,16 +237,18 @@ pub fn open_handle(shared: Arc<Shared>, id: RepoId, path: &Path) -> AppResult<Ar
             return Err(not_a_repo(&path, Some("bare")));
         }
         check_repository_format(&git_dir, &path)?;
-        config_stamp = crate::state::ConfigStamp::read(&common_dir_of(&git_dir), &git_dir);
+        config_stamp =
+            crate::state::ConfigStamp::read(&canon(&common_dir_of(&git_dir)), &canon(&git_dir));
     }
     let repo = gix::discover(&path).map_err(|e| map_discover_error(e, &path))?;
     let Some(workdir) = repo.workdir().map(Path::to_path_buf) else {
         return Err(not_a_repo(&path, Some("bare")));
     };
-    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
     let workdir = canon(&workdir);
     let git_dir = canon(repo.git_dir());
     let common_dir = canon(repo.common_dir());
+    // plus the files the config was actually read from (includes, global config found by gix)
+    let config_stamp = config_stamp.track_loaded(&common_dir, &git_dir, &repo);
     let handle = RepoHandle {
         id,
         workdir,
@@ -265,6 +273,7 @@ pub fn open_handle(shared: Arc<Shared>, id: RepoId, path: &Path) -> AppResult<Ar
         watch_ready: tokio::sync::watch::channel(false).0,
         closed: AtomicBool::new(false),
         config_fresh: Mutex::new(crate::state::ConfigFresh::new(config_stamp)),
+        commit_stats_cancel: Mutex::new(Arc::new(AtomicBool::new(false))),
     };
     Ok(Arc::new(handle))
 }
@@ -514,12 +523,14 @@ pub struct SystemLauncher;
 
 impl Launcher for SystemLauncher {
     fn launch(&self, spec: &LaunchSpec) -> std::io::Result<()> {
-        let mut child = std::process::Command::new(&spec.program)
-            .args(&spec.args)
+        let mut cmd = std::process::Command::new(&spec.program);
+        cmd.args(&spec.args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()?;
+            .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        std::os::windows::process::CommandExt::creation_flags(&mut cmd, CREATE_NO_WINDOW);
+        let mut child = cmd.spawn()?;
         std::thread::spawn(move || {
             let _ = child.wait();
         });
@@ -602,7 +613,7 @@ fn launch(
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(not_found()),
         Err(e) => Err(AppError::internal(format!(
-            "Impossible de lancer « {} » : {e}",
+            "Could not launch \"{}\": {e}",
             spec.program
         ))),
     }

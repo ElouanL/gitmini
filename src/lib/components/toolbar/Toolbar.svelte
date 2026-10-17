@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import { captureStores } from '$lib/stores/context';
-  const { reportError, graph, op, repo, status, undo, ui } = captureStores();
+  const { reportError, graph, op, repo, session, status, undo, ui } = captureStores();
   // Toolbar (44 px, 03): repository, current branch, cancel/reflog, fetch/pull/push, branch, stash, search, palette, GitHub,
   // settings, progress and cancellation of a [L] command. Each button initiates a registry action (src/lib/actions).
   import { actionDisabledReason, actionContext, getAction, runAction } from '$lib/actions/registry';
@@ -10,12 +11,17 @@
 
   import { openDialog } from '$lib/dialogs/registry';
   import { app } from '$lib/stores/app.svelte';
+  import { fetchIntervalMs } from '$lib/stores/auto-fetch-logic';
+  import { fetchClock, fetchStateFor, isFetchStale } from '$lib/stores/fetch-state.svelte';
   import { github } from '$lib/stores/github.svelte';
+  import { formatRelative } from '$lib/format';
 
   import { t } from '$i18n/index';
   import Icon from '../ui/Icon.svelte';
+  import Spinner from '../ui/Spinner.svelte';
   import type { IconName } from '../ui/icons';
   import MenuList, { type MenuListItem } from '../menu/MenuList.svelte';
+  import { filterTerms, folderKey, folderPaths, matchesTerms, sectionKey } from '../sidebar/ref-tree';
 
   const head = $derived(repo.head);
   const hasRepo = $derived(repo.isOpen);
@@ -48,6 +54,17 @@
   const ahead = $derived(status.ahead);
   const behind = $derived(status.behind);
   const showAheadBehind = $derived(status.upstream !== null && ahead !== null && behind !== null);
+  // The meters are only as fresh as the last fetch: its time in the tooltip, greyed once stale (twice the interval of `fetch.auto`).
+  const fetchState = fetchStateFor(session);
+  const lastFetch = $derived(fetchState.lastFetch);
+  const fetchStale = $derived(isFetchStale(lastFetch, fetchClock.now, fetchIntervalMs(app.get('fetch.auto'))));
+  const aheadBehindTitle = $derived.by(() => {
+    const counts = t('toolbar.aheadBehind', { ahead: ahead ?? 0, behind: behind ?? 0 });
+    const when = lastFetch === null
+      ? t('remotes.lastFetch.never')
+      : t('remotes.lastFetch', { when: formatRelative(lastFetch / 1000, Math.max(fetchClock.now, lastFetch)) });
+    return [counts, when, ...(fetchStale ? [t('remotes.lastFetch.stale')] : [])].join('\n');
+  });
 
   let pullMenuOpen = $state(false);
   let pullBtn = $state<HTMLButtonElement | null>(null);
@@ -77,6 +94,8 @@
 
   // "Progress and cancellation of an order [L]
   const progress = $derived(op.inflight?.opId ? op.inflight : null);
+  // Short command (commit, checkout, stage...): no progress bar, just a spinner and its label.
+  const busy = $derived(op.inflight && !op.inflight.opId ? op.inflight : null);
   const progressText = $derived.by(() => {
     if (!progress) return '';
     const base = progress.progressLabel ?? progress.label;
@@ -93,7 +112,21 @@
     }
   }
 
-  function selectCurrentBranch(): void {
+  /** Shows the current branch in the sidebar (open section and folders, a filter that hides it cleared) and focuses it. */
+  async function selectCurrentBranch(): Promise<void> {
+    const name = head && !head.detached && !head.unborn ? head.branch : null;
+    if (name) {
+      const terms = filterTerms(ui.sidebarFilter);
+      if (terms.length > 0 && !matchesTerms(name, terms)) ui.setSidebarFilter('');
+      // Open or closed is the stored state, or while filtering what was closed since the last keystroke.
+      ui.sidebarOpen.local = true;
+      ui.sidebarFilterClosed[sectionKey('local')] = false;
+      for (const path of folderPaths(name)) {
+        ui.sidebarFoldersOpen[folderKey('local', path)] = true;
+        ui.sidebarFilterClosed[folderKey('local', path)] = false;
+      }
+      await tick();
+    }
     const el = document.querySelector<HTMLElement>('[data-testid="sidebar-branch-item"][data-current="true"]');
     el?.focus();
     el?.scrollIntoView?.({ block: 'nearest' });
@@ -126,14 +159,14 @@
   </button>
 {/snippet}
 
-<header class="toolbar" data-testid="toolbar" aria-label="Barre d’tools">
+<header class="toolbar" data-testid="toolbar" aria-label={t('toolbar.label')}>
   <div class="tb repo" data-testid="toolbar-repo-name" title={repo.info?.workdir}>
     <Icon name="folder" />
     <span class="lbl-always truncate">{repo.name || t('toolbar.noRepo')}</span>
   </div>
 
   <!-- Branche courante -->
-  <button type="button" class="tb branch-current" data-testid="toolbar-current-branch" disabled={!hasRepo} title={t('toolbar.currentBranch')} onclick={selectCurrentBranch}>
+  <button type="button" class="tb branch-current" data-testid="toolbar-current-branch" disabled={!hasRepo} title={t('toolbar.currentBranch')} onclick={() => void selectCurrentBranch()}>
     <Icon name="branch" />
     <span class="lbl-always truncate">{branchLabel}</span>
   </button>
@@ -198,10 +231,12 @@
     <span
       class="ahead-behind"
       class:disabled={head?.detached}
+      class:stale={fetchStale}
       data-testid="toolbar-ahead-behind"
       data-ahead={ahead}
       data-behind={behind}
-      title={t('toolbar.aheadBehind', { ahead: ahead ?? 0, behind: behind ?? 0 })}
+      data-stale={fetchStale}
+      title={aheadBehindTitle}
     >↑{ahead} ↓{behind}</span>
   {/if}
 
@@ -221,6 +256,13 @@
   {@render tbtn('stash.pop', 'toolbar-pop-btn', 'pop', t('toolbar.pop'))}
 
   <span class="spacer"></span>
+
+  {#if busy}
+    <div class="busy" data-testid="toolbar-op-busy" role="status" title={busy.label}>
+      <Spinner />
+      <span class="busy-text truncate">{busy.label}</span>
+    </div>
+  {/if}
 
   <!-- Progression of a command [L] -->
   {#if progress}
@@ -344,6 +386,10 @@
   .ahead-behind.disabled {
     opacity: 0.45;
   }
+  .ahead-behind.stale {
+    opacity: 0.5;
+    font-style: italic;
+  }
   .progress {
     position: relative;
     width: 200px;
@@ -366,6 +412,26 @@
     padding: 0 8px;
     line-height: 22px;
     font-size: 12px;
+  }
+  /* Shown after 200 ms only: instant commands do not flash a spinner. */
+  .busy {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 200px;
+    margin-right: 4px;
+    font-size: 12px;
+    color: var(--fg-muted);
+    opacity: 0;
+    animation: busy-in 0.15s ease-out 0.2s forwards;
+  }
+  .busy-text {
+    min-width: 0;
+  }
+  @keyframes busy-in {
+    to {
+      opacity: 1;
+    }
   }
   @media (max-width: 1280px) {
     .lbl {

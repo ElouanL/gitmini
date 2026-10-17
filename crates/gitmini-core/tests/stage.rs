@@ -52,6 +52,8 @@ async fn hunk_args(
         path: path.into(),
         diff_hash: d.hash,
         hunk_index: index,
+        lines: None,
+        context_lines: None,
     }
 }
 
@@ -469,6 +471,8 @@ async fn stage_02_hunks_are_refused_on_submodules_binaries_and_conflicts() {
             path: "image.png".into(),
             diff_hash: d.hash,
             hunk_index: 0,
+            lines: None,
+            context_lines: None,
         },
     )
     .await
@@ -484,12 +488,96 @@ async fn stage_02_hunks_are_refused_on_submodules_binaries_and_conflicts() {
             path: "lib".into(),
             diff_hash: "x".into(),
             hunk_index: 0,
+            lines: None,
+            context_lines: None,
         },
     )
     .await
     .unwrap_err();
     assert_eq!(code(&e), "INVALID_ARGUMENT");
     assert_eq!(detail_str(&e, "reason").as_deref(), Some("submodule"));
+}
+
+/// Latin-1 content (`caf\xe9`): the lines are decoded with U+FFFD, a hunk patch would rewrite the bytes
+/// (each hunk below applies cleanly and would write `EF BF BD` without the guard). Stage / unstage / discard
+/// of a hunk are refused and the index and the worktree stay byte for byte.
+#[tokio::test]
+async fn stage_02_hunks_are_refused_on_non_utf8_content() {
+    // 30 lines; the changed lines are 10 apart, so each one is its own hunk with ASCII context.
+    let lines = |over: &[(usize, &[u8])]| -> Vec<u8> {
+        let mut out = Vec::new();
+        for n in 1..=30 {
+            match over.iter().find(|(i, _)| *i == n) {
+                Some((_, l)) => out.extend_from_slice(l),
+                None => out.extend_from_slice(format!("l{n}").as_bytes()),
+            }
+            out.push(b'\n');
+        }
+        out
+    };
+    let fx = Fx::empty_repo();
+    fx.write_bytes(
+        "latin1.txt",
+        &lines(&[(5, b"l5 caf\xe9"), (15, b"l15 caf\xe9")]),
+    );
+    fx.write("utf8.txt", "caf\u{e9}\nline 2\n");
+    fx.git(&["add", "."]);
+    fx.git(&["commit", "-q", "-m", "init"]);
+    // Staged hunk 0: `-l5 caf\xe9` (unstage would restore it).
+    let staged = lines(&[(5, b"l5 ok"), (15, b"l15 caf\xe9")]);
+    fx.write_bytes("latin1.txt", &staged);
+    fx.git(&["add", "latin1.txt"]);
+    // Unstaged hunk 0: `-l15 caf\xe9` (discard would restore it); hunk 1: `+l25 na\xefve` (stage would add it).
+    let worktree = lines(&[(5, b"l5 ok"), (15, b"l15 ok"), (25, b"l25 na\xefve")]);
+    fx.write_bytes("latin1.txt", &worktree);
+    fx.write("utf8.txt", "caf\u{e9}\nline 2 changed\n");
+    let o = fx.open().await;
+    let index_blob = |fx: &Fx| fx.git_raw(&["cat-file", "blob", ":latin1.txt"]).stdout;
+    assert_eq!(index_blob(&fx), staged);
+
+    for source in [DiffSource::Unstaged, DiffSource::Staged] {
+        let d = diff_for(&o.repo, "latin1.txt", &source, false)
+            .await
+            .unwrap();
+        assert!(d.lossy, "invalid UTF-8 is flagged");
+        assert!(!d.binary);
+    }
+    let d = diff_for(&o.repo, "utf8.txt", &DiffSource::Unstaged, false)
+        .await
+        .unwrap();
+    assert!(!d.lossy, "valid UTF-8 (é) is not lossy");
+
+    for (source, index, op) in [
+        (DiffSource::Unstaged, 1, "stage"),
+        (DiffSource::Staged, 0, "unstage"),
+        (DiffSource::Unstaged, 0, "discard"),
+    ] {
+        let args = hunk_args(&o, "latin1.txt", source, index).await;
+        let e = match op {
+            "stage" => stage_hunk(&o.state, args).await,
+            "unstage" => unstage_hunk(&o.state, args).await,
+            _ => discard_hunk(&o.state, args).await,
+        }
+        .unwrap_err();
+        assert_eq!(code(&e), "INVALID_ARGUMENT", "{op}");
+        assert_eq!(
+            detail_str(&e, "reason").as_deref(),
+            Some("non-utf8"),
+            "{op}"
+        );
+        assert_eq!(index_blob(&fx), staged, "{op}: index unchanged");
+        assert_eq!(
+            fx.read_bytes("latin1.txt"),
+            worktree,
+            "{op}: worktree unchanged"
+        );
+    }
+
+    // The whole file still goes through: bytes preserved.
+    stage_paths(&o.state, paths(&o, &["latin1.txt"]))
+        .await
+        .unwrap();
+    assert_eq!(index_blob(&fx), worktree);
 }
 
 // ── STAGE-05
@@ -935,6 +1023,8 @@ async fn safe_02_submodule_paths_are_refused_and_all_skips_them() {
                 path: "lib".into(),
                 diff_hash: "x".into(),
                 hunk_index: 0,
+                lines: None,
+                context_lines: None,
             },
         )
         .await
@@ -948,6 +1038,8 @@ async fn safe_02_submodule_paths_are_refused_and_all_skips_them() {
                 path: "lib".into(),
                 diff_hash: "x".into(),
                 hunk_index: 0,
+                lines: None,
+                context_lines: None,
             },
         )
         .await
@@ -961,6 +1053,8 @@ async fn safe_02_submodule_paths_are_refused_and_all_skips_them() {
                 path: "lib".into(),
                 diff_hash: "x".into(),
                 hunk_index: 0,
+                lines: None,
+                context_lines: None,
             },
         )
         .await
@@ -1093,6 +1187,8 @@ async fn safe_02_a_gitlink_that_is_only_in_head_is_still_a_submodule() {
         path: path.into(),
         diff_hash: "x".into(),
         hunk_index: 0,
+        lines: None,
+        context_lines: None,
     };
     errors.push(stage_hunk(&o.state, hunk("lib")).await.unwrap_err());
     errors.push(unstage_hunk(&o.state, hunk("lib")).await.unwrap_err());
@@ -1276,19 +1372,16 @@ fn has_reset_word(text: &str) -> bool {
     })
 }
 
-/// Branch reset: outside v1 perimeter (decision n°2 of ), no menu, no command, no confirmation.
-/// Only the undo (`write/undo.rs`) moves a branch back, with `reset --soft` / `--keep`, without exposing it.
+/// Branch reset is confined: only `write/reset.rs` (`branch_reset`, the user command) and `write/undo.rs` (back to the
+/// "before" oid of the log) move a branch with `git reset`; elsewhere the only `git reset` is "all unstage" (`reset -q`).
 #[test]
-fn no_reset_command_is_exposed() {
+fn reset_is_confined() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
 
-    // 1. All `crates/gitmini-core/src/write/`, excluding `undo.rs`: no hard reset, "soft", `--keep` or `--mixed`, none
-    //    `reset*` function, and the only `git reset` is "all unstage" (`reset -q` index only: HEAD does not move).
+    // 1. `crates/gitmini-core/src/write/`: mode flags and `reset*` functions only in `reset.rs` and `undo.rs`;
+    //    `--merge` nowhere.
     let mut checked = 0;
     for f in source_files(&root.join("crates/gitmini-core/src/write"), &["rs"]) {
-        if f.file_name().is_some_and(|n| n == "undo.rs") {
-            continue;
-        }
         let name = f.file_name().unwrap().to_string_lossy().into_owned();
         let src = std::fs::read_to_string(&f).unwrap();
         let code: String = src
@@ -1299,12 +1392,16 @@ fn no_reset_command_is_exposed() {
             .filter(|l| !l.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
             .join("\n");
+        checked += 1;
+        assert!(!code.contains("\"--merge\""), "{name} contient \"--merge\"");
+        if name == "reset.rs" || name == "undo.rs" {
+            continue;
+        }
         for forbidden in [
             "\"--hard\"",
             "\"--soft\"",
             "\"--keep\"",
             "\"--mixed\"",
-            "\"--merge\"",
             "async fn reset",
             "pub fn reset",
         ] {
@@ -1318,70 +1415,22 @@ fn no_reset_command_is_exposed() {
                 "{name} : reset suivi de {after:?}"
             );
         }
-        checked += 1;
     }
     assert!(
         checked >= 10,
         "the scan must cover all write/ files ({checked})"
     );
 
-    // 2. `gitmini-core` command and Tauri glue register: no name containing `reset`.
+    // 2. Command register: `branch_reset` is the only command named `reset`.
     let dispatch =
         std::fs::read_to_string(root.join("crates/gitmini-core/src/dispatch.rs")).unwrap();
-    for lit in dispatch.split('"').skip(1).step_by(2) {
-        assert!(!has_reset_word(lit), "dispatch.rs: command \"{lit}\"");
-    }
-    for f in source_files(&root.join("src-tauri/src"), &["rs"]) {
-        let src = std::fs::read_to_string(&f).unwrap();
-        assert!(!has_reset_word(&src), "{} mentionne reset", f.display());
-    }
-
-    // 3. Frontend: neither IPC command, nor menu entry, nor action, nor test ID, nor text named `reset`.
-    //    (The `resetAll`, `perfReset`... test helpers and `type="reset"` of a `<input>` are not.)
-    for rel in ["src/lib/ipc/commands.ts", "src/lib/ipc/types.ts"] {
-        let src = std::fs::read_to_string(root.join(rel)).unwrap();
-        assert!(!has_reset_word(&src), "{rel} mentionne reset");
-    }
-    for f in source_files(&root.join("src/i18n"), &["ts"]) {
-        let src = std::fs::read_to_string(&f).unwrap();
-        assert!(!has_reset_word(&src), "{}: \"reset\" text", f.display());
-    }
-    let mut scanned = 0;
-    for f in source_files(&root.join("src"), &["ts", "svelte"]) {
-        let rel = f
-            .strip_prefix(&root)
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        if rel.ends_with(".test.ts") || rel.contains("/test/") {
-            continue;
-        }
-        scanned += 1;
-        for (n, line) in std::fs::read_to_string(&f).unwrap().lines().enumerate() {
-            let t = line.trim_start();
-            if t.starts_with("//") || t.starts_with('*') || t.starts_with("/*") {
-                continue; // a comment can say "no reset entries"
-            }
-            let id_line = [
-                "testid",
-                "data-action",
-                "data-menu",
-                "context-menu-item",
-                "MENU_ITEM",
-                "registerAction",
-                "invoke(",
-            ]
-            .iter()
-            .any(|k| line.contains(k));
-            assert!(
-                !(id_line && has_reset_word(line)),
-                "{rel}:{} : identifiant ou action « reset » : {line}",
-                n + 1
-            );
-        }
-    }
-    assert!(
-        scanned > 20,
-        "the scan must cover the sources of the frontend ({scanned})"
-    );
+    let mut names: Vec<&str> = dispatch
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .filter(|lit| has_reset_word(lit))
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names, ["branch_reset"], "dispatch.rs: reset commands");
 }

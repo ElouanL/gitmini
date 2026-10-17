@@ -6,7 +6,7 @@ import OpBanner from '$lib/components/banner/OpBanner.svelte';
 import DialogHost from '$lib/components/dialogs-base/DialogHost.svelte';
 import '$lib/components/dialogs-base/register';
 import { openDialog, preloadDialog } from '$lib/dialogs/registry';
-import type { BranchCompare } from '$lib/ipc/types';
+import type { BranchCompare, MergePreview } from '$lib/ipc/types';
 import { resolveMenu } from '$lib/menus/registry';
 import { runAction } from '$lib/actions/registry';
 import { graph } from '$lib/stores/graph.svelte';
@@ -138,6 +138,100 @@ describe("merge-dialog: pre-analysis by branch_compare", () => {
     await done;
     expect(op.state?.kind).toBe('merge');
     expect(maybe('merge-dialog')).toBeNull();
+  });
+});
+
+describe("merge-dialog: conflict preview by merge_preview", () => {
+  const pv = (over: Partial<MergePreview> = {}): MergePreview => ({
+    kind: 'clean', head: oid('a'), target: oid('b'), conflicts: [], conflictTotal: 0, ...over,
+  });
+  const diverged = cmp({ ahead: 1, behind: 2 });
+
+  it("diverged branches: lists the files that would conflict, and the merge stays possible", async () => {
+    const { fake } = await openMerge(diverged, {
+      merge_preview: () =>
+        pv({
+          kind: 'conflicts', conflictTotal: 2,
+          conflicts: [{ path: 'src/app.ts', kind: 'content' }, { path: 'old.txt', kind: 'modify-delete' }],
+        }),
+    });
+    await waitFor(() => expect(tid('merge-preview')).toHaveAttribute('data-kind', 'conflicts'));
+    expect(fake.callsOf('merge_preview')[0]!.args).toEqual({ repoId: 1, ref: 'feature' });
+    expect(tid('merge-preview-summary')).toHaveTextContent('2 files would conflict');
+    expect(screen.getAllByTestId('merge-preview-file').map((r) => r.getAttribute('data-path'))).toEqual(['src/app.ts', 'old.txt']);
+    expect(screen.getAllByTestId('merge-preview-file')[1]).toHaveTextContent('modified on one side, deleted on the other');
+    expect(tid('merge-submit-btn')).toBeEnabled();
+    // The preview is a dry run: it never goes through the write path.
+    expect(fake.callsOf('merge_branch')).toHaveLength(0);
+  });
+
+  it("a clean merge says so", async () => {
+    await openMerge(diverged, { merge_preview: () => pv() });
+    await waitFor(() => expect(tid('merge-preview')).toHaveAttribute('data-kind', 'clean'));
+    expect(tid('merge-preview-summary')).toHaveTextContent('No conflicts expected.');
+    expect(maybe('merge-preview-file')).toBeNull();
+  });
+
+  it("fast-forward and up-to-date cannot conflict: the backend is not asked", async () => {
+    const ff = await openMerge(cmp());
+    expect(maybe('merge-preview')).toBeNull();
+    expect(ff.fake.callsOf('merge_preview')).toHaveLength(0);
+  });
+
+  it("already up to date: the backend is not asked", async () => {
+    const { fake } = await openMerge(cmp({ behind: 0, ahead: 1 }));
+    expect(maybe('merge-preview')).toBeNull();
+    expect(fake.callsOf('merge_preview')).toHaveLength(0);
+  });
+
+  it("unrelated histories: git would refuse, so the merge button is disabled", async () => {
+    await openMerge(diverged, { merge_preview: () => pv({ kind: 'unrelated' }) });
+    await waitFor(() => expect(tid('merge-preview')).toHaveAttribute('data-kind', 'unrelated'));
+    expect(tid('merge-preview')).toHaveAttribute('data-tone', 'error');
+    expect(tid('merge-preview-summary')).toHaveTextContent('git refuses to merge them');
+    expect(tid('merge-submit-btn')).toBeDisabled();
+  });
+
+  it("git too old for the preview: says so and still merges", async () => {
+    const { fake, done } = await openMerge(diverged, {
+      merge_preview: () => pv({ kind: 'unsupported' }),
+      merge_branch: () => ({ result: 'merged', oid: oid('d') }),
+    });
+    await waitFor(() => expect(tid('merge-preview')).toHaveAttribute('data-kind', 'unsupported'));
+    expect(tid('merge-preview-summary')).toHaveTextContent('needs git 2.38 or newer');
+    await userEvent.click(tid('merge-submit-btn'));
+    expect(await done).toBe(true);
+    expect(fake.callsOf('merge_branch')).toHaveLength(1);
+  });
+
+  it("a preview that fails is not an error: the dialog stays usable and no toast is raised", async () => {
+    const { fake } = await openMerge(diverged, {
+      merge_preview: () => {
+        throw { code: 'GIT_FAILED', message: 'boom', details: {} };
+      },
+    });
+    await waitFor(() => expect(tid('merge-preview')).toHaveAttribute('data-state', 'failed'));
+    expect(tid('merge-preview')).toHaveTextContent('Could not check for conflicts.');
+    expect(tid('merge-submit-btn')).toBeEnabled();
+    expect(maybe('merge-error')).toBeNull();
+    expect(toast.items).toHaveLength(0);
+    expect(fake.callsOf('merge_preview')).toHaveLength(1);
+  });
+
+  it("asks again when the analysis is redone (after stashing)", async () => {
+    let dirty = true;
+    const { fake } = await openMerge(cmp({ ahead: 1, behind: 2, dirty: true }), {
+      branch_compare: () => cmp({ ahead: 1, behind: 2, dirty }),
+      merge_preview: () => pv(),
+      stash_save: () => {
+        dirty = false;
+        return { created: null, list: [] };
+      },
+      status_get: () => makeStatus({ files: [] }),
+    });
+    await waitFor(() => expect(fake.callsOf('merge_preview')).toHaveLength(1));
+    await userEvent.click(tid('merge-stash-btn'));
+    await waitFor(() => expect(fake.callsOf('merge_preview')).toHaveLength(2));
   });
 });
 

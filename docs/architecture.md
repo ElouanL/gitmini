@@ -10,7 +10,7 @@ The frontend is Svelte 5 with TypeScript and Vite. Repository tabs own separate 
 
 ## Git operations
 
-Reads use `gix` and caches. Writes use the Git CLI through the core write runner, which owns locking, cancellation, process isolation and operation state. Git subprocesses use predictable locale and noninteractive credential behavior. Destructive operations use the existing confirmation and recovery flows.
+Reads use `gix` and caches. Writes use the Git CLI through the core write runner, which owns locking, cancellation, process isolation and operation state. Git subprocesses use predictable locale and noninteractive credential behavior. Destructive operations use the existing confirmation and recovery flows. Content thrown away by a discard or a conflict resolution is first stored as unreachable blobs and listed in `<git_dir>/gitmini/discarded.jsonl`, from where `discard_restore` writes it back. `file_log` and `file_blame` are `gix` reads: `file_log` walks the commits that changed a path with git's default history simplification (and follows renames, the cursor of its pages being the walk's frontier, so the backend keeps no state); `file_blame` annotates a file at one commit with `gix::Repository::blame_file`. In a shallow repository both read the commits listed in `shallow` as roots, as git does (the blame runs over an object database that hides their parents), and `commit_details` and the commit diffs do the same. `merge_preview` is the dry run of a merge: it asks `git merge-tree --write-tree` (git 2.38 or newer) what merging two commits would do, so refs, index and worktree stay untouched; the only things written are unreachable objects, which `git gc` prunes.
 
 ## IPC
 

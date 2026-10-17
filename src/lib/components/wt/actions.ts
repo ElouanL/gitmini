@@ -3,22 +3,23 @@ import { captureStores } from '$lib/stores/context';
 // Writings of the working tree: internship, unstage, discard, mark as solved, open in the editor (05).
 // No optimistic updates: the command response (`StatusSnapshot`) is applied to the store `status`; the `repo:changed`
 // which follows restarts `status_get` (B14: the click is perceived at the time of the answer).
-import { commands } from '$lib/ipc/commands';
-import type { DiffSource, FileStatus } from '$lib/ipc/types';
+import { commands, type ConflictSide } from '$lib/ipc/commands';
+import type { AppError, DiffSource, FileStatus } from '$lib/ipc/types';
 import { confirmAction } from '$lib/dialogs/confirm';
 
 import { status } from '$lib/stores/status.svelte';
 
 import { t, tp } from '$i18n/index';
 import { openDiff } from '../diff/open-diff';
+import { announceDiscard } from '../flows/trash/announce';
 import { discardable, type ListSide } from './list-model';
 
 type IndexCommand = 'stage_paths' | 'unstage_paths' | 'discard_paths';
 
-/** File missing between status and action: toast (sicle) + status rereading. */
-function refreshOnNotFound(e: { code: string }, owner: Session = activeSession.current): boolean {
+/** File missing between status and action, or no longer in conflict: toast (sicle) + status rereading. */
+function refreshOnNotFound(e: AppError, owner: Session = activeSession.current): boolean {
   const { status } = captureStores(owner);
-  if (e.code === 'NOT_FOUND') void status.refresh();
+  if (e.code === 'NOT_FOUND' || (e.code === 'INVALID_ARGUMENT' && e.details?.reason === 'not-conflicted')) void status.refresh();
   return false;
 }
 
@@ -42,7 +43,7 @@ async function indexWrite(label: string, command: IndexCommand, paths: string[] 
         status.apply(snap);
         return snap;
       },
-      { command, onError: refreshOnNotFound },
+      { command, onError: (e) => refreshOnNotFound(e, owner) },
     );
     return res.ok;
   } finally {
@@ -66,6 +67,33 @@ export async function resolveConflict(path: string, owner: Session = activeSessi
   // The diff conflict of this file no longer has any object: you return to the graph.
   if (ok && isOpenDiff(path, 'conflict', owner)) ui.closeCenter();
   return ok;
+}
+
+/**
+ * "Take ours / theirs": `resolve_paths { paths, side }` checks out that side's version of each conflicted file and stages it
+ * (a file that side deleted is removed). The previous content is saved by the backend, like a discard.
+ */
+export async function resolveWithSide(paths: string[], side: ConflictSide, owner: Session = activeSession.current): Promise<boolean> {
+  const { runWrite, session, status, ui, wt } = captureStores(owner);
+  const repoId = session.repoId;
+  if (repoId === null || paths.length === 0) return false;
+  const done = wt.markPending(paths);
+  try {
+    const res = await runWrite(
+      t('wt.op.resolve'),
+      async () => {
+        const snap = await commands.resolvePaths({ repoId, paths, side });
+        status.apply(snap);
+        return snap;
+      },
+      { command: 'resolve_paths', onError: (e) => refreshOnNotFound(e, owner) },
+    );
+    // The conflict diff of a resolved file has no object any more: you return to the graph.
+    if (res.ok && paths.some((p) => isOpenDiff(p, 'conflict', owner))) ui.closeCenter();
+    return res.ok;
+  } finally {
+    done();
+  }
 }
 
 export interface DiscardScope {
@@ -97,6 +125,8 @@ export async function discard(scope: DiscardScope, owner: Session = activeSessio
   }, owner);
   if (!ok) return false;
   const done = await indexWrite(t('wt.op.discard'), 'discard_paths', scope.paths, owner);
+  // What was thrown away is kept: say so, and offer the list to bring it back.
+  if (done) announceDiscard(scope.truncated === true ? { kind: 'all' } : { kind: 'files', count: scope.count }, owner);
   // The diff non staged of a cancelled file has become irrelevant.
   if (done && ui.centerView.id === 'diff') {
     const p = ui.centerView.props as { path?: string; source?: DiffSource };

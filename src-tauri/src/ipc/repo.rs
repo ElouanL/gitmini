@@ -66,7 +66,7 @@ pub async fn repo_clone<R: Runtime>(
     Ok(info)
 }
 
-/// `git init` in a plain folder, then opens it like `repo_open`.
+/// `git init` in a plain or new folder (optional initial branch and README), then opens it like `repo_open`.
 #[tauri::command]
 pub async fn repo_init<R: Runtime>(
     _window: WebviewWindow<R>,

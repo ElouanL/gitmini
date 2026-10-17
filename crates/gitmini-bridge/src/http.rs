@@ -36,6 +36,8 @@ pub struct BridgeState {
     pub static_dir: Option<PathBuf>,
     /// Cancelled off: terminates SSE feeds (if not the graceful stop of hyper would never end).
     pub shutdown: CancellationToken,
+    /// Accepted origins (`security::guard`).
+    pub policy: Arc<security::Policy>,
 }
 
 pub fn router(state: Arc<BridgeState>) -> Router {
@@ -45,7 +47,10 @@ pub fn router(state: Arc<BridgeState>) -> Router {
         .route("/__gitmini/invoke/{command}", post(invoke))
         .fallback(static_files)
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
-        .layer(middleware::from_fn(security::guard))
+        .layer(middleware::from_fn_with_state(
+            state.policy.clone(),
+            security::guard,
+        ))
         .with_state(state)
 }
 
@@ -75,7 +80,7 @@ async fn invoke(
     let args = match parse_args(&body) {
         Ok(v) => v,
         Err(e) => {
-            let err = bridge_error("body", format!("Corps JSON invalide : {e}"));
+            let err = bridge_error("body", format!("Invalid JSON body: {e}"));
             return (StatusCode::BAD_REQUEST, Json(err)).into_response();
         }
     };
@@ -228,6 +233,7 @@ mod tests {
             sink.emit(Event::RepoChanged(RepoChanged {
                 repo_id: 7,
                 kinds: vec![ChangeKindEv::Index],
+                paths: None,
             }));
         }
         let first = live.next().await.unwrap();
@@ -235,7 +241,7 @@ mod tests {
         let payload: serde_json::Value = serde_json::from_str(&first.data).unwrap();
         assert_eq!(
             payload,
-            serde_json::json!({ "repoId": 7, "kinds": ["refs", "index", "worktree", "head", "stash"] })
+            serde_json::json!({ "repoId": 7, "kinds": ["refs", "index", "worktree", "head", "stash"], "paths": null })
         );
     }
 }

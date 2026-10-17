@@ -52,7 +52,7 @@ gitmini has no telemetry, analytics or crash reporting. It does not collect, sto
 
 gitmini accesses the network only in these cases:
 
-- **Git operations.** Fetch, pull, push and clone run through the Git command-line client against the remotes **you** configure. Any credentials are handled by Git, SSH or your credential helper, not by gitmini.
+- **Git operations.** Fetch, pull, push and clone run through the Git command-line client against the remotes **you** configure. Any credentials are handled by Git, SSH or your credential helper, not by gitmini. Fetch also runs by itself, at the interval you choose, only if you turn on **Settings → Fetch automatically** (off by default); it contacts the same remotes and never prompts for credentials.
 - **Update checks.** In release builds, gitmini requests a static update manifest (`latest.json`) over HTTPS from the project's GitHub Releases. The request is the standard one any HTTPS client sends (for example your IP address, visible to GitHub as the host); gitmini adds no account identifier and no repository data. You control this under **Settings → Updates**: clear **Download and install updates automatically** to stop automatic checks and downloads. When it is off, the manual **Check for updates** button is the only thing that contacts the update server. Update packages are verified against the project's public key before installation.
 
 GitHub account sign-in is currently disabled and sends nothing.

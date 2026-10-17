@@ -57,7 +57,10 @@ export class UndoStore {
     const reason = s.reason ?? 'empty';
     const entry = s.entry;
     const branch = entry?.refName?.replace(/^refs\/heads\//, '') ?? '';
-    if (reason === 'exists') return t(entry?.kind === 'stash-drop' ? 'undo.reason.exists.stash' : 'undo.reason.exists.branch', { branch });
+    if (reason === 'exists') {
+      if (entry?.kind === 'tag-delete') return t('undo.reason.exists.tag', { tag: entry.refName?.replace(/^refs\/tags\//, '') ?? '' });
+      return t(entry?.kind === 'stash-drop' ? 'undo.reason.exists.stash' : 'undo.reason.exists.branch', { branch });
+    }
     return t(`undo.reason.${reason}`, { branch });
   }
 

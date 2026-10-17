@@ -133,6 +133,18 @@ describe("push: decision table (10 § Push)", () => {
     await whenIdle();
     expect(maybe('push-dialog')).toBeNull();
     expect(fake.callsOf('remote_push')[0]!.args).toMatchObject({ remote: 'origin', branch: 'main', remoteBranch: 'feature-x', setUpstream: true, forceWithLease: false });
+    expect(fake.callsOf('remote_push')[0]!.args).not.toHaveProperty('followTags');
+  });
+
+  it("push-dialog: the --follow-tags box (unchecked by default) sends followTags", async () => {
+    const fake = await setup({}, refsWith({ upstream: null }));
+    void runAction('git.push');
+    await screen.findByTestId('push-dialog');
+    expect(tid('push-follow-tags-toggle')).not.toBeChecked();
+    await userEvent.click(tid('push-follow-tags-toggle'));
+    await userEvent.click(tid('push-submit-btn'));
+    await whenIdle();
+    expect(fake.callsOf('remote_push')[0]!.args).toMatchObject({ branch: 'main', setUpstream: true, followTags: true });
   });
 
   it("push-dialog: empty remote name refused under field", async () => {

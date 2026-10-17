@@ -181,7 +181,7 @@ impl AppError {
     }
 
     pub fn undo_unavailable(reason: &str, kind: Option<&str>) -> Self {
-        Self::new(ErrorCode::UndoUnavailable, "Annulation impossible.")
+        Self::new(ErrorCode::UndoUnavailable, "Undo unavailable.")
             .with_details(json!({ "reason": reason, "kind": kind }))
     }
 

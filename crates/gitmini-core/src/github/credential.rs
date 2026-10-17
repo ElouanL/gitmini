@@ -180,6 +180,25 @@ impl GithubHost {
     }
 }
 
+/// True if the GitHub token may be offered for `url`: the scheme is that of `base` (`https://`, or `http://`
+/// for the e2e mock) and the host (with its port) is the GitHub host. Never in ssh, `git://`, `file://`
+/// or local path: the token and the credential inline are reserved to the GitHub host.
+pub fn token_applies(base: &str, url: &str) -> bool {
+    let (Some(host), Ok(base_url), Some(remote)) = (
+        GithubHost::from_base(base),
+        Url::parse(base),
+        parse_remote_url(url),
+    ) else {
+        return false;
+    };
+    let scheme_ok = match remote.scheme {
+        UrlScheme::Https => base_url.scheme() == "https",
+        UrlScheme::Http => base_url.scheme() == "http",
+        UrlScheme::Ssh | UrlScheme::Other => false,
+    };
+    scheme_ok && host.matches(&remote)
+}
+
 /// `RemoteInfo` of a remote based on its URL fetch and push (`githubSlug` read on URL fetch).
 pub fn remote_info(name: &str, fetch_url: &str, push_url: &str, base: &str) -> RemoteInfo {
     let host = GithubHost::from_base(base);
@@ -324,6 +343,33 @@ mod tests {
             !mock.matches(&parse_remote_url("http://127.0.0.1:4243/octo-test/alpha.git").unwrap())
         );
         assert!(!mock.matches(&parse_remote_url("https://github.com/o/r.git").unwrap()));
+    }
+
+    #[test]
+    fn token_applies_only_to_the_github_host_in_https() {
+        let base = "https://github.com";
+        assert!(token_applies(base, "https://github.com/o/r.git"));
+        assert!(token_applies(base, "https://GitHub.com/o/r"));
+        assert!(token_applies(base, "https://github.com:443/o/r.git"));
+        assert!(
+            !token_applies(base, "http://github.com/o/r.git"),
+            "plain http"
+        );
+        assert!(!token_applies(base, "git@github.com:o/r.git"), "ssh");
+        assert!(!token_applies(base, "ssh://git@github.com/o/r.git"));
+        assert!(!token_applies(base, "git://github.com/o/r.git"));
+        assert!(!token_applies(base, "https://gitlab.com/o/r.git"));
+        assert!(!token_applies(base, "https://github.com.evil.test/o/r.git"));
+        assert!(!token_applies(base, "https://github.com:8443/o/r.git"));
+        assert!(!token_applies(base, "file:///tmp/github.com"));
+        assert!(!token_applies(base, "/tmp/github.com/o/r.git"));
+        assert!(!token_applies(base, ""));
+        // e2e: the mock is in http, port included
+        let mock = "http://127.0.0.1:4242";
+        assert!(token_applies(mock, "http://127.0.0.1:4242/o/r.git"));
+        assert!(!token_applies(mock, "https://127.0.0.1:4242/o/r.git"));
+        assert!(!token_applies(mock, "http://127.0.0.1:4243/o/r.git"));
+        assert!(!token_applies("not a url", "https://github.com/o/r.git"));
     }
 
     #[test]

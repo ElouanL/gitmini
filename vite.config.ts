@@ -5,6 +5,9 @@ import { svelte } from '@sveltejs/vite-plugin-svelte';
 const host = process.env.TAURI_DEV_HOST;
 // HTTP (axum crate) development bridge: the client speaks `POST /__gitmini/invoke/<cmd>` and `GET /__gitmini/events` (SSE).
 const bridge = process.env.GITMINI_BRIDGE_URL ?? 'http://127.0.0.1:1430';
+// Same value as the bridge's: it only accepts the origin of this server (1420) with this header, which the proxy
+// adds (and overwrites if a page sent it). Without it, the bridge answers 403 to the proxied requests.
+const bridgeToken = process.env.GITMINI_BRIDGE_TOKEN;
 
 export default defineConfig(({ mode }) => ({
   plugins: [svelte()],
@@ -25,7 +28,11 @@ export default defineConfig(({ mode }) => ({
     // GITMINI_NO_WATCH=1: no reloading with each file modification (stable screenshots).
     watch: process.env.GITMINI_NO_WATCH ? null : { ignored: ['**/crates/**', '**/target/**', '**/tests/**'] },
     proxy: {
-      '/__gitmini': { target: bridge, changeOrigin: true },
+      '/__gitmini': {
+        target: bridge,
+        changeOrigin: true,
+        ...(bridgeToken ? { headers: { 'x-gitmini-bridge-token': bridgeToken } } : {}),
+      },
     },
   },
   build: {

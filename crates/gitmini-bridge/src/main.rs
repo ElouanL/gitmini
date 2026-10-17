@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use gitmini_bridge::cli::{self, Cli, Parsed};
 use gitmini_bridge::redact::{RedactingStderr, install_panic_hook};
-use gitmini_bridge::{BridgeOptions, VERSION};
+use gitmini_bridge::{BridgeOptions, VERSION, security};
 use tracing_subscriber::EnvFilter;
 
 fn main() -> ExitCode {
@@ -91,11 +91,23 @@ async fn run(cli: Cli) -> Result<(), String> {
         tracing::warn!(dir = %static_dir.display(), "missing frontend folder: only routes /__gitmini/* respond (run pnpm build or use the Vite server)");
     }
 
+    // Shared with `vite.config.ts`, whose proxy sends it back: without it, only the bridge's own pages are served.
+    let proxy_token = std::env::var(security::TOKEN_ENV)
+        .ok()
+        .filter(|t| !t.is_empty());
+    if proxy_token.is_none() {
+        tracing::info!(
+            "{} not set: requests from the Vite dev server (port 1420) are refused",
+            security::TOKEN_ENV
+        );
+    }
+
     let opts = BridgeOptions {
         addr: SocketAddr::new(IpAddr::V4(cli.host), cli.port),
         static_dir: Some(static_dir.clone()),
         config_dir: config_dir.clone(),
         initial_path: initial_path.clone(),
+        proxy_token,
     };
     let handle = gitmini_bridge::start(opts)
         .await

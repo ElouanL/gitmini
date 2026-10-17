@@ -130,7 +130,7 @@
       {/if}
     </header>
     <div class="list">
-      <FileList files={data.files} truncated={data.truncated} onopen={openFile} selectedPath={openedPath} />
+      <FileList files={data.files} truncated={data.truncated} onopen={openFile} selectedPath={openedPath} menuOid={data.oid} />
     </div>
   {/if}
 </section>

@@ -28,6 +28,9 @@ pub struct RemoteFetchArgs {
     pub op_id: OpId,
     pub remote: Option<String>,
     pub prune: bool,
+    /// Fetch started by the auto-fetch timer instead of the user: no credential helper may open a window
+    /// (see [`BACKGROUND_FETCH_ENV`]). Absent or `false` for a fetch the user asked for.
+    pub background: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Type, PartialEq, Eq)]
@@ -56,6 +59,9 @@ pub struct RemotePushArgs {
     pub remote_branch: Option<String>,
     pub set_upstream: bool,
     pub force_with_lease: bool,
+    /// `--follow-tags`: also pushes the annotated tags reachable from the pushed branch (absent = `false`).
+    #[serde(default)]
+    pub follow_tags: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Type)]
@@ -98,8 +104,12 @@ pub(crate) fn label_fn(prefix: String) -> LabelFn {
     Arc::new(move |l| progress_label(&prefix, l))
 }
 
+/// Extra environment of a background fetch. `GIT_TERMINAL_PROMPT=0`, the missing askpass and the ssh `BatchMode` of
+/// [`runner`] already stop terminal prompts; Git Credential Manager would still open its own window, which `never` forbids.
+pub const BACKGROUND_FETCH_ENV: &[(&str, &str)] = &[("GCM_INTERACTIVE", "never")];
+
 /// Common network command options: `--progress` read by the runner, cancel, spelled.
-fn net_opts(
+pub(crate) fn net_opts(
     op_id: &str,
     cancel: Option<CancellationToken>,
     prefix: String,
@@ -163,6 +173,23 @@ pub(crate) fn remote_urls(r: &gix::Repository, name: &str) -> Option<(String, St
     Some((fetch, push))
 }
 
+/// URLs that git contacts for the remote `name` in `direction`, rewritten by `insteadOf`/`pushInsteadOf` like
+/// git does: the runner only injects the GitHub token if one is https on the GitHub host.
+pub(crate) fn contacted_urls(
+    r: &gix::Repository,
+    name: &str,
+    direction: gix::remote::Direction,
+) -> Vec<String> {
+    r.find_remote(name)
+        .map(|remote| {
+            remote
+                .urls(direction)
+                .map(|u| u.to_bstring().to_str_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Upstream of a local branch: `branch.<b>.remote` and `branch.<b>.merge`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Upstream {
@@ -211,11 +238,11 @@ pub fn valid_branch_name(name: &str) -> bool {
 }
 
 fn invalid_remote(field: &str, name: &str) -> AppError {
-    AppError::invalid_argument(field, format!("Nom de remote invalide : « {name} »."))
+    AppError::invalid_argument(field, format!("Invalid remote name: \"{name}\"."))
 }
 
 /// `INVALID_ARGUMENT { field }` if `name` is not the name of an existing remote.
-fn require_remote(r: &gix::Repository, field: &str, name: &str) -> AppResult<()> {
+pub(crate) fn require_remote(r: &gix::Repository, field: &str, name: &str) -> AppResult<()> {
     if !valid_remote_name(name) {
         return Err(invalid_remote(field, name));
     }
@@ -395,22 +422,27 @@ async fn fetch_locked(
     args: &RemoteFetchArgs,
     label: &str,
 ) -> AppResult<()> {
-    let remote_url = match &args.remote {
-        Some(name) => {
-            let name = name.clone();
-            Some(
-                read(repo, move |r| {
-                    require_remote(r, "remote", &name)?;
-                    Ok((
-                        name.clone(),
-                        remote_urls(r, &name).map(|(f, _)| f).unwrap_or_default(),
-                    ))
-                })
-                .await?,
-            )
+    let remote = args.remote.clone();
+    let (remote_url, urls) = read(repo, move |r| {
+        use gix::remote::Direction::Fetch;
+        match remote {
+            Some(name) => {
+                require_remote(r, "remote", &name)?;
+                let url = remote_urls(r, &name).map(|(f, _)| f).unwrap_or_default();
+                let urls = contacted_urls(r, &name, Fetch);
+                Ok((Some((name, url)), urls))
+            }
+            // `--all`: the URLs of every remote
+            None => Ok((
+                None,
+                remote_names(r)
+                    .iter()
+                    .flat_map(|n| contacted_urls(r, n, Fetch))
+                    .collect(),
+            )),
         }
-        None => None,
-    };
+    })
+    .await?;
     gh.ensure_loaded().await;
     let had_token = token_present(gh);
     g.declare(&[ChangeKindEv::Refs]);
@@ -424,7 +456,17 @@ async fn fetch_locked(
         Some(r) => a.push(r),
         None => a.push("--all"),
     }
-    let opts = net_opts(&args.op_id, g.cancel_token(), label.to_string(), true);
+    let mut opts = RunOpts {
+        remote_urls: urls,
+        ..net_opts(&args.op_id, g.cancel_token(), label.to_string(), true)
+    };
+    if args.background == Some(true) {
+        opts.env.extend(
+            BACKGROUND_FETCH_ENV
+                .iter()
+                .map(|(k, v)| ((*k).to_string(), (*v).to_string())),
+        );
+    }
     match runner::run(repo, &a, opts).await {
         Ok(_) => Ok(()),
         Err(e) => Err(decorate_net_error(
@@ -509,6 +551,8 @@ struct PullPlan {
     /// `origin/main`.
     upstream_label: String,
     remote_url: String,
+    /// URLs contacted by the fetch of the upstream (after `insteadOf`).
+    fetch_urls: Vec<String>,
     mode: PullMode,
 }
 
@@ -559,6 +603,11 @@ fn plan_pull(
             .map(|(f, _)| f)
             .ok_or_else(no_upstream)?
     };
+    let fetch_urls = if upstream.remote == "." {
+        Vec::new()
+    } else {
+        contacted_urls(r, &upstream.remote, gix::remote::Direction::Fetch)
+    };
     let mode = requested
         .or_else(|| local_pull_rebase(r))
         .unwrap_or(state_mode);
@@ -569,6 +618,7 @@ fn plan_pull(
         tracking_ref,
         upstream_label,
         remote_url,
+        fetch_urls,
         mode,
     })
 }
@@ -631,7 +681,10 @@ async fn pull_locked(
             "--no-recurse-submodules",
             plan.upstream.remote.as_str(),
         ];
-        let opts = net_opts(&args.op_id, g.cancel_token(), label.clone(), true);
+        let opts = RunOpts {
+            remote_urls: plan.fetch_urls.clone(),
+            ..net_opts(&args.op_id, g.cancel_token(), label.clone(), true)
+        };
         if let Err(e) = runner::run(repo, &a, opts).await {
             return Err(decorate_net_error(
                 gh,
@@ -735,7 +788,8 @@ async fn tracked_changes(repo: &Arc<RepoHandle>) -> AppResult<Vec<String>> {
 
 // ── remote_push
 
-/// `git push --progress [-u] [--force-with-lease --force-if-includes] <remote> refs/heads/<b>:refs/heads/<rb>`.
+/// `git push --progress [-u] [--force-with-lease --force-if-includes] [--follow-tags] <remote>
+/// refs/heads/<b>:refs/heads/<rb>`.
 /// The lease has no explicit value: it takes the local remote-tracking, and `--force-if-includes` requires in
 /// more than this tip has been locally integrated.
 pub async fn remote_push(state: &AppState, args: RemotePushArgs) -> AppResult<()> {
@@ -764,7 +818,7 @@ async fn push_locked(
         args.branch.clone(),
         remote_branch.clone(),
     );
-    let remote_url = read(repo, move |r| {
+    let (remote_url, urls) = read(repo, move |r| {
         require_remote(r, "remote", &remote)?;
         if !valid_branch_name(&branch) {
             return Err(AppError::invalid_argument(
@@ -787,38 +841,41 @@ async fn push_locked(
                     .with_detail("name", branch),
             );
         }
-        Ok(remote_urls(r, &remote).map(|(_, p)| p).unwrap_or_default())
+        Ok((
+            remote_urls(r, &remote).map(|(_, p)| p).unwrap_or_default(),
+            contacted_urls(r, &remote, gix::remote::Direction::Push),
+        ))
     })
     .await?;
 
-    gh.ensure_loaded().await;
-    let had_token = token_present(gh);
     g.declare(&[ChangeKindEv::Refs]);
 
     let refspec = format!("refs/heads/{}:refs/heads/{}", args.branch, remote_branch);
-    let mut a: Vec<&str> = vec!["push", "--progress"];
+    let mut flags: Vec<&str> = Vec::new();
     if args.set_upstream {
-        a.push("-u");
+        flags.push("-u");
     }
     if args.force_with_lease {
-        a.push("--force-with-lease");
-        a.push("--force-if-includes");
+        flags.push("--force-with-lease");
+        flags.push("--force-if-includes");
     }
-    a.push(&args.remote);
-    a.push(&refspec);
-    let opts = RunOpts {
-        command: Some("remote_push"),
-        rejected_operation: Some("push"),
-        ..net_opts(&args.op_id, g.cancel_token(), label.to_string(), false)
+    if args.follow_tags {
+        flags.push("--follow-tags");
+    }
+    let target = PushTarget {
+        remote: &args.remote,
+        url: &remote_url,
+        push_urls: &urls,
+        op_id: &args.op_id,
+        label,
+        command: "remote_push",
     };
-    match runner::run(repo, &a, opts).await {
-        Ok(_) => {
+    match push_refspec(repo, gh, g, &target, &flags, &refspec).await {
+        Ok(()) => {
             crate::undo::mark_pushed(repo, &args.branch);
             Ok(())
         }
-        Err(e) => {
-            let mut e =
-                decorate_net_error(gh, Some((&args.remote, &remote_url)), had_token, e).await;
+        Err(mut e) => {
             if e.code == ErrorCode::RejectedNonFf {
                 let stale = e.detail("stale").and_then(|v| v.as_bool()).unwrap_or(false);
                 e = e.with_detail("branch", args.branch.clone());
@@ -832,6 +889,92 @@ async fn push_locked(
                 };
             }
             Err(e)
+        }
+    }
+}
+
+/// Where and how a push goes: the remote (its push URL for the error texts, and the URLs git contacts for the scoped
+/// GitHub token), the operation it reports progress for, and the command name the error mapping sees.
+pub(crate) struct PushTarget<'a> {
+    pub remote: &'a str,
+    pub url: &'a str,
+    /// URLs git contacts to push (`pushInsteadOf` applied): the runner only injects the GitHub token if one is https on
+    /// the GitHub host.
+    pub push_urls: &'a [String],
+    pub op_id: &'a str,
+    pub label: &'a str,
+    pub command: &'static str,
+}
+
+/// `git push --progress <flags> <remote> <refspec>` with the network options, the GitHub token and the decorated network
+/// errors (`AUTH_REQUIRED`, `NETWORK`, `REJECTED_NON_FF`…) shared by every push. The caller validated the refspec and declares
+/// what the push changes locally.
+pub(crate) async fn push_refspec(
+    repo: &Arc<RepoHandle>,
+    gh: &Arc<GithubState>,
+    g: &WriteGuard,
+    target: &PushTarget<'_>,
+    flags: &[&str],
+    refspec: &str,
+) -> AppResult<()> {
+    gh.ensure_loaded().await;
+    let had_token = token_present(gh);
+    let mut a: Vec<&str> = vec!["push", "--progress"];
+    a.extend_from_slice(flags);
+    a.push(target.remote);
+    a.push(refspec);
+    let opts = RunOpts {
+        command: Some(target.command),
+        rejected_operation: Some("push"),
+        remote_urls: target.push_urls.to_vec(),
+        ..net_opts(
+            target.op_id,
+            g.cancel_token(),
+            target.label.to_string(),
+            false,
+        )
+    };
+    match runner::run(repo, &a, opts).await {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            Err(decorate_net_error(gh, Some((target.remote, target.url)), had_token, e).await)
+        }
+    }
+}
+
+/// Whether `remote` has the ref `full_ref` (`refs/tags/v1`), by `git ls-remote`: one round trip with the network options,
+/// the GitHub token, the cancellation and the decorated errors of a push. A deletion needs it because git itself cannot
+/// tell: asked to delete a full ref name the remote lacks, it only gets a server warning and still exits 0.
+/// `fetch_urls` are the URLs git contacts to read the remote (what the scoped GitHub token is tied to).
+pub(crate) async fn remote_has_ref(
+    repo: &Arc<RepoHandle>,
+    gh: &Arc<GithubState>,
+    g: &WriteGuard,
+    target: &PushTarget<'_>,
+    fetch_urls: &[String],
+    full_ref: &str,
+) -> AppResult<bool> {
+    gh.ensure_loaded().await;
+    let had_token = token_present(gh);
+    let a = ["ls-remote", "--end-of-options", target.remote, full_ref];
+    let opts = RunOpts {
+        command: Some(target.command),
+        remote_urls: fetch_urls.to_vec(),
+        ..net_opts(
+            target.op_id,
+            g.cancel_token(),
+            target.label.to_string(),
+            false,
+        )
+    };
+    match runner::run(repo, &a, opts).await {
+        // `<oid>\t<ref>` lines; the pattern also matches deeper refs (`…/refs/tags/v1`), hence the exact comparison.
+        Ok(out) => Ok(out
+            .stdout_str()
+            .lines()
+            .any(|l| l.split_once('\t').is_some_and(|(_, r)| r == full_ref))),
+        Err(e) => {
+            Err(decorate_net_error(gh, Some((target.remote, target.url)), had_token, e).await)
         }
     }
 }
@@ -862,7 +1005,7 @@ pub async fn remote_add(state: &AppState, args: RemoteAddArgs) -> AppResult<Remo
         }
         let url = args.url.trim().to_string();
         if url.is_empty() || url.starts_with('-') || url.chars().any(char::is_control) {
-            return Err(AppError::invalid_argument("url", "URL invalide."));
+            return Err(AppError::invalid_argument("url", "Invalid URL."));
         }
         let name = args.name.clone();
         read(&repo, move |r| {

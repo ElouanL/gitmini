@@ -65,6 +65,7 @@ fn fetch_args(app: &App, remote: Option<&str>, prune: bool) -> RemoteFetchArgs {
         op_id: op_id(),
         remote: remote.map(String::from),
         prune,
+        background: None,
     }
 }
 
@@ -92,6 +93,7 @@ fn push_args(
         remote_branch: None,
         set_upstream,
         force_with_lease,
+        follow_tags: false,
     }
 }
 
@@ -312,6 +314,138 @@ async fn rm_01c_fetch_validation_rejects_bad_remote_names_before_git() {
         0,
         "no subprocess for invalid remote"
     );
+}
+
+// ── RM-13 : background fetch (auto-fetch)
+
+fn background_args(app: &App) -> RemoteFetchArgs {
+    RemoteFetchArgs {
+        background: Some(true),
+        ..fetch_args(app, None, true)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rm_13_background_fetch_is_the_same_fetch_but_opens_no_credential_window() {
+    let fx = Fx::load("with-remote");
+    let first = fx.other_commit_push("main", "auto1.txt", "auto 1", "origin: add auto1.txt");
+    let app = open(&fx).await;
+
+    // the user's fetch does not touch the credential helper environment
+    remote_fetch(&app.state, fetch_args(&app, None, true))
+        .await
+        .expect("fetch");
+    assert_eq!(fx.rev("origin/main"), first);
+    let manual = find_spawn(&fx.repo, "fetch").expect("fetch launched");
+    assert_eq!(env_of(&manual, "GCM_INTERACTIVE"), None);
+
+    // the background one fetches the same way, with prompts forbidden everywhere
+    let second = fx.other_commit_push("main", "auto2.txt", "auto 2", "origin: add auto2.txt");
+    app.sink.clear();
+    remote_fetch(&app.state, background_args(&app))
+        .await
+        .expect("background fetch");
+    assert_eq!(fx.rev("origin/main"), second);
+    let rec = find_spawn(&fx.repo, "fetch").expect("fetch launched");
+    assert_eq!(
+        logical(&rec),
+        [
+            "fetch",
+            "--progress",
+            "--prune",
+            "--no-recurse-submodules",
+            "--all"
+        ]
+    );
+    assert_eq!(env_of(&rec, "GCM_INTERACTIVE"), Some("never"));
+    assert_eq!(env_of(&rec, "GIT_TERMINAL_PROMPT"), Some("0"));
+    assert!(
+        rec.env
+            .iter()
+            .any(|(k, v)| k == "GIT_SSH_COMMAND" && v.contains("BatchMode=yes")),
+        "ssh never asks for a passphrase: {:?}",
+        rec.env
+    );
+    assert!(rec.env.iter().all(|(k, _)| k != "GIT_ASKPASS"));
+    assert!(
+        app.sink
+            .repo_changed()
+            .iter()
+            .any(|c| c.kinds.contains(&ChangeKindEv::Refs)),
+        "the stores refresh as after a manual fetch"
+    );
+    // an explicit `false` is a normal fetch
+    remote_fetch(
+        &app.state,
+        RemoteFetchArgs {
+            background: Some(false),
+            ..fetch_args(&app, None, true)
+        },
+    )
+    .await
+    .expect("fetch");
+    let rec = find_spawn(&fx.repo, "fetch").expect("fetch launched");
+    assert_eq!(env_of(&rec, "GCM_INTERACTIVE"), None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rm_13b_background_fetch_failures_keep_their_codes_for_the_backoff() {
+    let fx = Fx::load("with-remote");
+    let mock = GithubMock::start(&fx.root).await;
+    let app = open(&fx).await;
+    git(
+        &fx.repo,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            &format!("{}/origin.git", mock.base),
+        ],
+    );
+    app.state.shared.github.set_bases(&mock.base, &mock.base);
+    // no token: the server answers 401, which must stay AUTH_REQUIRED (the front stops retrying) and not hang
+    let t0 = Instant::now();
+    let e = remote_fetch(&app.state, background_args(&app))
+        .await
+        .unwrap_err();
+    assert_eq!(code(&e), ErrorCode::AuthRequired, "{e:?}");
+    assert!(t0.elapsed() < Duration::from_secs(5));
+
+    git(
+        &fx.repo,
+        &["remote", "set-url", "origin", "http://127.0.0.1:1/x.git"],
+    );
+    let e = remote_fetch(&app.state, background_args(&app))
+        .await
+        .unwrap_err();
+    assert_eq!(code(&e), ErrorCode::Network, "{e:?}");
+    // the lock is released after each failure: the next tick can start
+    let e = remote_fetch(&app.state, background_args(&app))
+        .await
+        .unwrap_err();
+    assert_eq!(code(&e), ErrorCode::Network, "not BUSY: {e:?}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rm_13c_background_fetch_yields_to_a_running_write() {
+    let fx = Fx::load("with-remote");
+    let app = open(&fx).await;
+    let guard = app
+        .state
+        .repo(app.id)
+        .unwrap()
+        .begin_write(gitmini_core::state::WriteSpec::new("commit", "Commit"))
+        .unwrap();
+    let e = remote_fetch(&app.state, background_args(&app))
+        .await
+        .unwrap_err();
+    assert_eq!(code(&e), ErrorCode::Busy, "{e:?}");
+    assert_eq!(detail_str(&e, "reason"), Some("running"));
+    assert_eq!(count_sub(&fx.repo, "fetch"), 0, "no git started");
+    guard.finish();
+    remote_fetch(&app.state, background_args(&app))
+        .await
+        .expect("fetch once the write is over");
 }
 
 // ── RM-02 : pull
@@ -1676,8 +1810,8 @@ fn env_dump_hook(file: &Path) -> String {
 }
 
 /// 10 "Network and Credentials": Token (`GITMINI_GH_TOKEN`) is only present in the subprocess environment
-/// git network concerned (trust model: its hooks `pre-push` see it), never in another subprocess
-/// git (merge, rebase) or their hooks. Hooks dump their environment: real proof, not the newspaper of the
+/// git network towards the GitHub host in https (trust model: its hooks `pre-push` see it), never in another
+/// subprocess git (merge, rebase), their hooks, or a network command towards another remote (here a local path). Hooks dump their environment: real proof, not the newspaper of the
 /// Runner (which filters the token by construction).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn rm_12_token_only_reaches_the_network_git_process_environment() {
@@ -1734,7 +1868,7 @@ async fn rm_12_token_only_reaches_the_network_git_process_environment() {
         );
     }
 
-    // 3. push: the network command receives the token, its hook pre-push sees it (trust model assumed)
+    // 3. push towards a local path (not the GitHub host): neither the token nor the credential inline
     remote_push(
         &app.state,
         push_args(&app, "origin", "feature", true, false),
@@ -1744,8 +1878,41 @@ async fn rm_12_token_only_reaches_the_network_git_process_environment() {
     let pre_push = dump("pre-push");
     assert!(pre_push.contains("ran:pre-push"));
     assert!(
-        pre_push.contains("GITMINI_GH_TOKEN=gho_envtest"),
-        "git push receives GITMINI_GH_TOKEN (the hook pre-push sees it)"
+        !pre_push.contains("GITMINI_GH_TOKEN") && !pre_push.contains("gho_envtest"),
+        "a push to a remote other than GitHub must not receive the token"
+    );
+    let rec = find_spawn(&fx.repo, "push").expect("push launched");
+    assert!(!rec.argv.iter().any(|a| a.starts_with("credential.")));
+
+    // 4. a GitHub URL rewritten by `insteadOf` towards the local path: git contacts the local path, no token
+    let origin = fx.origin.to_string_lossy().into_owned();
+    git(
+        &fx.repo,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com/octo-test/alpha.git",
+        ],
+    );
+    git(
+        &fx.repo,
+        &[
+            "config",
+            &format!("url.{origin}.insteadOf"),
+            "https://github.com/octo-test/alpha.git",
+        ],
+    );
+    fx.commit("local2.txt", "local2", "local: add local2.txt");
+    reset();
+    remote_push(&app.state, push_args(&app, "origin", "main", false, false))
+        .await
+        .expect("push via insteadOf");
+    let pre_push = dump("pre-push");
+    assert!(pre_push.contains("ran:pre-push"));
+    assert!(
+        !pre_push.contains("GITMINI_GH_TOKEN"),
+        "insteadOf: the URL really contacted decides"
     );
 }
 

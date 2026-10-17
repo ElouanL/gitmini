@@ -340,6 +340,9 @@ pub struct FileDiff {
     pub old_mode: Option<u32>,
     pub new_mode: Option<u32>,
     pub binary: bool,
+    /// Text not valid UTF-8 on one side: the lines are decoded with U+FFFD, so the hunks cannot be turned
+    /// back into an exact patch (stage / unstage / discard of a hunk refused, whole file only).
+    pub lossy: bool,
     pub too_large: Option<TooLarge>,
     #[specta(type = Option<specta_typescript::Number>)]
     pub old_size: Option<u64>,
@@ -351,6 +354,31 @@ pub struct FileDiff {
     pub hash: String,
     pub submodule: Option<SubmoduleDiff>,
     pub lfs_pointer: Option<bool>,
+}
+
+/// Reply of `diff_file`: the diff, or `{ unchanged: true }` when its `hash` equals the `ifNoneMatch` sent
+/// (silent reload of the displayed diff: nothing to transfer nor redraw).
+#[derive(Debug, Clone, Serialize, Deserialize, Type)]
+#[serde(untagged)]
+pub enum DiffFileReply {
+    Unchanged(DiffUnchanged),
+    Diff(Box<FileDiff>),
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Type, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffUnchanged {
+    pub unchanged: bool,
+}
+
+impl DiffFileReply {
+    /// The diff, `None` for `unchanged`.
+    pub fn into_diff(self) -> Option<FileDiff> {
+        match self {
+            DiffFileReply::Diff(d) => Some(*d),
+            DiffFileReply::Unchanged(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -662,6 +690,10 @@ pub enum UndoKind {
     Pull,
     BranchDelete,
     StashDrop,
+    ResetSoft,
+    ResetMixed,
+    ResetKeep,
+    TagDelete,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]

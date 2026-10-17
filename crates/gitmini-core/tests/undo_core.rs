@@ -811,7 +811,7 @@ async fn core_undo_is_busy_while_another_write_runs() {
     let st = peek_available(&o).await;
     let guard = o
         .repo
-        .begin_write(WriteSpec::new("stage", "Indexation"))
+        .begin_write(WriteSpec::new("stage", "Stage"))
         .expect("verrou");
     let err = undo(&o, &st).await.unwrap_err();
     assert_eq!(err.code, ErrorCode::Busy);

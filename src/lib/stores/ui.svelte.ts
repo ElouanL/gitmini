@@ -31,6 +31,12 @@ export class UiStore {
   constructor(readonly owner: Session) {}
   sidebarOpen = $state({ local: true, remote: true, tags: true, stashes: true });
   sidebarRemotesOpen = $state<Record<string, boolean>>({});
+  /** Prefix folders of the sidebar lists, by `<scope>:<path>` (`local:feature`); absent = open. */
+  sidebarFoldersOpen = $state<Record<string, boolean>>({});
+  /** Text typed in the sidebar filter. While it holds a term, sections, remotes and folders are displayed open. */
+  sidebarFilter = $state('');
+  /** Sections, remotes and folders the user closed while filtering; forgotten when the filter text changes. */
+  sidebarFilterClosed = $state<Record<string, boolean>>({});
   centerView = $state.raw<CenterView>(GRAPH);
   /** Drawer right of the graph (`reflog-panel`...), `null` = closed. */
   drawer = $state<string | null>(null);
@@ -47,6 +53,12 @@ export class UiStore {
   /** Incremented meter to request the focus of an area (`Mod+1/2/3`) from a component that observes it. */
   focusRequest = $state.raw<{ zone: 'sidebar' | 'graph' | 'right'; nonce: number } | null>(null);
   #nonce = 0;
+
+  setSidebarFilter(text: string): void {
+    if (text === this.sidebarFilter) return;
+    this.sidebarFilter = text;
+    this.sidebarFilterClosed = {};
+  }
 
   openCenter(id: string, props: Record<string, unknown> = {}): void {
     this.centerView = { id, props };
@@ -106,6 +118,9 @@ export class UiStore {
   resetForRepo(): void {
     this.sidebarOpen = { local: true, remote: true, tags: true, stashes: true };
     this.sidebarRemotesOpen = {};
+    this.sidebarFoldersOpen = {};
+    this.sidebarFilter = '';
+    this.sidebarFilterClosed = {};
     this.centerView = GRAPH;
     this.drawer = null;
     this.contextMenu = null;

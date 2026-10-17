@@ -6,15 +6,16 @@ mod common;
 mod graphgen;
 
 use std::collections::{HashMap, HashSet};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 use gitmini_core::error::ErrorCode;
 use gitmini_core::read::graph::{RowSpec, layout_all};
 use gitmini_core::read::log::{
-    self, BuildHooks, LogPageArgs, LogSearchArgs, SearchField, ahead_behind,
+    self, BuildHooks, LogPageArgs, LogSearchArgs, RefreshHooks, SearchField, ahead_behind,
     build_index_with_hooks, decode_cursor, log_page_blocking, log_search_blocking,
-    refresh_index_stats, wait_index_complete,
+    refresh_index_stats, refresh_index_with_hooks, wait_index_complete,
 };
 use gitmini_core::types::{GraphRow, LogPage, RefLabelKind, RowKind};
 use graphgen::*;
@@ -460,6 +461,41 @@ fn graph_03_search_prefixes_override_fields() {
             .matches
             .is_empty()
     );
+}
+
+/// The palette (`#`) lists what `log_search` finds with a subject for each. The search only returns `oid` and `row`, so
+/// the subject of a commit the graph has not loaded is read back with a one-row `log_page` at that `row`: that page
+/// must be exactly the matched commit, and it carries the summary and the refs the palette shows.
+#[test]
+fn graph_03_search_match_reads_back_as_a_single_row() {
+    let repo = synthetic(&GenSpec {
+        commits: 3_000,
+        branches: 30,
+        merges: 150,
+        ..GenSpec::default()
+    });
+    let o = open_complete(&repo.path);
+    let res = search(&o, "detailed topic", None, Some(15));
+    assert_eq!(res.matches.len(), 15);
+    assert!(res.truncated, "there are more than 15 such commits");
+    let all = all_rows(&o.repo, 500);
+    for m in &res.matches {
+        let page = fetch_page(&o.repo, None, Some(m.row), Some(1));
+        assert_eq!(page.start, m.row, "the page starts at the matched row");
+        assert_eq!(page.rows.len(), 1, "one row, not a page");
+        let row = &page.rows[0];
+        assert_eq!(row.oid, m.oid);
+        assert!(
+            row.summary.contains("detailed topic"),
+            "subject of {}: {:?}",
+            m.oid,
+            row.summary
+        );
+        assert_eq!(
+            row.refs, all[m.row as usize].refs,
+            "same refs as in the full listing"
+        );
+    }
 }
 
 /// GRAPH-03 / B15 — `limit`: the course stops and `truncated` is true only if results remain.
@@ -1243,6 +1279,112 @@ fn refresh_while_paging_never_exposes_a_partial_index() {
         &open_complete(&repo.path),
         "after 15 concurrent updates to readings",
     );
+}
+
+/// The update computes the new order **off lock**: during the computation the graph lock is free, readers
+/// (`log_page`, `ahead_behind`) see the old index, then the result is installed in one go.
+#[test]
+fn refresh_computes_off_lock_then_installs() {
+    let repo = synthetic(&GenSpec {
+        commits: 1_500,
+        branches: 15,
+        merges: 60,
+        ..GenSpec::default()
+    });
+    let live = open_complete(&repo.path);
+    let (epoch0, rows0) = {
+        let g = live.repo.graph.read().unwrap();
+        (g.epoch, g.row_count())
+    };
+    let head: gix::ObjectId = git(&repo.path, &["rev-parse", "HEAD"]).parse().unwrap();
+    let base = git(&repo.path, &["rev-parse", "HEAD~100"]);
+    let tip = append_chain(&repo.path, "off-lock", &base, 3, 1_700_100_000);
+
+    let called = Arc::new(AtomicBool::new(false));
+    // index published before the update: (epoch, lines)
+    let published = Arc::new(Mutex::new((epoch0, rows0)));
+    let hooks = RefreshHooks {
+        before_install: Some(Box::new({
+            let h = live.repo.clone();
+            let called = called.clone();
+            let published = published.clone();
+            move || {
+                called.store(true, Ordering::SeqCst);
+                let (epoch, rows) = *published.lock().unwrap();
+                // no graph lock held: a writer would not wait
+                assert!(
+                    h.graph.try_write().is_ok(),
+                    "graph lock held during computation"
+                );
+                let g = h.graph.read().unwrap();
+                assert_eq!((g.epoch, g.row_count()), (epoch, rows), "old index visible");
+                drop(g);
+                assert_eq!(ahead_behind(&h, head, head), Some((0, 0)));
+                let page = log_page_blocking(&h, &page_args(&h)).unwrap();
+                assert_eq!(page.epoch as u64, epoch);
+                assert_eq!(page.total, Some(rows as u32));
+            }
+        })),
+    };
+    let stats = refresh_index_with_hooks(&live.repo, &hooks).unwrap();
+    assert!(called.load(Ordering::SeqCst));
+    assert_eq!(stats.new_commits, 3);
+    {
+        let g = live.repo.graph.read().unwrap();
+        assert_eq!((g.epoch, g.row_count()), (epoch0 + 1, rows0 + 3));
+    }
+    assert!(oids(&all_rows(&live.repo, 2000)).contains(&tip));
+    assert_same_index(&live, &open_complete(&repo.path), "update off lock");
+
+    // labels only (new branch on HEAD, already a tip): same path, without copying the arena
+    git(&repo.path, &["branch", "labels-only", "HEAD"]);
+    *published.lock().unwrap() = (epoch0 + 1, rows0 + 3);
+    called.store(false, Ordering::SeqCst);
+    let stats = refresh_index_with_hooks(&live.repo, &hooks).unwrap();
+    assert!(called.load(Ordering::SeqCst));
+    assert!(stats.labels_only, "{stats:?}");
+    assert_eq!(live.repo.graph.read().unwrap().epoch, epoch0 + 2);
+    assert_same_index(&live, &open_complete(&repo.path), "labels only");
+}
+
+/// An index released (`repo_close`) while the update computes off lock is never repopulated by it.
+#[test]
+fn refresh_does_not_install_over_a_released_index() {
+    let repo = synthetic(&GenSpec {
+        commits: 800,
+        branches: 8,
+        merges: 30,
+        ..GenSpec::default()
+    });
+    let live = open_complete(&repo.path);
+    let base = git(&repo.path, &["rev-parse", "HEAD~50"]);
+    append_chain(&repo.path, "released", &base, 4, 1_700_100_000);
+    let hooks = RefreshHooks {
+        before_install: Some(Box::new({
+            let h = live.repo.clone();
+            move || *h.graph.write().unwrap() = Default::default()
+        })),
+    };
+    refresh_index_with_hooks(&live.repo, &hooks).unwrap();
+    let g = live.repo.graph.read().unwrap();
+    assert_eq!((g.epoch, g.row_count(), g.complete), (0, 0, false));
+}
+
+/// `ahead_behind` never waits for a writer of the graph: `None` while the lock is held, then the value.
+#[test]
+fn ahead_behind_does_not_wait_for_the_graph_writer() {
+    let repo = synthetic(&GenSpec {
+        commits: 300,
+        branches: 4,
+        ..GenSpec::default()
+    });
+    let live = open_complete(&repo.path);
+    let head: gix::ObjectId = git(&repo.path, &["rev-parse", "HEAD"]).parse().unwrap();
+    {
+        let _w = live.repo.graph.write().unwrap();
+        assert_eq!(ahead_behind(&live.repo, head, head), None);
+    }
+    assert_eq!(ahead_behind(&live.repo, head, head), Some((0, 0)));
 }
 
 // ── ahead / behind

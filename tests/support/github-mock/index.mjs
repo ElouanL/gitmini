@@ -30,8 +30,8 @@
 // schema (+ login for Basic), values resembling a masked token in path/query/body.
 
 import http from 'node:http';
-import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -51,7 +51,7 @@ const GIT_ROUTE = /^\/([^/]+)\/([^/]+?)(?:\.git)?\/(info\/refs|git-upload-pack|g
 const NAME_OK = /^[A-Za-z0-9_.-]+$/;
 const TOKEN_LIKE = /gh[opsu]_[A-Za-z0-9]+/g;
 const SECRET_KEY = /token|password|secret|passwd/i;
-const BODY_KEYS = ['client_id', 'scope', 'grant_type', 'device_code'];
+const BODY_KEYS = ['client_id', 'scope', 'grant_type', 'device_code', 'name', 'private', 'description'];
 const KNOWN_CONFIG_KEYS = new Set(['reset', 'tokenSequence', 'deviceCode', 'forceStatus', 'hold']);
 
 /** The 3 repositories of GET /user/rest (order = `sort=updated`, the most recent first). */
@@ -70,6 +70,8 @@ export async function startMock(opts = {}) {
   const token = opts.token ?? 'gho_test';
   const login = opts.login ?? 'octo-test';
   const gitBin = opts.gitBin ?? 'git';
+  /** Repositories of this mock: the fixed list plus those created by `POST /user/repos` / `POST /orgs/<org>/repos`. */
+  const repos = REPOS.map((r) => ({ ...r }));
   const ownsReposDir = !opts.reposDir;
   const reposDir = resolve(opts.reposDir ?? mkdtempSync(join(tmpdir(), 'gitmini-mock-repos-')));
   mkdirSync(reposDir, { recursive: true });
@@ -100,17 +102,29 @@ export async function startMock(opts = {}) {
     return out.replace(TOKEN_LIKE, '***');
   }
 
+  /**
+   * `Scheme value` of an Authorization header, split at its first whitespace (no regular expression: the header is
+   * untrusted input).
+   * @param {string} header
+   * @returns {{ scheme: string, value: string } | null}
+   */
+  function splitAuth(header) {
+    const text = header.trim();
+    const i = text.search(/\s/);
+    return i <= 0 ? null : { scheme: text.slice(0, i), value: text.slice(i).trim() };
+  }
+
   /** @param {string | undefined} header */
   function describeAuth(header) {
     if (!header) return null;
-    const m = /^(\S+)\s+(.*)$/.exec(header.trim());
-    if (!m) return { scheme: 'unknown' };
-    if (/^basic$/i.test(m[1])) {
-      const decoded = Buffer.from(m[2], 'base64').toString('utf8');
+    const auth = splitAuth(header);
+    if (!auth) return { scheme: 'unknown' };
+    if (auth.scheme.toLowerCase() === 'basic') {
+      const decoded = Buffer.from(auth.value, 'base64').toString('utf8');
       const i = decoded.indexOf(':');
       return { scheme: 'Basic', login: sanitize(i < 0 ? decoded : decoded.slice(0, i)) };
     }
-    return { scheme: sanitize(m[1]).slice(0, 32) };
+    return { scheme: sanitize(auth.scheme).slice(0, 32) };
   }
 
   /** @param {URLSearchParams} params */
@@ -166,15 +180,15 @@ export async function startMock(opts = {}) {
 
   /** @param {http.IncomingMessage} req */
   function bearerOk(req) {
-    const m = /^Bearer\s+(.+)$/i.exec(String(req.headers.authorization ?? ''));
-    return !!m && m[1] === token;
+    const auth = splitAuth(String(req.headers.authorization ?? ''));
+    return auth !== null && auth.scheme.toLowerCase() === 'bearer' && auth.value === token;
   }
 
   /** @param {http.IncomingMessage} req */
   function basicCreds(req) {
-    const m = /^Basic\s+(.+)$/i.exec(String(req.headers.authorization ?? ''));
-    if (!m) return null;
-    const decoded = Buffer.from(m[1], 'base64').toString('utf8');
+    const auth = splitAuth(String(req.headers.authorization ?? ''));
+    if (auth === null || auth.scheme.toLowerCase() !== 'basic' || auth.value === '') return null;
+    const decoded = Buffer.from(auth.value, 'base64').toString('utf8');
     const i = decoded.indexOf(':');
     return i < 0 ? { user: decoded, pass: '' } : { user: decoded.slice(0, i), pass: decoded.slice(i + 1) };
   }
@@ -345,6 +359,29 @@ export async function startMock(opts = {}) {
       if (!bearerOk(req)) return json(res, 401, { message: 'Bad credentials', documentation_url: 'https://docs.github.com/rest' });
       return listRepos(res, url);
     }
+    if (method === 'GET' && path === '/user/orgs') {
+      req.resume();
+      if (!bearerOk(req)) return json(res, 401, { message: 'Bad credentials', documentation_url: 'https://docs.github.com/rest' });
+      return json(res, 200, [{ login: 'org', id: 2 }]);
+    }
+    const create = method === 'POST' ? /^\/(?:user|orgs\/([^/]+))\/repos$/.exec(path) : null;
+    if (create) {
+      const p = await readParams(req);
+      entry.body = pickBody(p);
+      if (!bearerOk(req)) return json(res, 401, { message: 'Bad credentials', documentation_url: 'https://docs.github.com/rest' });
+      const owner = create[1] ?? login;
+      const name = p.name ?? '';
+      if (!/^[A-Za-z0-9._-]{1,100}$/.test(name)) return json(res, 422, { message: 'Validation Failed', errors: [{ resource: 'Repository', field: 'name', code: 'invalid' }] });
+      const bare = join(reposDir, owner, `${name}.git`);
+      if (existsSync(bare) || repos.some((r) => r.owner === owner && r.name === name)) {
+        return json(res, 422, { message: 'Repository creation failed.', errors: [{ resource: 'Repository', code: 'custom', field: 'name', message: 'name already exists on this account' }] });
+      }
+      const out = spawnSync(gitBin, ['init', '-q', '--bare', bare]);
+      if (out.status !== 0) return json(res, 500, { message: 'mock: git init --bare failed' });
+      const r = { owner, name, id: 2000 + repos.length, private: p.private === 'true', fork: false, updated: '2024-04-01T12:00:00Z', description: p.description ?? null };
+      repos.push(r);
+      return json(res, 201, repoJson(r));
+    }
     const m = GIT_ROUTE.exec(path);
     if (m) return smartHttp(req, res, entry, url, m);
 
@@ -364,7 +401,7 @@ export async function startMock(opts = {}) {
   function listRepos(res, url) {
     const perPage = Math.min(100, Math.max(1, parseInt(url.searchParams.get('per_page') ?? '', 10) || 30));
     const page = Math.max(1, parseInt(url.searchParams.get('page') ?? '', 10) || 1);
-    const last = Math.max(1, Math.ceil(REPOS.length / perPage));
+    const last = Math.max(1, Math.ceil(repos.length / perPage));
     const link = (/** @type {number} */ p, /** @type {string} */ rel) => {
       const q = new URLSearchParams(url.searchParams);
       q.set('page', String(p));
@@ -374,7 +411,7 @@ export async function startMock(opts = {}) {
     const links = [];
     if (page < last) links.push(link(page + 1, 'next'), link(last, 'last'));
     if (page > 1) links.push(link(page - 1, 'prev'), link(1, 'first'));
-    const rows = REPOS.slice((page - 1) * perPage, page * perPage).map(repoJson);
+    const rows = repos.slice((page - 1) * perPage, page * perPage).map(repoJson);
     json(res, 200, rows, links.length ? { link: links.join(', ') } : {});
   }
 

@@ -24,6 +24,7 @@ use crate::types::{
     TodoPreviewItem, WriteResult,
 };
 use crate::undo::{self, UndoOp};
+use crate::write::identity::ensure_identity;
 use crate::write::runner::{self, ProgressFn, ProgressUpdate, RunOpts, sequence_editor_cp};
 use crate::write::{finish_state_rule, todo};
 
@@ -145,7 +146,7 @@ pub async fn rebase_interactive_start(
 ) -> AppResult<WriteResult> {
     let repo = state.repo(args.repo_id)?;
     let mut g = repo.begin_write(
-        WriteSpec::new("rebase", "Rebase interactif")
+        WriteSpec::new("rebase", "Interactive rebase")
             .op(args.op_id.clone())
             .declares(&declared_kinds(args.autostash)),
     )?;
@@ -211,7 +212,7 @@ pub async fn rebase_onto_oid_locked(
     let repo = g.handle().clone();
     repo.require_no_op()?;
     let onto = ObjectId::from_hex(onto_oid.as_bytes())
-        .map_err(|_| AppError::invalid_argument("onto", format!("Oid invalide : {onto_oid}")))?;
+        .map_err(|_| AppError::invalid_argument("onto", format!("Invalid oid: {onto_oid}")))?;
     let plan = {
         let (repo, onto_str) = (repo.clone(), onto.to_string());
         tokio::task::spawn_blocking(move || plan_start(&repo, &onto_str, None, autostash)).await??
@@ -244,12 +245,12 @@ pub async fn rebase_onto_oid_locked(
 
 /// `rebase_continue`: refuses without running git if paths are not merged.
 pub async fn rebase_continue(state: &AppState, args: RebaseOpArgs) -> AppResult<WriteResult> {
-    step_command(state, args, "--continue", "Rebase : continuer").await
+    step_command(state, args, "--continue", "Rebase: continue").await
 }
 
 /// `rebase_skip` : `git rebase --skip`.
 pub async fn rebase_skip(state: &AppState, args: RebaseOpArgs) -> AppResult<WriteResult> {
-    step_command(state, args, "--skip", "Rebase : sauter").await
+    step_command(state, args, "--skip", "Rebase: skip").await
 }
 
 async fn step_command(
@@ -291,7 +292,7 @@ async fn step_locked(
     // Continue and Skip create commits: identity verified before git (the rebase stays on pause if it is missing).
     {
         let repo = repo.clone();
-        tokio::task::spawn_blocking(move || ensure_identity(&repo)).await??;
+        tokio::task::spawn_blocking(move || ensure_identity(&repo, true)).await??;
     }
     if st.autostash {
         g.declare(&[ChangeKindEv::Stash]);
@@ -320,9 +321,8 @@ async fn step_locked(
 /// `rebase_abort`: `git rebase --abort` (`git am --abort` for the Kind `am`).
 pub async fn rebase_abort(state: &AppState, args: RepoArgs) -> AppResult<WriteResult> {
     let repo = state.repo(args.repo_id)?;
-    let mut g = repo.begin_write(
-        WriteSpec::new("rebase", "Rebase : abandonner").declares(&declared_kinds(false)),
-    )?;
+    let mut g = repo
+        .begin_write(WriteSpec::new("rebase", "Rebase: abort").declares(&declared_kinds(false)))?;
     let res = abort_locked(&repo, &mut g).await;
     conclude(&repo, g, res)
 }
@@ -504,7 +504,7 @@ async fn launch(
     }
 }
 
-/// Filet of the identity pre-check (which does not see everything: name reduced to punctuation, `user.useConfigOnly`...) :
+/// Filet of the identity pre-check (which does not see everything: name reduced to punctuation, address auto-detection disabled...) :
 /// git refused to create a commit. If he left a rebase in place, he was abandoned to return only
 /// `IDENTITY_MISSING` (the `identity-dialog` restarts the command). If the abort fails, the actual prime state (`CONFLICT`).
 async fn abort_after_identity_failure(repo: &Arc<RepoHandle>, e: AppError) -> AppError {
@@ -524,38 +524,6 @@ async fn abort_after_identity_failure(repo: &Arc<RepoHandle>, e: AppError) -> Ap
         }
     }
     e
-}
-
-/// `IDENTITY_MISSING { }` if the actual author or committer has no name or e-mail: `GIT_AUTHOR_*` /
-/// `GIT_COMMITTER_*`, then `author.*` / `committer.*`, then `user.*` (config rereaded from disk), then `EMAIL`
-/// for the e-mail. An empty or white value counts as missing. Blocking.
-fn ensure_identity(repo: &RepoHandle) -> AppResult<()> {
-    let r = crate::read::refs::fresh_repo(repo)?;
-    if identity_present(&r, "AUTHOR", "author") && identity_present(&r, "COMMITTER", "committer") {
-        return Ok(());
-    }
-    Err(AppError::new(
-        ErrorCode::IdentityMissing,
-        "Missing git identity (user.name / user.email).",
-    )
-    .with_details(serde_json::json!({})))
-}
-
-fn identity_present(r: &gix::Repository, env_role: &str, cfg_role: &str) -> bool {
-    let env = |name: &str| std::env::var(name).is_ok_and(|v| !v.trim().is_empty());
-    let cfg = r.config_snapshot();
-    let set = |key: &str| {
-        cfg.string(key)
-            .is_some_and(|v| !v.to_string().trim().is_empty())
-    };
-    let name = env(&format!("GIT_{env_role}_NAME"))
-        || set(&format!("{cfg_role}.name"))
-        || set("user.name");
-    let email = env(&format!("GIT_{env_role}_EMAIL"))
-        || set(&format!("{cfg_role}.email"))
-        || set("user.email")
-        || env("EMAIL");
-    name && email
 }
 
 /// The process was stopped by `op_cancel`. If `rebase-merge/` exists: `git rebase --abort`, then reread the
@@ -668,7 +636,7 @@ fn plan_start(
     }
     // A simple fast advance (the branch is an ancestor of the target) does not create any commit: no identity required.
     if !is_ancestor(&r, before.oid, onto_oid)? {
-        ensure_identity(repo)?;
+        ensure_identity(repo, true)?;
     }
     Ok(StartPlan::Run {
         onto_oid,
@@ -944,7 +912,7 @@ fn plan_interactive(
     if !args.autostash {
         ensure_clean(repo)?;
     }
-    ensure_identity(repo)?;
+    ensure_identity(repo, true)?;
     Ok(InteractivePlan {
         base: range.base,
         before: current,

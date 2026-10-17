@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Home screen (no repository open): `welcome-open-btn`, `welcome-clone-btn`, `welcome-recent-list` / `-item`,
+  // Home screen (no repository open): `welcome-open-btn`, `welcome-init-btn`, `welcome-clone-btn`, `welcome-recent-list` / `-item`,
   // `welcome-github-login-btn`, `welcome-open-error[data-code][data-reason]`.
   import { runAction } from '$lib/actions/registry';
   import { featureFlags } from '$lib/feature-flags';
@@ -41,6 +41,9 @@
     <div class="actions">
       <button type="button" class="btn btn-primary" data-testid="welcome-open-btn" disabled={repo.opening} onclick={() => void runAction('repo.open')}>
         <Icon name="folder" /> {t('welcome.open')}
+      </button>
+      <button type="button" class="btn" data-testid="welcome-init-btn" onclick={() => void runAction('repo.init')}>
+        {t('welcome.init')}
       </button>
       <button type="button" class="btn" data-testid="welcome-clone-btn" onclick={() => void runAction('repo.clone')}>
         {t('welcome.clone')}

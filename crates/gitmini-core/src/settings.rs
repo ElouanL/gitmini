@@ -1,7 +1,7 @@
 //! `settings.json` and list of recent repositories. Property of the
 //!
 //! File format: a flat JSON object.
-//! - a key by setting (`"theme"`, `"pull.mode"`, `"editor.command"`, `"graph.dimUnreachable"`, `"layout"`),
+//! - a key by setting (`"theme"`, `"pull.mode"`, `"editor.command"`, `"graph.dimUnreachable"`, `"fetch.auto"`, `"diff.contextLines"`, `"palette.recent"`, `"layout"`),
 //!   only those that the user has modified (the default values in §5.5 complete the reading);
 //! - `"recent"`: table `[{ "path", "name", "lastOpened" }]` (10 max, more recent first), managed by the backend
 //!   alone: this is not a setting (`settings_set` refuses it, `settings_get` does not return it).
@@ -45,6 +45,11 @@ pub fn defaults() -> Settings {
     m.insert("graph.dimUnreachable".into(), json!(true));
     m.insert("layout".into(), default_layout());
     m.insert("workspace.tabs".into(), Value::Null);
+    m.insert("network.proxy.mode".into(), json!("system"));
+    m.insert("network.proxy.url".into(), Value::Null);
+    m.insert("fetch.auto".into(), json!(0));
+    m.insert("diff.contextLines".into(), json!(DIFF_CONTEXT_DEFAULT));
+    m.insert("palette.recent".into(), json!([]));
     m
 }
 
@@ -64,6 +69,73 @@ fn expect_enum(key: &str, value: &Value, allowed: &[&str]) -> AppResult<Value> {
             allowed.join(", ")
         ))),
     }
+}
+
+/// Minutes between two background fetches (`fetch.auto`), `0` = never. The frontend offers exactly these.
+pub const FETCH_AUTO_MINUTES: &[u64] = &[0, 5, 15, 30];
+
+fn expect_fetch_auto(key: &str, value: &Value) -> AppResult<Value> {
+    match value.as_u64() {
+        Some(m) if FETCH_AUTO_MINUTES.contains(&m) => Ok(json!(m)),
+        _ => Err(invalid_value(format!(
+            "Invalid value for {key}: expected a number of minutes among {}.",
+            FETCH_AUTO_MINUTES
+                .iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
+/// Unchanged lines shown around each change of a diff (`diff.contextLines`). The frontend offers exactly these; the
+/// diff commands themselves take any number from 1 to `read::diff::MAX_CONTEXT_LINES`.
+pub const DIFF_CONTEXT_CHOICES: &[u64] = &[1, 3, 5, 10, 25];
+/// Default of `diff.contextLines`: what `git diff` shows.
+pub const DIFF_CONTEXT_DEFAULT: u64 = crate::read::diff::CONTEXT_LINES as u64;
+
+fn expect_diff_context(key: &str, value: &Value) -> AppResult<Value> {
+    match value.as_u64() {
+        Some(n) if DIFF_CONTEXT_CHOICES.contains(&n) => Ok(json!(n)),
+        _ => Err(invalid_value(format!(
+            "Invalid value for {key}: expected a number of lines among {}.",
+            DIFF_CONTEXT_CHOICES
+                .iter()
+                .map(u64::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
+    }
+}
+
+/// Commands the palette remembers (`palette.recent`), most recent first. The frontend keeps fewer (`MAX_RECENT_COMMANDS`);
+/// this only bounds what a hand-edited or newer `settings.json` can make us hold.
+pub const PALETTE_RECENT_MAX: usize = 20;
+/// Longest action id accepted in `palette.recent` (`git.pullFfOnly`...).
+pub const PALETTE_COMMAND_ID_MAX: usize = 100;
+
+/// A list of command ids: each a non-empty string, repeated ids collapse onto their first (most recent) occurrence.
+fn expect_palette_recent(key: &str, value: &Value) -> AppResult<Value> {
+    let invalid = || {
+        invalid_value(format!(
+            "Invalid value for {key}: expected a list of at most {PALETTE_RECENT_MAX} command ids."
+        ))
+    };
+    let items = value.as_array().ok_or_else(invalid)?;
+    let mut ids: Vec<&str> = Vec::with_capacity(items.len());
+    for item in items {
+        let id = item
+            .as_str()
+            .filter(|id| !id.is_empty() && id.len() <= PALETTE_COMMAND_ID_MAX)
+            .ok_or_else(invalid)?;
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    if ids.len() > PALETTE_RECENT_MAX {
+        return Err(invalid());
+    }
+    Ok(json!(ids))
 }
 
 fn expect_bool(key: &str, value: &Value) -> AppResult<Value> {
@@ -130,6 +202,25 @@ pub fn parse_editor_template(template: &str) -> AppResult<Vec<String>> {
     Ok(argv)
 }
 
+/// Checks a proxy URL: `http`, `https`, `socks5` or `socks5h` scheme, a host, no path.
+fn parse_proxy_url(s: &str) -> AppResult<url::Url> {
+    let invalid = || {
+        invalid_value(
+            "Invalid proxy URL: expected scheme://host:port (http, https, socks5 or socks5h).",
+        )
+    };
+    let url = url::Url::parse(s).map_err(|_| invalid())?;
+    if !matches!(url.scheme(), "http" | "https" | "socks5" | "socks5h")
+        || url.host_str().is_none_or(str::is_empty)
+        || !matches!(url.path(), "" | "/")
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(invalid());
+    }
+    Ok(url)
+}
+
 /// Validates and normalizes a key value. Unknown key (including `recent`) → `INVALID_ARGUMENT { field: "key" }`,
 /// valeur invalide → `INVALID_ARGUMENT { field: "value" }`. `editor.command` vide vaut `null`.
 pub fn validate(key: &str, value: &Value) -> AppResult<Value> {
@@ -149,6 +240,21 @@ pub fn validate(key: &str, value: &Value) -> AppResult<Value> {
             )),
         },
         "graph.dimUnreachable" => expect_bool(key, value),
+        "fetch.auto" => expect_fetch_auto(key, value),
+        "diff.contextLines" => expect_diff_context(key, value),
+        "palette.recent" => expect_palette_recent(key, value),
+        "network.proxy.mode" => expect_enum(key, value, &["system", "none", "manual"]),
+        "network.proxy.url" => match value {
+            Value::Null => Ok(Value::Null),
+            Value::String(s) if s.trim().is_empty() => Ok(Value::Null),
+            Value::String(s) => {
+                parse_proxy_url(s.trim())?;
+                Ok(json!(s.trim()))
+            }
+            _ => Err(invalid_value(
+                "Invalid value for network.proxy.url: expected text or null.",
+            )),
+        },
         "layout" => expect_layout(value),
         "workspace.tabs" => {
             if value.is_null() {
@@ -168,7 +274,7 @@ pub fn validate(key: &str, value: &Value) -> AppResult<Value> {
                 )
             {
                 return Err(invalid_value(
-                    "workspace.tabs : chemins ou onglet actif invalides.",
+                    "workspace.tabs: invalid paths or active tab.",
                 ));
             }
             Ok(value.clone())
@@ -326,7 +432,11 @@ pub async fn settings_set(state: &AppState, args: SettingsSetArgs) -> AppResult<
     update_file(&state.shared.cfg.config_dir, true, |map| {
         map.insert(args.key.clone(), value.clone());
     })?;
+    let proxy_changed = args.key.starts_with("network.proxy.");
     current.insert(args.key, value);
+    if proxy_changed {
+        state.shared.set_proxy(proxy_from(&current));
+    }
     Ok(())
 }
 
@@ -335,6 +445,30 @@ pub fn editor_command(state: &AppState) -> Option<String> {
     match state.settings.lock().unwrap().get("editor.command") {
         Some(Value::String(s)) if !s.trim().is_empty() => Some(s.clone()),
         _ => None,
+    }
+}
+
+/// Effective proxy for network traffic (git, GitHub API, updater).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ProxySetting {
+    /// Environment, `~/.gitconfig` and OS proxy (behavior without gitmini setting).
+    #[default]
+    System,
+    /// Direct connection, even if a proxy is configured elsewhere.
+    None,
+    /// Explicit proxy URL (validated by `validate`).
+    Manual(String),
+}
+
+/// `network.proxy.*` of a settings map. `manual` without URL is `System`.
+pub fn proxy_from(settings: &Settings) -> ProxySetting {
+    match settings.get("network.proxy.mode").and_then(Value::as_str) {
+        Some("none") => ProxySetting::None,
+        Some("manual") => match settings.get("network.proxy.url") {
+            Some(Value::String(url)) if !url.is_empty() => ProxySetting::Manual(url.clone()),
+            _ => ProxySetting::System,
+        },
+        _ => ProxySetting::System,
     }
 }
 
@@ -549,6 +683,70 @@ mod tests {
         assert!(validate("pull.mode", &json!("merge")).is_err());
         assert!(validate("graph.dimUnreachable", &json!(false)).is_ok());
         assert!(validate("graph.dimUnreachable", &json!("yes")).is_err());
+        for minutes in FETCH_AUTO_MINUTES {
+            assert_eq!(
+                validate("fetch.auto", &json!(minutes)).unwrap(),
+                json!(minutes)
+            );
+        }
+        for bad in [
+            json!(1),
+            json!(10),
+            json!(-5),
+            json!(5.5),
+            json!("5"),
+            json!(true),
+            Value::Null,
+        ] {
+            assert!(validate("fetch.auto", &bad).is_err(), "{bad}");
+        }
+        for lines in DIFF_CONTEXT_CHOICES {
+            assert_eq!(
+                validate("diff.contextLines", &json!(lines)).unwrap(),
+                json!(lines)
+            );
+        }
+        for bad in [
+            json!(0),
+            json!(2),
+            json!(30),
+            json!(-1),
+            json!(3.5),
+            json!("3"),
+            Value::Null,
+        ] {
+            assert!(validate("diff.contextLines", &bad).is_err(), "{bad}");
+        }
+        assert!(DIFF_CONTEXT_CHOICES.contains(&DIFF_CONTEXT_DEFAULT));
+        assert_eq!(
+            validate("palette.recent", &json!(["git.fetch", "theme.toggle"])).unwrap(),
+            json!(["git.fetch", "theme.toggle"])
+        );
+        assert_eq!(
+            validate(
+                "palette.recent",
+                &json!(["git.fetch", "theme.toggle", "git.fetch"])
+            )
+            .unwrap(),
+            json!(["git.fetch", "theme.toggle"]),
+            "a repeated id collapses onto its first occurrence"
+        );
+        assert_eq!(validate("palette.recent", &json!([])).unwrap(), json!([]));
+        let too_many: Vec<String> = (0..=PALETTE_RECENT_MAX)
+            .map(|i| format!("cmd.{i}"))
+            .collect();
+        for bad in [
+            json!("git.fetch"),
+            json!([""]),
+            json!([1]),
+            json!([null]),
+            json!({ "git.fetch": true }),
+            json!(["x".repeat(PALETTE_COMMAND_ID_MAX + 1)]),
+            json!(too_many),
+            Value::Null,
+        ] {
+            assert!(validate("palette.recent", &bad).is_err(), "{bad}");
+        }
         assert_eq!(
             validate("editor.command", &json!("  ")).unwrap(),
             Value::Null

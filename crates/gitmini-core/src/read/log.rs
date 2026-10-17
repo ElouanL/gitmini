@@ -111,7 +111,7 @@ impl Signal {
 }
 
 //
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Arena {
     oids: Vec<ObjectId>,
     time: Vec<u32>,
@@ -182,7 +182,7 @@ impl Arena {
 }
 
 /// Index lines (show order).
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct Rows {
     order: Vec<Key>,
     row_of: Vec<u32>,
@@ -222,8 +222,9 @@ pub struct GraphIndex {
     pub epoch: u64,
     /// All lines are published (`LogPage.total` not null).
     pub complete: bool,
-    arena: Arena,
-    rows: Rows,
+    /// Shared with the updates in progress, which work on a copy off lock (see `refresh_index_with_hooks`).
+    arena: Arc<Arena>,
+    rows: Arc<Rows>,
     /// refs tags per node.
     labels: HashMap<Key, Vec<RefLabel>>,
     /// Ordered tips (HEAD, branches, remotes, tags, stashes) and HEAD node.
@@ -249,8 +250,8 @@ impl Default for GraphIndex {
         Self {
             epoch: 0,
             complete: false,
-            arena: Arena::default(),
-            rows: Rows::default(),
+            arena: Arc::default(),
+            rows: Arc::default(),
             labels: HashMap::new(),
             tips: Vec::new(),
             head: None,
@@ -841,7 +842,19 @@ fn resolve(arena: &mut Arena, src: &mut Source, tips: &TipSet) -> Resolved {
 
     expand(arena, src, &mut stack);
 
-    // labels: HEAD first detached, then the current branch, then the rest in the order of refs
+    Resolved {
+        tips: keys,
+        head: head_key,
+        labels: tip_labels(tips, head_key, &ref_keys),
+    }
+}
+
+/// Labels: HEAD first detached, then the current branch, then the rest in the order of refs.
+fn tip_labels(
+    tips: &TipSet,
+    head_key: Option<Key>,
+    ref_keys: &[Key],
+) -> HashMap<Key, Vec<RefLabel>> {
     let mut labels: HashMap<Key, Vec<RefLabel>> = HashMap::new();
     if let (Some(k), Some(l)) = (head_key, &tips.head_label) {
         labels.entry(k).or_default().push(l.clone());
@@ -856,11 +869,44 @@ fn resolve(arena: &mut Arena, src: &mut Source, tips: &TipSet) -> Resolved {
             labels.entry(ref_keys[i]).or_default().push(l.clone());
         }
     }
-    Resolved {
+    labels
+}
+
+/// `resolve` without modifying `arena`, when all the tips (and stashes) are already known nodes: what `resolve`
+/// would return, with the map of the stash pseudo-nodes. `None` as soon as a tip would create a node.
+fn resolve_known(arena: &Arena, tips: &TipSet) -> Option<(Resolved, HashMap<Key, u32>)> {
+    let mut keys: Vec<Key> = Vec::new();
+    let mut seen: HashSet<Key> = HashSet::new();
+    let mut push_tip = |k: Key, keys: &mut Vec<Key>| {
+        if seen.insert(k) {
+            keys.push(k);
+        }
+    };
+    let head_key = match tips.head {
+        Some(h) => Some(*arena.by_oid.get(&h)?),
+        None => None,
+    };
+    if let Some(k) = head_key {
+        push_tip(k, &mut keys);
+    }
+    let mut ref_keys = Vec::with_capacity(tips.refs.len());
+    for (oid, _) in &tips.refs {
+        let k = *arena.by_oid.get(oid)?;
+        ref_keys.push(k);
+        push_tip(k, &mut keys);
+    }
+    let mut stash_map: HashMap<Key, u32> = HashMap::new();
+    for (idx, oid) in tips.stashes.iter().enumerate() {
+        let k = *arena.stash_nodes.get(oid)?;
+        stash_map.insert(k, idx as u32);
+        push_tip(k, &mut keys);
+    }
+    let resolved = Resolved {
         tips: keys,
         head: head_key,
-        labels,
-    }
+        labels: tip_labels(tips, head_key, &ref_keys),
+    };
+    Some((resolved, stash_map))
 }
 
 /// Lit parents and date of each piled node, creating unknown parent nodes.
@@ -1170,15 +1216,20 @@ fn install(
     resolved: Resolved,
     shallow_stamp: Option<FileStamp>,
 ) {
-    g.arena = arena;
-    g.rows = rows;
+    g.shallow_stamp = shallow_stamp;
+    g.build_error = None;
+    publish(g, arena, rows, resolved);
+}
+
+/// Publishes a new order (arena, lines and tips) and advances the epoch.
+fn publish(g: &mut GraphIndex, arena: Arena, rows: Rows, resolved: Resolved) {
+    g.arena = Arc::new(arena);
+    g.rows = Arc::new(rows);
     g.labels = resolved.labels;
     g.tips = resolved.tips;
     g.head = resolved.head;
-    g.shallow_stamp = shallow_stamp;
     g.epoch += 1;
     g.complete = true;
-    g.build_error = None;
     prune_ahead_behind(g);
     g.signal.bump();
 }
@@ -1213,9 +1264,11 @@ fn build_locked(repo: &Arc<RepoHandle>, tips: TipSet, hooks: &BuildHooks) -> App
         let signal;
         {
             let mut g = repo.graph.write().unwrap();
-            g.arena = arena;
-            g.rows = Rows::default();
-            g.rows.row_of = vec![NONE; g.arena.len()];
+            g.rows = Arc::new(Rows {
+                row_of: vec![NONE; arena.len()],
+                ..Rows::default()
+            });
+            g.arena = Arc::new(arena);
             g.labels = resolved.labels;
             g.tips = resolved.tips;
             g.head = resolved.head;
@@ -1235,7 +1288,9 @@ fn build_locked(repo: &Arc<RepoHandle>, tips: TipSet, hooks: &BuildHooks) -> App
                     return Ok(()); // free index (`repo_close`) during construction
                 }
                 let g = &mut *g;
-                done = gen_.run(&g.arena, &mut g.rows, batch);
+                // no copy: the updates are serialised with the construction (`build_lock`)
+                let rows = Arc::make_mut(&mut g.rows);
+                done = gen_.run(&g.arena, rows, batch);
                 if done {
                     g.complete = true;
                     prune_ahead_behind(g);
@@ -1372,12 +1427,71 @@ pub fn refresh_index(repo: &Arc<RepoHandle>) {
 
 /// Like `refresh_index`, with details of what was done.
 pub fn refresh_index_stats(repo: &Arc<RepoHandle>) -> AppResult<RefreshStats> {
+    refresh_index_with_hooks(repo, &RefreshHooks::default())
+}
+
+/// Test reminders of the incremental update.
+#[derive(Default)]
+pub struct RefreshHooks {
+    /// Called **off lock** once the update is computed, just before its installation.
+    pub before_install: Option<Box<dyn Fn() + Send + Sync>>,
+}
+
+/// What an update starts from: the published index, shared without copy (`Arc`).
+struct Base {
+    epoch: u64,
+    arena: Arc<Arena>,
+    rows: Arc<Rows>,
+    tips: Vec<Key>,
+    head: Option<Key>,
+    shallow_stamp: Option<FileStamp>,
+}
+
+/// Short write lock: applies `f` only if the index is still the one the update started from (not released by
+/// `repo_close`, nor replaced by another construction in the meantime).
+fn install_if_current(
+    repo: &RepoHandle,
+    build_lock: &Arc<Mutex<()>>,
+    base: &Base,
+    hooks: &RefreshHooks,
+    f: impl FnOnce(&mut GraphIndex),
+) -> bool {
+    if let Some(hook) = &hooks.before_install {
+        hook();
+    }
+    let mut g = repo.graph.write().unwrap();
+    if g.epoch != base.epoch || !Arc::ptr_eq(&g.build_lock, build_lock) {
+        return false;
+    }
+    f(&mut g);
+    true
+}
+
+/// `refresh_index_stats` with reminders (concurrency tests).
+///
+/// The new order is computed **off lock** on a copy of the arena and lines: the readers (`log_page`,
+/// `ahead_behind`...) keep the published index during the computation, then a short write lock installs the result.
+pub fn refresh_index_with_hooks(
+    repo: &Arc<RepoHandle>,
+    hooks: &RefreshHooks,
+) -> AppResult<RefreshStats> {
     let lock = repo.graph.read().unwrap().build_lock.clone();
     let _serial = lock.lock().unwrap();
-    if repo.graph.read().unwrap().epoch == 0 {
-        // not yet built (the initial construction will read the updated refs) or index released by `repo_close`
-        return Ok(RefreshStats::default());
-    }
+    let base = {
+        let g = repo.graph.read().unwrap();
+        if g.epoch == 0 {
+            // not yet built (the initial construction will read the updated refs) or index released by `repo_close`
+            return Ok(RefreshStats::default());
+        }
+        Base {
+            epoch: g.epoch,
+            arena: g.arena.clone(),
+            rows: g.rows.clone(),
+            tips: g.tips.clone(),
+            head: g.head,
+            shallow_stamp: g.shallow_stamp,
+        }
+    };
     let t_start = Instant::now();
     let walk = tracing::info_span!("graph.walk").entered();
     let grepo = repo.thread_repo();
@@ -1385,39 +1499,71 @@ pub fn refresh_index_stats(repo: &Arc<RepoHandle>) -> AppResult<RefreshStats> {
     let shallow_stamp = FileStamp::of_path(&grepo.shallow_file());
 
     let mut src = Source::open(grepo);
-    let mut g = repo.graph.write().unwrap();
-    let g = &mut *g;
 
     // the fusion does not know how to deal with: displaced shallow border, missing object again readable
     let mut scratch = Vec::new();
-    let healed = g
+    let healed = base
         .arena
         .missing
-        .clone()
         .iter()
         .any(|oid| src.load(oid, &mut scratch).is_some());
-    if g.shallow_stamp != shallow_stamp || healed {
+    if base.shallow_stamp != shallow_stamp || healed {
         drop(src);
         drop(walk);
-        return full_rebuild(repo.thread_repo(), g, &tips, 0, t_start);
+        let old_len = base.arena.len();
+        return full_rebuild(repo, &lock, &base, hooks, &tips, 0, old_len, t_start);
     }
 
-    let before_nodes = g.arena.len();
-    let alive_before = before_nodes - g.arena.dead;
-    let resolved = resolve(&mut g.arena, &mut src, &tips);
-    let new_commits = g.arena.len() - before_nodes;
+    // same tips, all already known: only labels change, without copying the arena
+    if let Some((resolved, stash)) = resolve_known(&base.arena, &tips)
+        && resolved.tips == base.tips
+        && resolved.head == base.head
+        && stash == base.arena.stash
+    {
+        install_if_current(repo, &lock, &base, hooks, |g| {
+            g.labels = resolved.labels;
+            g.epoch += 1;
+            g.signal.bump();
+        });
+        return Ok(RefreshStats {
+            labels_only: true,
+            walk: t_start.elapsed(),
+            ..Default::default()
+        });
+    }
+
+    let mut arena = (*base.arena).clone();
+    let before_nodes = arena.len();
+    let alive_before = before_nodes - arena.dead;
+    let resolved = resolve(&mut arena, &mut src, &tips);
+    let new_commits = arena.len() - before_nodes;
 
     if new_commits > FULL_REBUILD_NEW_COMMITS {
         drop(src);
         drop(walk);
-        return full_rebuild(repo.thread_repo(), g, &tips, new_commits, t_start);
+        let old_len = arena.len();
+        drop(arena);
+        return full_rebuild(
+            repo,
+            &lock,
+            &base,
+            hooks,
+            &tips,
+            new_commits,
+            old_len,
+            t_start,
+        );
     }
 
-    let same_tips = resolved.tips == g.tips && resolved.head == g.head;
+    let same_tips = resolved.tips == base.tips && resolved.head == base.head;
     if same_tips && new_commits == 0 {
-        g.labels = resolved.labels;
-        g.epoch += 1;
-        g.signal.bump();
+        // the stash pseudo-nodes have changed (`arena.stash`): the arena is installed with the labels
+        install_if_current(repo, &lock, &base, hooks, |g| {
+            g.arena = Arc::new(arena);
+            g.labels = resolved.labels;
+            g.epoch += 1;
+            g.signal.bump();
+        });
         return Ok(RefreshStats {
             labels_only: true,
             walk: t_start.elapsed(),
@@ -1428,37 +1574,33 @@ pub fn refresh_index_stats(repo: &Arc<RepoHandle>) -> AppResult<RefreshStats> {
     // fusion of new nodes in the existing order
     {
         let merged = merge_new_nodes(
-            &g.arena,
-            &g.rows.order,
-            &g.rows.row_of,
-            &g.tips,
+            &arena,
+            &base.rows.order,
+            &base.rows.row_of,
+            &base.tips,
             &resolved.tips,
             before_nodes,
         );
         if let Some(plan) = merged {
-            let head_changed = resolved.head != g.head;
-            g.rows.order.truncate(plan.first);
-            g.rows.order.extend_from_slice(&plan.tail);
-            g.rows.row_of.resize(g.arena.len(), NONE);
+            let head_changed = resolved.head != base.head;
+            let mut rows = (*base.rows).clone();
+            rows.order.truncate(plan.first);
+            rows.order.extend_from_slice(&plan.tail);
+            rows.row_of.resize(arena.len(), NONE);
             for (i, &n) in plan.tail.iter().enumerate() {
-                g.rows.row_of[n as usize] = (plan.first + i) as u32;
+                rows.row_of[n as usize] = (plan.first + i) as u32;
             }
             let walk_time = t_start.elapsed();
             drop(walk);
             let t_lanes = Instant::now();
             {
                 let _lanes = tracing::info_span!("graph.lanes").entered();
-                let arena = &g.arena;
-                recompute_lanes(arena, &mut g.rows, resolved.head, plan.first, head_changed);
+                recompute_lanes(&arena, &mut rows, resolved.head, plan.first, head_changed);
             }
             let lanes = t_lanes.elapsed();
-            g.labels = resolved.labels;
-            g.tips = resolved.tips;
-            g.head = resolved.head;
-            g.epoch += 1;
-            g.complete = true;
-            prune_ahead_behind(g);
-            g.signal.bump();
+            install_if_current(repo, &lock, &base, hooks, |g| {
+                publish(g, arena, rows, resolved);
+            });
             return Ok(RefreshStats {
                 new_commits,
                 merged: true,
@@ -1470,40 +1612,46 @@ pub fn refresh_index_stats(repo: &Arc<RepoHandle>) -> AppResult<RefreshStats> {
     }
 
     // order reconstruction: knots become inaccessible, ex æquo, delayed parent...
-    let (seen, indeg, reachable) = reach(&g.arena, &resolved.tips);
+    let (seen, indeg, reachable) = reach(&arena, &resolved.tips);
     let removed = (alive_before + new_commits).saturating_sub(reachable);
     if removed > 0 {
         // the knots become inaccessible leave the table oid → knot (they remain in the arena, inert)
-        g.arena.by_oid.retain(|_, k| seen[*k as usize]);
-        g.arena.stash_nodes.retain(|_, k| seen[*k as usize]);
-        g.arena.dead += removed;
+        arena.by_oid.retain(|_, k| seen[*k as usize]);
+        arena.stash_nodes.retain(|_, k| seen[*k as usize]);
+        arena.dead += removed;
     }
-    if g.arena.dead > (g.arena.len() / 8).max(2_000) {
+    if arena.dead > (arena.len() / 8).max(2_000) {
         drop(walk);
-        return full_rebuild(repo.thread_repo(), g, &tips, new_commits, t_start);
+        let old_len = arena.len();
+        drop(arena);
+        return full_rebuild(
+            repo,
+            &lock,
+            &base,
+            hooks,
+            &tips,
+            new_commits,
+            old_len,
+            t_start,
+        );
     }
 
     let mut rows = Rows {
-        row_of: vec![NONE; g.arena.len()],
+        row_of: vec![NONE; arena.len()],
         ..Rows::default()
     };
-    let mut gen_ = RowGen::new(&g.arena, &resolved.tips, resolved.head, indeg);
+    let mut gen_ = RowGen::new(&arena, &resolved.tips, resolved.head, indeg);
     let walk_time = t_start.elapsed();
     drop(walk);
     let t_lanes = Instant::now();
     {
         let _lanes = tracing::info_span!("graph.lanes").entered();
-        gen_.run(&g.arena, &mut rows, usize::MAX);
+        gen_.run(&arena, &mut rows, usize::MAX);
     }
     let lanes = t_lanes.elapsed();
-    g.rows = rows;
-    g.labels = resolved.labels;
-    g.tips = resolved.tips;
-    g.head = resolved.head;
-    g.epoch += 1;
-    g.complete = true;
-    prune_ahead_behind(g);
-    g.signal.bump();
+    install_if_current(repo, &lock, &base, hooks, |g| {
+        publish(g, arena, rows, resolved);
+    });
     Ok(RefreshStats {
         new_commits,
         removed_commits: removed,
@@ -1513,16 +1661,22 @@ pub fn refresh_index_stats(repo: &Arc<RepoHandle>) -> AppResult<RefreshStats> {
     })
 }
 
-/// Reconstruction from scratch of an existing index (compacted arena).
+/// Reconstruction from scratch of an existing index (compacted arena), computed off lock. `old_len`: nodes of
+/// the replaced arena.
+#[allow(clippy::too_many_arguments)]
 fn full_rebuild(
-    repo: gix::Repository,
-    g: &mut GraphIndex,
+    repo: &RepoHandle,
+    build_lock: &Arc<Mutex<()>>,
+    base: &Base,
+    hooks: &RefreshHooks,
     tips: &TipSet,
     new_commits: usize,
+    old_len: usize,
     t_start: Instant,
 ) -> AppResult<RefreshStats> {
-    let shallow_stamp = FileStamp::of_path(&repo.shallow_file());
-    let mut src = Source::open(repo);
+    let grepo = repo.thread_repo();
+    let shallow_stamp = FileStamp::of_path(&grepo.shallow_file());
+    let mut src = Source::open(grepo);
     let mut arena = Arena::default();
     let resolved = resolve(&mut arena, &mut src, tips);
     let (_seen, indeg, _) = reach(&arena, &resolved.tips);
@@ -1538,8 +1692,10 @@ fn full_rebuild(
         gen_.run(&arena, &mut rows, usize::MAX);
     }
     let lanes = t_lanes.elapsed();
-    let removed = g.arena.len().saturating_sub(arena.len());
-    install(g, arena, rows, resolved, shallow_stamp);
+    let removed = old_len.saturating_sub(arena.len());
+    install_if_current(repo, build_lock, base, hooks, |g| {
+        install(g, arena, rows, resolved, shallow_stamp);
+    });
     Ok(RefreshStats {
         new_commits,
         removed_commits: removed,
@@ -1632,7 +1788,7 @@ fn parse_target(args: &LogPageArgs) -> AppResult<Target> {
     }
     if let Some(c) = &args.cursor {
         let (epoch, offset) = decode_cursor(c)
-            .ok_or_else(|| AppError::invalid_argument("cursor", "Curseur invalide."))?;
+            .ok_or_else(|| AppError::invalid_argument("cursor", "Invalid cursor."))?;
         return Ok(Target::Cursor { epoch, offset });
     }
     if let Some(r) = args.start_row {
@@ -1640,7 +1796,7 @@ fn parse_target(args: &LogPageArgs) -> AppResult<Target> {
     }
     if let Some(o) = &args.around_oid {
         let id = ObjectId::from_hex(o.as_bytes())
-            .map_err(|_| AppError::invalid_argument("aroundOid", "Oid invalide."))?;
+            .map_err(|_| AppError::invalid_argument("aroundOid", "Invalid oid."))?;
         return Ok(Target::Around(id));
     }
     Ok(Target::First)
@@ -1822,7 +1978,7 @@ fn read_meta(
 }
 
 /// First unempty line of the message, truncated to 200 characters.
-fn summarize(message: &[u8]) -> String {
+pub(crate) fn summarize(message: &[u8]) -> String {
     let text = String::from_utf8_lossy(message);
     let line = text.trim_start().lines().next().unwrap_or("").trim_end();
     if line.chars().count() > SUMMARY_MAX_CHARS {
@@ -2293,12 +2449,13 @@ pub async fn log_search(state: &AppState, args: LogSearchArgs) -> AppResult<LogS
 // ── ahead / behind
 
 /// Ahead/behind of a pair of oids from the index (`None` as long as the index is not ready, or if an oid is unknown).
+/// Never waits for an update being installed (`try_read`): `None` then, the caller falls back on its own walk.
 ///
 /// `(ahead, behind)` = `git rev-list --left-right --count <branch>...<upstream>` : commits de `branch` absents de
 /// `upstream`, then the reverse. Two marks are propagated in the order of the lines (one parent is still after its
 /// children) ; the route stops when the border contains only commits bearing both marks.
 pub fn ahead_behind(repo: &RepoHandle, branch: ObjectId, upstream: ObjectId) -> Option<(u32, u32)> {
-    let g = repo.graph.read().ok()?;
+    let g = repo.graph.try_read().ok()?;
     if !g.complete || g.epoch == 0 {
         return None;
     }

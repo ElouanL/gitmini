@@ -1,6 +1,6 @@
 //! `diff_file`, `commit_details` (, ).
 //!
-//! * `build_hunks` (pur): histogram of imara-diff + git slip heuristic, 3 context lines, hunks and lines
+//! * `build_hunks` (pur): histogram of imara-diff + git slip heuristic, 3 context lines by default (`contextLines`), hunks and lines
 //!   in contract format (`FileDiff`), marker `noeol`.
 //! * `hunk_to_patch` (pur): patch of** one** hunk for `git apply` (used by `stage_hunk` & co, which never receive any
 //!   patch text of the front).
@@ -9,6 +9,7 @@
 //! * `commit_details` / `tree_changes`: list of files from a commit or a range, renames, meters.
 use std::ops::Range;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use gix::bstr::{BStr, BString, ByteSlice};
 use gix::diff::blob::{Algorithm, Diff, InternedInput, pipeline::Mode, pipeline::WorktreeRoots};
@@ -22,12 +23,16 @@ use crate::error::{AppError, AppResult, ErrorCode, gix_err};
 use crate::read::refs::fresh_repo;
 use crate::state::{AppState, RepoHandle};
 use crate::types::{
-    ChangeKind, CommitDetails, ConflictView, DiffLine, DiffLineKind, DiffSource, DiffStats,
-    FileChange, FileDiff, Hunk, Oid, RepoId, Signature, StashPart, SubmoduleDiff, TooLarge,
+    ChangeKind, CommitDetails, ConflictView, DiffFileReply, DiffLine, DiffLineKind, DiffSource,
+    DiffStats, DiffUnchanged, FileChange, FileDiff, Hunk, Oid, RepoId, Signature, StashPart,
+    SubmoduleDiff, TooLarge,
 };
 
-/// Context lines around a hunk (05: "3 context lines").
+/// Context lines around a hunk when the request names none (05: "3 context lines", the default of `git diff`).
 pub const CONTEXT_LINES: usize = 3;
+/// Largest `contextLines` accepted. The smallest is 1: a hunk without context cannot be applied back (`git apply`
+/// anchors an unanchored change at the end of the file).
+pub const MAX_CONTEXT_LINES: u32 = 100;
 /// Beyond, `tooLarge` (except `force`): 1 Mio or 20,000 lines on one side (05, ).
 pub const TOO_LARGE_BYTES: u64 = 1024 * 1024;
 pub const TOO_LARGE_LINES: u64 = 20_000;
@@ -38,7 +43,7 @@ pub const MAX_COMMIT_FILES: usize = 2000;
 /// Bytes examined for binary content (byte NUL).
 pub const BINARY_PROBE: usize = 8000;
 
-const MODE_COMMIT: u32 = 0o160000;
+pub(crate) const MODE_COMMIT: u32 = 0o160000;
 const NOEOL_TEXT: &str = "\\ No newline at end of file";
 
 #[derive(Debug, Clone, Deserialize, Type)]
@@ -48,6 +53,12 @@ pub struct DiffFileArgs {
     pub path: String,
     pub source: DiffSource,
     pub force: Option<bool>,
+    /// `hash` of the diff already displayed: if it is still the same, the reply is `{ unchanged: true }`.
+    #[serde(default)]
+    pub if_none_match: Option<String>,
+    /// Unchanged lines kept around each change, 1 to `MAX_CONTEXT_LINES` (absent: 3). `stage_hunk` & co. must be given
+    /// the value the displayed diff was read with: the hunks, and so their indexes and hash, depend on it.
+    pub context_lines: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize, Type)]
@@ -58,37 +69,75 @@ pub struct CommitDetailsArgs {
     pub against: Option<Oid>,
 }
 
-pub async fn diff_file(state: &AppState, args: DiffFileArgs) -> AppResult<FileDiff> {
+pub async fn diff_file(state: &AppState, args: DiffFileArgs) -> AppResult<DiffFileReply> {
     let repo = state.repo(args.repo_id)?;
-    diff_for(&repo, &args.path, &args.source, args.force.unwrap_or(false)).await
+    let context = context_lines(args.context_lines)?;
+    let diff = diff_with_context(
+        &repo,
+        &args.path,
+        &args.source,
+        args.force.unwrap_or(false),
+        context,
+    )
+    .await?;
+    if args.if_none_match.as_deref() == Some(diff.hash.as_str()) {
+        return Ok(DiffFileReply::Unchanged(DiffUnchanged { unchanged: true }));
+    }
+    Ok(DiffFileReply::Diff(Box::new(diff)))
 }
 
-pub async fn commit_details(state: &AppState, args: CommitDetailsArgs) -> AppResult<CommitDetails> {
+/// The `contextLines` of a request: absent is the default, otherwise 1 to `MAX_CONTEXT_LINES`.
+pub fn context_lines(requested: Option<u32>) -> AppResult<usize> {
+    match requested {
+        None => Ok(CONTEXT_LINES),
+        Some(n) if (1..=MAX_CONTEXT_LINES).contains(&n) => Ok(n as usize),
+        Some(_) => Err(AppError::invalid_argument_reason(
+            "contextLines",
+            "out-of-range",
+            format!("Context lines: a number from 1 to {MAX_CONTEXT_LINES} is expected."),
+        )),
+    }
+}
+
+/// Shared with the LRU cache: serialized as is, never deep-copied (up to 2,000 `FileChange`).
+pub async fn commit_details(
+    state: &AppState,
+    args: CommitDetailsArgs,
+) -> AppResult<Arc<CommitDetails>> {
     let repo = state.repo(args.repo_id)?;
     repo.ensure_present()?;
     let against = args.against;
     let oid = args.oid;
-    let details = tokio::task::spawn_blocking(move || {
-        commit_details_blocking(&repo, &oid, against.as_deref())
-    })
-    .await??;
-    Ok((*details).clone())
+    tokio::task::spawn_blocking(move || commit_details_blocking(&repo, &oid, against.as_deref()))
+        .await?
 }
 
-/// Diff from a file (used by `diff_file` and `stage_hunk` & co, which build the backend side patch).
-/// diffs `unstaged` / `staged` / `conflict` are always recalculated; those of immutable sources (commit, beach,
-/// stash) go through the LRU `cache.rs`.
+/// Diff from a file with the default context (3 lines).
 pub async fn diff_for(
     repo: &Arc<RepoHandle>,
     path: &str,
     source: &DiffSource,
     force: bool,
 ) -> AppResult<FileDiff> {
+    diff_with_context(repo, path, source, force, CONTEXT_LINES).await
+}
+
+/// Diff from a file with `context` unchanged lines around each change (used by `diff_file` and `stage_hunk` & co,
+/// which build the backend side patch). diffs `unstaged` / `staged` / `conflict` are always recalculated; those of
+/// immutable sources (commit, beach, stash) go through the LRU `cache.rs`, one entry per context size.
+pub async fn diff_with_context(
+    repo: &Arc<RepoHandle>,
+    path: &str,
+    source: &DiffSource,
+    force: bool,
+    context: usize,
+) -> AppResult<FileDiff> {
     repo.ensure_present()?;
     let repo = repo.clone();
     let path = path.to_string();
     let source = source.clone();
-    tokio::task::spawn_blocking(move || diff_blocking(&repo, &path, &source, force)).await?
+    tokio::task::spawn_blocking(move || diff_blocking(&repo, &path, &source, force, context))
+        .await?
 }
 
 //
@@ -401,14 +450,24 @@ fn patch_with_hunks<'a>(diff: &FileDiff, hunks: impl Iterator<Item = &'a Hunk>) 
 }
 
 /// `hash` of a `FileDiff`: xxh3 of the text patch, mixed with modes and sizes for diffs without hunk (binar,
-/// trop gros) afin qu'un changement soit toujours visible.
+/// trop gros) afin qu'un changement soit toujours visible. Also covers the rename, the `tooLarge` verdict, the
+/// submodule and LFS summaries: `diff_file`'s `ifNoneMatch` relies on it to answer `unchanged`.
 pub fn diff_hash(diff: &FileDiff) -> String {
     let mut s = String::new();
     s.push_str(&diff.path);
     s.push('\u{0}');
     s.push_str(&format!(
-        "{:?}{:?}{:?}{:?}{}",
-        diff.old_mode, diff.new_mode, diff.old_size, diff.new_size, diff.binary
+        "{:?}{:?}{:?}{:?}{}{}{:?}{:?}{:?}{:?}",
+        diff.old_mode,
+        diff.new_mode,
+        diff.old_size,
+        diff.new_size,
+        diff.binary,
+        diff.lossy,
+        diff.old_path,
+        diff.too_large,
+        diff.submodule,
+        diff.lfs_pointer
     ));
     s.push('\u{0}');
     for h in &diff.hunks {
@@ -503,16 +562,41 @@ fn tree_entry_side(repo: &gix::Repository, tree: gix::ObjectId, path: &BStr) -> 
 }
 
 fn commit_not_found(commit: impl std::fmt::Display) -> AppError {
-    AppError::new(
-        ErrorCode::NotFound,
-        format!("Commit introuvable : {commit}"),
-    )
-    .with_details(serde_json::json!({ "what": "oid", "name": commit.to_string() }))
+    AppError::new(ErrorCode::NotFound, format!("Commit not found: {commit}"))
+        .with_details(serde_json::json!({ "what": "oid", "name": commit.to_string() }))
 }
 
 /// Commit `id`, ou `NOT_FOUND { what: "oid" }`.
 pub fn find_commit<'r>(repo: &'r gix::Repository, id: gix::ObjectId) -> AppResult<gix::Commit<'r>> {
     repo.find_commit(id).map_err(|_| commit_not_found(id))
+}
+
+/// The commits at the border of a shallow repository (`<common_dir>/shallow`); empty for any other.
+pub(crate) fn shallow_border(repo: &gix::Repository) -> std::collections::HashSet<gix::ObjectId> {
+    repo.shallow_commits()
+        .ok()
+        .flatten()
+        .map(|c| c.iter().copied().collect())
+        .unwrap_or_default()
+}
+
+/// Parents of `commit` as the history sees them: none for a commit at the border of a shallow repository, whose parents'
+/// objects are not there (git reads it as a root, and so does the graph).
+pub(crate) fn parent_ids_of(
+    repo: &gix::Repository,
+    commit: &gix::Commit<'_>,
+) -> Vec<gix::ObjectId> {
+    let id = commit.id;
+    let border = repo
+        .shallow_commits()
+        .ok()
+        .flatten()
+        .is_some_and(|c| c.iter().any(|b| *b == id));
+    if border {
+        Vec::new()
+    } else {
+        commit.parent_ids().map(|p| p.detach()).collect()
+    }
 }
 
 pub fn commit_tree(repo: &gix::Repository, commit: gix::ObjectId) -> AppResult<gix::ObjectId> {
@@ -522,7 +606,7 @@ pub fn commit_tree(repo: &gix::Repository, commit: gix::ObjectId) -> AppResult<g
 
 fn parse_oid(spec: &str) -> AppResult<gix::ObjectId> {
     gix::ObjectId::from_hex(spec.trim().as_bytes()).map_err(|_| {
-        AppError::new(ErrorCode::NotFound, format!("Commit introuvable : {spec}"))
+        AppError::new(ErrorCode::NotFound, format!("Commit not found: {spec}"))
             .with_details(serde_json::json!({ "what": "oid", "name": spec }))
     })
 }
@@ -652,13 +736,16 @@ fn diff_blocking(
     path: &str,
     source: &DiffSource,
     force: bool,
+    context: usize,
 ) -> AppResult<FileDiff> {
     let _span = tracing::info_span!("diff").entered();
-    let cache_key = immutable_key(source).map(|s| diff_key(&s, path, force));
-    if let Some(key) = &cache_key
-        && let Some(hit) = h.cache.lock().unwrap().get_diff(key)
-    {
-        return Ok((*hit).clone());
+    let cache_key = immutable_key(source).map(|s| diff_key(&s, path, force, context));
+    if let Some(key) = &cache_key {
+        let mut cache = h.cache.lock().unwrap();
+        cache.sync_shallow(&h.common_dir);
+        if let Some(hit) = cache.get_diff(key) {
+            return Ok((*hit).clone());
+        }
     }
     let repo = if cache_key.is_some() {
         h.thread_repo()
@@ -667,7 +754,7 @@ fn diff_blocking(
     };
     let mut repo = repo;
     repo.object_cache_size_if_unset(16 * 1024 * 1024);
-    let diff = compute_diff(h, &repo, path, source, force)?;
+    let diff = compute_diff(h, &repo, path, source, force, context)?;
     if let Some(key) = cache_key {
         h.cache
             .lock()
@@ -750,7 +837,7 @@ fn resolve_sides(
         DiffSource::Commit { oid, parent } => {
             let id = resolve_commit_oid(repo, oid)?;
             let commit = find_commit(repo, id)?;
-            let parents: Vec<gix::ObjectId> = commit.parent_ids().map(|p| p.detach()).collect();
+            let parents = parent_ids_of(repo, &commit);
             let n = parent.unwrap_or(1) as usize;
             if n == 0 || (n > parents.len() && !(parents.is_empty() && n == 1)) {
                 return Err(AppError::invalid_argument_reason(
@@ -893,6 +980,7 @@ fn compute_diff(
     path: &str,
     source: &DiffSource,
     force: bool,
+    context: usize,
 ) -> AppResult<FileDiff> {
     let (r, bpath) = resolve_sides(h, repo, path, source)?;
     let Resolved {
@@ -914,6 +1002,7 @@ fn compute_diff(
         old_mode: None,
         new_mode: None,
         binary: false,
+        lossy: false,
         too_large: None,
         old_size: None,
         new_size: None,
@@ -1041,10 +1130,13 @@ fn compute_diff(
         return Ok(base);
     }
 
+    // Lines are shown with `from_utf8_lossy`: an invalid byte (Latin-1 `\xe9`...) would come back as U+FFFD
+    // in a hunk patch, so hunk actions are refused on such a file (`hunk_locked`).
+    base.lossy = std::str::from_utf8(old_bytes).is_err() || std::str::from_utf8(new_bytes).is_err();
     if plain {
         base.hunks = build_plain_hunk(new_bytes);
     } else {
-        let (hunks, stats) = build_hunks(old_bytes, new_bytes, CONTEXT_LINES);
+        let (hunks, stats) = build_hunks(old_bytes, new_bytes, context);
         base.hunks = hunks;
         base.stats = stats;
     }
@@ -1142,7 +1234,7 @@ pub enum Renames {
     Configured,
 }
 
-fn raw_tree_changes(
+pub(crate) fn raw_tree_changes(
     repo: &gix::Repository,
     old: Option<gix::ObjectId>,
     new: Option<gix::ObjectId>,
@@ -1164,16 +1256,20 @@ fn raw_tree_changes(
         .map_err(gix_err)
 }
 
-fn mode_class(mode: u32) -> u32 {
+pub(crate) fn mode_class(mode: u32) -> u32 {
     mode & 0o170000
 }
 
-/// `(binaire, taille)` of a blob and, if both sides are text, additions / deletions.
-fn blob_stats(
+/// `(binary, (additions, deletions))` of a file of a tree comparison.
+type BlobStats = (bool, Option<(u32, u32)>);
+
+/// `(binaire, taille)` of a blob and, if both sides are text of at most [`TOO_LARGE_BYTES`], additions /
+/// deletions.
+pub(crate) fn blob_stats(
     repo: &gix::Repository,
     old: Option<gix::ObjectId>,
     new: Option<gix::ObjectId>,
-) -> (bool, Option<(u32, u32)>) {
+) -> BlobStats {
     let read = |id: Option<gix::ObjectId>| -> Option<Option<Vec<u8>>> {
         match id {
             None => Some(None),
@@ -1193,6 +1289,9 @@ fn blob_stats(
     if looks_binary(&o) || looks_binary(&n) {
         return (true, None);
     }
+    if o.len() as u64 > TOO_LARGE_BYTES || n.len() as u64 > TOO_LARGE_BYTES {
+        return (false, None); // `tooLarge` in the diff viewer: the diff is not worth computing for a counter
+    }
     let input = InternedInput::new(&o[..], &n[..]);
     let diff = Diff::compute(Algorithm::Histogram, &input);
     (false, Some((diff.count_additions(), diff.count_removals())))
@@ -1206,14 +1305,36 @@ pub fn tree_changes(
     new: Option<gix::ObjectId>,
     renames: Renames,
 ) -> AppResult<(Vec<FileChange>, bool)> {
+    let (files, truncated, _) =
+        tree_changes_cancellable(repo, old, new, renames, &AtomicBool::new(false))?;
+    Ok((files, truncated))
+}
+
+/// Below, the line counts of a file list are computed on the calling thread.
+const STATS_PARALLEL_MIN: usize = 32;
+/// Threads of the line counts of a large file list.
+const MAX_STATS_THREADS: usize = 8;
+/// gix object cache of each line count thread (the blobs of a commit are rarely read twice).
+const STATS_THREAD_CACHE_BYTES: usize = 4 * 1024 * 1024;
+
+struct Row {
+    path: BString,
+    fc: FileChange,
+    submodule: bool,
+    old_id: Option<gix::ObjectId>,
+    new_id: Option<gix::ObjectId>,
+}
+
+/// [`tree_changes`] whose line counts stop as soon as `cancel` is raised: the files not yet counted keep
+/// `additions` / `deletions` at `None`. Third boolean: `true` if every count was computed (result cacheable).
+pub fn tree_changes_cancellable(
+    repo: &gix::Repository,
+    old: Option<gix::ObjectId>,
+    new: Option<gix::ObjectId>,
+    renames: Renames,
+    cancel: &AtomicBool,
+) -> AppResult<(Vec<FileChange>, bool, bool)> {
     use gix::diff::tree_with_rewrites::Change;
-    struct Row {
-        path: BString,
-        fc: FileChange,
-        submodule: bool,
-        old_id: Option<gix::ObjectId>,
-        new_id: Option<gix::ObjectId>,
-    }
     let changes = raw_tree_changes(repo, old, new, renames)?;
     let mut rows: Vec<Row> = Vec::with_capacity(changes.len());
     for c in changes {
@@ -1318,26 +1439,84 @@ pub fn tree_changes(
     rows.sort_by(|a, b| a.path.cmp(&b.path));
     let truncated = rows.len() > MAX_COMMIT_FILES;
     rows.truncate(MAX_COMMIT_FILES);
-    let mut files = Vec::with_capacity(rows.len());
-    for mut r in rows {
-        if !r.submodule {
-            let (binary, counts) = blob_stats(repo, r.old_id, r.new_id);
-            r.fc.binary = binary;
-            if let Some((add, del)) = counts {
-                r.fc.additions = Some(add);
-                r.fc.deletions = Some(del);
-            }
+    let complete = fill_stats(repo, &mut rows, cancel);
+    Ok((
+        rows.into_iter().map(|r| r.fc).collect(),
+        truncated,
+        complete,
+    ))
+}
+
+/// Binary flag and line counts of `rows` (submodules excepted), spread over threads beyond
+/// [`STATS_PARALLEL_MIN`] files (model `scan_parallel` of `log.rs`). `false` if `cancel` stopped the work.
+fn fill_stats(repo: &gix::Repository, rows: &mut [Row], cancel: &AtomicBool) -> bool {
+    let jobs: Vec<usize> = (0..rows.len()).filter(|i| !rows[*i].submodule).collect();
+    let apply = |r: &mut Row, (binary, counts): BlobStats| {
+        r.fc.binary = binary;
+        if let Some((add, del)) = counts {
+            r.fc.additions = Some(add);
+            r.fc.deletions = Some(del);
         }
-        files.push(r.fc);
+    };
+    let threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .clamp(1, MAX_STATS_THREADS)
+        .min(jobs.len().div_ceil(STATS_PARALLEL_MIN / 2).max(1));
+    if jobs.len() < STATS_PARALLEL_MIN || threads == 1 {
+        for i in jobs {
+            if cancel.load(Ordering::Relaxed) {
+                return false;
+            }
+            let stats = blob_stats(repo, rows[i].old_id, rows[i].new_id);
+            apply(&mut rows[i], stats);
+        }
+        return true;
     }
-    Ok((files, truncated))
+    // `gix::Repository` is not `Sync`: one thread-local repository per thread, from the same shared handle
+    let shared = repo.clone().into_sync();
+    let ids: Vec<(Option<gix::ObjectId>, Option<gix::ObjectId>)> = jobs
+        .iter()
+        .map(|i| (rows[*i].old_id, rows[*i].new_id))
+        .collect();
+    let next = AtomicUsize::new(0);
+    let results: Vec<Vec<(usize, BlobStats)>> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                let (shared, ids, next) = (&shared, &ids, &next);
+                scope.spawn(move || {
+                    let mut repo = shared.to_thread_local();
+                    repo.object_cache_size_if_unset(STATS_THREAD_CACHE_BYTES);
+                    let mut out = Vec::new();
+                    loop {
+                        let k = next.fetch_add(1, Ordering::Relaxed);
+                        if k >= ids.len() || cancel.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        out.push((k, blob_stats(&repo, ids[k].0, ids[k].1)));
+                    }
+                    out
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .map(|w| w.join().unwrap_or_default())
+            .collect()
+    });
+    let mut done = 0;
+    for (k, stats) in results.into_iter().flatten() {
+        apply(&mut rows[jobs[k]], stats);
+        done += 1;
+    }
+    done == jobs.len()
 }
 
 //
 // commit_details
 //
 
-fn signature_of(sig: gix::actor::SignatureRef<'_>) -> Signature {
+pub(crate) fn signature_of(sig: gix::actor::SignatureRef<'_>) -> Signature {
     let time = sig.time().unwrap_or_default();
     Signature {
         name: sig.name.to_str_lossy().into_owned(),
@@ -1355,14 +1534,18 @@ pub fn commit_details_blocking(
 ) -> AppResult<Arc<CommitDetails>> {
     let _span = tracing::info_span!("commit_details").entered();
     let key = commit_key(oid, against);
-    if let Some(hit) = h.cache.lock().unwrap().commits.get(&key).cloned() {
-        return Ok(hit);
+    {
+        let mut cache = h.cache.lock().unwrap();
+        cache.sync_shallow(&h.common_dir);
+        if let Some(hit) = cache.commits.get(&key).cloned() {
+            return Ok(hit);
+        }
     }
     let mut repo = h.thread_repo();
     repo.object_cache_size_if_unset(16 * 1024 * 1024);
     let id = resolve_commit_oid(&repo, oid)?;
     let commit = find_commit(&repo, id)?;
-    let parents: Vec<gix::ObjectId> = commit.parent_ids().map(|p| p.detach()).collect();
+    let parents = parent_ids_of(&repo, &commit);
     let tree = commit.tree_id().map_err(gix_err)?.detach();
     let old_tree = match against {
         Some(a) => Some(commit_tree(&repo, resolve_commit_oid(&repo, a)?)?),
@@ -1371,7 +1554,10 @@ pub fn commit_details_blocking(
             .map(|p| commit_tree(&repo, *p))
             .transpose()?,
     };
-    let (files, truncated) = tree_changes(&repo, old_tree, Some(tree), Renames::Configured)?;
+    // a newer request supersedes this one: its line counts stop and the result is not cached
+    let cancel = h.supersede_commit_stats();
+    let (files, truncated, complete) =
+        tree_changes_cancellable(&repo, old_tree, Some(tree), Renames::Configured, &cancel)?;
     let author = signature_of(commit.author().map_err(gix_err)?);
     let committer = signature_of(commit.committer().map_err(gix_err)?);
     let message = commit
@@ -1389,7 +1575,9 @@ pub fn commit_details_blocking(
         files,
         truncated,
     });
-    h.cache.lock().unwrap().commits.put(key, details.clone());
+    if complete {
+        h.cache.lock().unwrap().commits.put(key, details.clone());
+    }
     Ok(details)
 }
 
@@ -1415,6 +1603,19 @@ mod tests {
 
     fn numbered(n: usize) -> String {
         (1..=n).map(|i| format!("line {i}\n")).collect()
+    }
+
+    #[test]
+    fn commit_not_found_messages_are_english() {
+        let e = parse_oid("zzz").unwrap_err();
+        assert_eq!(e.code_str(), "NOT_FOUND");
+        assert_eq!(e.message, "Commit not found: zzz");
+        let e = commit_not_found(gix::ObjectId::null(gix::hash::Kind::Sha1));
+        assert!(
+            e.message.starts_with("Commit not found: 0000000"),
+            "{}",
+            e.message
+        );
     }
 
     #[test]
@@ -1559,6 +1760,7 @@ mod tests {
             old_mode: None,
             new_mode: None,
             binary: false,
+            lossy: false,
             too_large: None,
             old_size: None,
             new_size: None,

@@ -23,6 +23,7 @@
   // svelte-ignore state_referenced_locally
   let remoteBranch = $state(branch);
   let setUpstream = $state(true);
+  let followTags = $state(false);
   let touched = $state(false);
 
   const problem = $derived(remoteBranchProblem(remoteBranch));
@@ -32,7 +33,7 @@
     touched = true;
     if (!canSubmit) return;
     close(true);
-    void pushRun({ remote, branch, remoteBranch: remoteBranch.trim(), setUpstream, forceWithLease: false });
+    void pushRun({ remote, branch, remoteBranch: remoteBranch.trim(), setUpstream, forceWithLease: false, ...(followTags ? { followTags } : {}) });
   }
 </script>
 
@@ -60,6 +61,10 @@
   <label class="checkbox">
     <input type="checkbox" data-testid="push-set-upstream-toggle" bind:checked={setUpstream} />
     {t('remotes.push.setUpstream')}
+  </label>
+  <label class="checkbox">
+    <input type="checkbox" data-testid="push-follow-tags-toggle" bind:checked={followTags} />
+    {t('remotes.push.followTags')}
   </label>
   {#snippet footer()}
     <button type="button" class="btn" data-testid="push-cancel-btn" onclick={() => close()}>{t('remotes.push.cancel')}</button>

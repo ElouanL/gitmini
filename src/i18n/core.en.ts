@@ -13,6 +13,7 @@ export default {
   'app.title': 'gitmini',
   'app.windowTitle': '{name} — gitmini',
   'app.loading': 'Loading...',
+  'app.spinner': 'Loading',
   'app.bootError.title': 'Could not reach backend',
   'app.bootError.hint': "Launch the application with \"just dev\", or open this page with ?mock=1 to use fake data.",
   'app.bootError.retry': 'Try again',
@@ -22,6 +23,7 @@ export default {
   'welcome.subtitle': 'A simple, fast graphical Git client',
   'welcome.open': 'Open a repository...',
   'welcome.clone': 'Clone...',
+  'welcome.init': 'New repository...',
   'welcome.recent': 'Recent repositories',
   'welcome.recentEmpty': 'No recent repositories',
   'welcome.github': "Log in to GitHub",
@@ -122,12 +124,14 @@ export default {
   'banner.mergeContinue': 'Merge finished',
 
   // ── Toolbar
+  'toolbar.label': 'Toolbar',
   'toolbar.noRepo': 'No repository open',
   'toolbar.repoSwitcher': 'Repository: {name}',
   'toolbar.recent': 'Recent',
   'toolbar.noRecent': "No recent repositories",
   'toolbar.openRepo': 'Open...',
   'toolbar.cloneRepo': 'Clone...',
+  'toolbar.initRepo': 'New repository...',
   'toolbar.currentBranch': 'Current branch',
   'toolbar.detached': "Detached HEAD @ {sha}",
   'toolbar.unborn': "{name} (no commit)",
@@ -164,6 +168,7 @@ export default {
   'sidebar.tags': 'Tags',
   'sidebar.stashes': 'Stashes',
   'sidebar.createBranch': 'Create a branch',
+  'sidebar.createTag': 'Create a tag',
   'sidebar.addRemote': 'Add Remote',
   'sidebar.saveStash': "Stash changes...",
   'sidebar.ahead': "{n} commit(s) ahead",
@@ -202,6 +207,7 @@ export default {
   'menu.item.checkout': 'Checkout',
   'menu.item.checkout-detached': "Checkout (Detached HEAD)",
   'menu.item.create-branch': 'Create a branch...',
+  'menu.item.create-tag': 'Create a tag...',
   'menu.item.cherry-pick': 'Cherry-pick',
   'menu.item.revert': 'Revert',
   'menu.item.rebase-onto': 'Rebase on...',
@@ -229,17 +235,12 @@ export default {
   'menu.item.open-external': 'Open in Editor',
   'menu.item.discard-all': "Discard all changes",
 
-  // ── Palette
-  'palette.label': "Order Palette",
-  'palette.placeholder': 'Type a command...',
-  'palette.empty': "No commands",
-  'palette.hint': "↑ю to navigate · Input to run · Escape to close",
-
   // - - - Actions (palette and info-bubble labels)
   'action.noRepo': 'No repository open',
   'action.palette': 'Command palette',
   'action.repoOpen': 'Open a repository...',
   'action.repoClone': 'Clone a repository...',
+  'action.repoInit': 'New repository...',
   'action.fetch': 'Fetch (all remotes)',
   'action.pull': 'Pull',
   'action.pullFfOnly': 'Pull (fast-forward only)',
@@ -300,6 +301,7 @@ export default {
   'undo.reason.exists': "The state to be restored already exists.",
   'undo.reason.exists.branch': "The {branch} branch already exists.",
   'undo.reason.exists.stash': 'This stash is already present.',
+  'undo.reason.exists.tag': "The {tag} tag already exists.",
   'undo.reason.object-missing': 'The original state no longer exists in the repository.',
 
   // - - - Adjustments
@@ -316,6 +318,14 @@ export default {
   'settings.editorCommand.hint': "Must contain {path}; {line} is optional. Leave empty for the system text editor.",
   'settings.editorCommand.missingPath': "The command must contain {path}.",
   'settings.dimUnreachable': "Dim unreachable commits",
+  'settings.proxy': 'Proxy',
+  'settings.proxy.system': 'System (environment and git config)',
+  'settings.proxy.none': 'No proxy',
+  'settings.proxy.manual': 'Manual',
+  'settings.proxy.url': 'Proxy URL',
+  'settings.proxy.url.placeholder': 'http://user:password@proxy:8080',
+  'settings.proxy.hint': 'Used for HTTPS remotes, GitHub and updates. SSH remotes are not affected.',
+  'settings.proxy.invalid': 'Expected scheme://host:port with http, https, socks5 or socks5h.',
   'settings.close': 'Close',
 
   //

@@ -53,6 +53,9 @@ ignore = [
     { id = "RUSTSEC-2025-0080", reason = "unic-common is required by Tauri's urlpattern 0.3 Unicode stack; no patched release exists" },
     { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident is required by Tauri's urlpattern 0.3; no patched release exists" },
     { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version is required by Tauri's urlpattern 0.3 Unicode stack; no patched release exists" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant 5.x is required by zbus 5 through the keyring Secret Service store (Linux); its code moved into zbus 6, which keyring does not use yet; no patched release exists" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names 4.x is required by zbus 5 through the keyring Secret Service store (Linux); its code moved into zbus 6, which keyring does not use yet; no patched release exists" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5.x is required by zbus 5 through the keyring Secret Service store (Linux); its macros moved into zbus 6, which keyring does not use yet; no patched release exists" },
 ]
 
 [sources]

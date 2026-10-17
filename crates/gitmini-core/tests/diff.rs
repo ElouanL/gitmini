@@ -4,12 +4,16 @@
 mod common;
 mod read_support;
 
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
 use common::Fixture;
 use gitmini_core::read::diff::{
-    CommitDetailsArgs, DiffFileArgs, commit_details, diff_file, diff_for, hunk_to_patch,
+    CommitDetailsArgs, DiffFileArgs, MAX_CONTEXT_LINES, Renames, TOO_LARGE_BYTES, commit_details,
+    commit_tree, diff_file, diff_for, diff_with_context, hunk_to_patch, tree_changes_cancellable,
 };
 use gitmini_core::types::{
-    ChangeKind, ConflictView, DiffLineKind, DiffSource, FileDiff, StashPart,
+    ChangeKind, ConflictView, DiffFileReply, DiffLineKind, DiffSource, FileDiff, StashPart,
 };
 use pretty_assertions::assert_eq;
 use read_support::{Opened, TestRepo, git_at, open_at};
@@ -59,7 +63,19 @@ fn ours(d: &FileDiff) -> Vec<GHunk> {
 }
 
 fn git_patch(t: &TestRepo, args: &[&str]) -> Vec<GHunk> {
-    let mut full = vec!["diff", "--histogram", "-U3", "--no-color", "--no-ext-diff"];
+    git_patch_u(t, 3, args)
+}
+
+/// `git diff` with `context` lines of context.
+fn git_patch_u(t: &TestRepo, context: usize, args: &[&str]) -> Vec<GHunk> {
+    let unified = format!("-U{context}");
+    let mut full = vec![
+        "diff",
+        "--histogram",
+        unified.as_str(),
+        "--no-color",
+        "--no-ext-diff",
+    ];
     full.extend_from_slice(args);
     let out = t.git_raw(&full);
     assert!(
@@ -895,11 +911,59 @@ async fn stage_08_hash_changes_when_the_file_changes() {
             path: "mod.txt".into(),
             source: DiffSource::Unstaged,
             force: None,
+            if_none_match: None,
+            context_lines: None,
         },
     )
     .await
-    .unwrap();
+    .unwrap()
+    .into_diff()
+    .expect("no ifNoneMatch: always the diff");
     assert_eq!(via_cmd.hash, c.hash);
+}
+
+async fn diff_if_none_match(o: &Opened, path: &str, etag: Option<String>) -> DiffFileReply {
+    diff_file(
+        &o.state,
+        DiffFileArgs {
+            repo_id: o.repo.id,
+            path: path.into(),
+            source: DiffSource::Unstaged,
+            force: None,
+            if_none_match: etag,
+            context_lines: None,
+        },
+    )
+    .await
+    .unwrap()
+}
+
+/// `ifNoneMatch`: same hash → `{ unchanged: true }` (nothing to transfer); another hash → the full diff.
+#[tokio::test]
+async fn diff_file_if_none_match_answers_unchanged() {
+    let t = mod_repo();
+    let o = t.open().await;
+    let a = diff(&o, "mod.txt", DiffSource::Unstaged).await;
+    let same = diff_if_none_match(&o, "mod.txt", Some(a.hash.clone())).await;
+    assert!(matches!(same, DiffFileReply::Unchanged(u) if u.unchanged));
+    assert_eq!(
+        serde_json::to_value(&same).unwrap(),
+        serde_json::json!({ "unchanged": true })
+    );
+    let other = diff_if_none_match(&o, "mod.txt", Some("0000000000000000".into())).await;
+    let full = other.into_diff().expect("other hash: the diff");
+    assert_eq!(full.hash, a.hash);
+    assert_eq!(
+        serde_json::to_value(DiffFileReply::Diff(Box::new(full.clone()))).unwrap()["hash"],
+        serde_json::json!(a.hash),
+        "the diff keeps its contract shape"
+    );
+    t.write("mod.txt", &(numbered(40).replace("line 5\n", "CINQ\n")));
+    let changed = diff_if_none_match(&o, "mod.txt", Some(a.hash.clone()))
+        .await
+        .into_diff()
+        .expect("the file changed: the new diff");
+    assert_ne!(changed.hash, a.hash);
 }
 
 // ── commit_details
@@ -908,7 +972,7 @@ async fn details(
     o: &Opened,
     oid: &str,
     against: Option<&str>,
-) -> gitmini_core::types::CommitDetails {
+) -> Arc<gitmini_core::types::CommitDetails> {
     commit_details(
         &o.state,
         CommitDetailsArgs {
@@ -1108,6 +1172,111 @@ async fn commit_details_truncates_after_2000_files_and_caches_results() {
     let again = details(&o, &head, None).await;
     assert_eq!(again.files.len(), 2000);
     assert!(!o.repo.cache.lock().unwrap().commits.is_empty());
+}
+
+#[tokio::test]
+async fn commit_details_skips_line_counts_beyond_too_large_bytes() {
+    let big = |tag: &str| -> String {
+        (0..40_000)
+            .map(|i| format!("{tag} line {i:05} with some padding\n"))
+            .collect()
+    };
+    let t = TestRepo::init();
+    t.write("big.txt", &big("a"));
+    t.write("small.txt", "1\n2\n");
+    t.git(&["add", "-A"]);
+    t.git(&["commit", "-q", "-m", "base"]);
+    t.write("big.txt", &big("b"));
+    t.write("small.txt", "1\nTWO\n");
+    t.git(&["add", "-A"]);
+    t.git(&["commit", "-q", "-m", "big change"]);
+    assert!(std::fs::metadata(t.path.join("big.txt")).unwrap().len() > TOO_LARGE_BYTES);
+    let o = t.open().await;
+    let d = details(&o, &t.rev_parse("HEAD"), None).await;
+    let file = |p: &str| d.files.iter().find(|f| f.path == p).unwrap();
+    // beyond `TOO_LARGE_BYTES` the diff viewer shows `tooLarge`: no line counts, still not binary
+    assert_eq!(
+        (file("big.txt").additions, file("big.txt").deletions),
+        (None, None)
+    );
+    assert!(!file("big.txt").binary);
+    assert_eq!(
+        (file("small.txt").additions, file("small.txt").deletions),
+        (Some(1), Some(1))
+    );
+}
+
+#[tokio::test]
+async fn commit_details_parallel_line_counts_match_git_numstat() {
+    let t = TestRepo::init();
+    for i in 0..300 {
+        t.write(&format!("d{}/f{i:03}.txt", i % 7), &numbered(40));
+    }
+    t.git(&["add", "-A"]);
+    t.git(&["commit", "-q", "-m", "base"]);
+    for i in 0..300 {
+        let mut body = numbered(40).replace("line 20\n", &format!("CHANGED {i}\n"));
+        for k in 0..i % 5 {
+            body.push_str(&format!("extra {k}\n"));
+        }
+        t.write(&format!("d{}/f{i:03}.txt", i % 7), &body);
+    }
+    t.git(&["add", "-A"]);
+    t.git(&["commit", "-q", "-m", "touches 300 files"]);
+    let o = t.open().await;
+    let d = details(&o, &t.rev_parse("HEAD"), None).await;
+    let ours: Vec<String> = d
+        .files
+        .iter()
+        .map(|f| {
+            format!(
+                "{}\t{}\t{}",
+                f.additions.unwrap(),
+                f.deletions.unwrap(),
+                f.path
+            )
+        })
+        .collect();
+    let mut theirs = lines_of(&t.git(&["diff", "--numstat", "--histogram", "HEAD^", "HEAD"]));
+    theirs.sort_by(|a, b| a.rsplit('\t').next().cmp(&b.rsplit('\t').next()));
+    assert_eq!(ours, theirs);
+}
+
+#[tokio::test]
+async fn commit_stats_cancellation_supersedes_and_keeps_the_file_list() {
+    let t = TestRepo::init();
+    for i in 0..50 {
+        t.write(&format!("f{i:02}.txt"), &numbered(10));
+    }
+    t.git(&["add", "-A"]);
+    t.git(&["commit", "-q", "-m", "base"]);
+    for i in 0..50 {
+        t.write(&format!("f{i:02}.txt"), &numbered(12));
+    }
+    t.git(&["add", "-A"]);
+    t.git(&["commit", "-q", "-m", "grow"]);
+    let o = t.open().await;
+    // each new request raises the flag of the previous one
+    let first = o.repo.supersede_commit_stats();
+    let second = o.repo.supersede_commit_stats();
+    assert!(first.load(Ordering::Relaxed));
+    assert!(!second.load(Ordering::Relaxed));
+    // superseded computation: complete file list, no line counts, reported incomplete
+    let repo = o.repo.thread_repo();
+    let old = commit_tree(&repo, repo.rev_parse_single("HEAD^").unwrap().detach()).unwrap();
+    let new = commit_tree(&repo, repo.rev_parse_single("HEAD").unwrap().detach()).unwrap();
+    let (files, truncated, complete) =
+        tree_changes_cancellable(&repo, Some(old), Some(new), Renames::Off, &first).unwrap();
+    assert!(!truncated && !complete);
+    assert_eq!(files.len(), 50);
+    assert!(files.iter().all(|f| f.additions.is_none()));
+    let (files, _, complete) =
+        tree_changes_cancellable(&repo, Some(old), Some(new), Renames::Off, &second).unwrap();
+    assert!(complete);
+    assert!(files.iter().all(|f| f.additions == Some(2)));
+    // `commit_details` raises the flag of the request it supersedes
+    let _ = details(&o, &t.rev_parse("HEAD"), None).await;
+    assert!(second.load(Ordering::Relaxed));
 }
 
 #[tokio::test]
@@ -1485,4 +1654,193 @@ async fn diff_02_binary_file_over_10_mib_is_a_binary_placeholder_not_too_large()
     let oid = t.rev_parse("HEAD");
     let d = diff(&o, "huge.bin", DiffSource::Commit { oid, parent: None }).await;
     assert!(d.binary && d.too_large.is_none());
+}
+
+// ── DIFF-05: adjustable context
+
+async fn diff_ctx(o: &Opened, path: &str, source: DiffSource, context: usize) -> FileDiff {
+    diff_with_context(&o.repo, path, &source, false, context)
+        .await
+        .unwrap_or_else(|e| panic!("diff {path} {source:?} -U{context}: {e}"))
+}
+
+#[tokio::test]
+async fn diff_05_context_lines_follow_the_request_and_match_git() {
+    let t = mod_repo();
+    let o = t.open().await;
+    // 40 lines, changes at 5, 20 and 36: the hunks grow and merge as the context does.
+    let mut hunk_counts = Vec::new();
+    for context in [1usize, 2, 3, 5, 7, 8, 10, 25, 100] {
+        let d = diff_ctx(&o, "mod.txt", DiffSource::Unstaged, context).await;
+        assert_eq!(
+            ours(&d),
+            git_patch_u(&t, context, &["--", "mod.txt"]),
+            "-U{context}"
+        );
+        assert_eq!((d.stats.added, d.stats.removed), (3, 3), "-U{context}");
+        hunk_counts.push((context, d.hunks.len()));
+    }
+    // Gaps of 14 unchanged lines (changes 1 and 2: merged from -U7) and 15 (changes 2 and 3: merged from -U8).
+    assert_eq!(
+        hunk_counts,
+        [
+            (1, 3),
+            (2, 3),
+            (3, 3),
+            (5, 3),
+            (7, 2),
+            (8, 1),
+            (10, 1),
+            (25, 1),
+            (100, 1)
+        ]
+    );
+
+    // The staged side honours it too, and the hash depends on the context (it guards `stage_hunk`).
+    t.git(&["add", "mod.txt"]);
+    let narrow = diff_ctx(&o, "mod.txt", DiffSource::Staged, 1).await;
+    let wide = diff_ctx(&o, "mod.txt", DiffSource::Staged, 10).await;
+    assert_eq!(
+        ours(&narrow),
+        git_patch_u(&t, 1, &["--cached", "--", "mod.txt"])
+    );
+    assert_eq!(
+        ours(&wide),
+        git_patch_u(&t, 10, &["--cached", "--", "mod.txt"])
+    );
+    assert_ne!(narrow.hash, wide.hash);
+    assert_eq!(
+        diff_ctx(&o, "mod.txt", DiffSource::Staged, 1).await.hash,
+        narrow.hash,
+        "same context, same hash"
+    );
+    assert_eq!(
+        diff_ctx(&o, "mod.txt", DiffSource::Staged, 3).await.hash,
+        diff(&o, "mod.txt", DiffSource::Staged).await.hash,
+        "diff_for is the default context"
+    );
+}
+
+#[tokio::test]
+async fn diff_05_context_edges_and_small_files() {
+    let t = TestRepo::init();
+    t.commit_file("s.txt", "a\nb\nc\nd\n", "c1");
+    t.write("s.txt", "a\nb\nC\nd\n");
+    let o = t.open().await;
+    // More context than the file has: the whole file, no padding, headers stay valid.
+    let d = diff_ctx(&o, "s.txt", DiffSource::Unstaged, 25).await;
+    assert_eq!(d.hunks.len(), 1);
+    assert_eq!(d.hunks[0].header, "@@ -1,4 +1,4 @@");
+    assert_eq!(d.hunks[0].lines.len(), 5);
+    assert_eq!(ours(&d), git_patch_u(&t, 25, &["--", "s.txt"]));
+    // One line of context at both ends.
+    let d = diff_ctx(&o, "s.txt", DiffSource::Unstaged, 1).await;
+    assert!(
+        d.hunks[0].header.starts_with("@@ -2,3 +2,3 @@"),
+        "{}",
+        d.hunks[0].header
+    );
+    assert_eq!(ours(&d), git_patch_u(&t, 1, &["--", "s.txt"]));
+
+    // A missing final newline keeps its marker whatever the context.
+    t.commit_file("n.txt", "1\n2\n3\n4\n5\n6\n7", "c2");
+    t.write("n.txt", "1\n2\n3\n4\n5\n6\n7x");
+    for context in [1usize, 3, 10] {
+        let d = diff_ctx(&o, "n.txt", DiffSource::Unstaged, context).await;
+        assert_eq!(
+            ours(&d),
+            git_patch_u(&t, context, &["--", "n.txt"]),
+            "-U{context}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn diff_05_context_lines_are_validated_and_diff_file_takes_them() {
+    let t = mod_repo();
+    let o = t.open().await;
+    let args = |context_lines| DiffFileArgs {
+        repo_id: o.repo.id,
+        path: "mod.txt".into(),
+        source: DiffSource::Unstaged,
+        force: None,
+        if_none_match: None,
+        context_lines,
+    };
+    // No `ifNoneMatch`: always the diff itself.
+    let state = &o.state;
+    let read = |context_lines| async move {
+        diff_file(state, args(context_lines))
+            .await
+            .unwrap()
+            .into_diff()
+            .expect("no ifNoneMatch: always the diff")
+    };
+    let default = read(None).await;
+    assert_eq!(default.hash, read(Some(3)).await.hash);
+    let wide = read(Some(10)).await;
+    assert_eq!(wide.hunks.len(), 1);
+    assert_eq!(ours(&wide), git_patch_u(&t, 10, &["--", "mod.txt"]));
+    let top = read(Some(MAX_CONTEXT_LINES)).await;
+    assert_eq!(top.hunks.len(), 1);
+
+    // 0 (a hunk `git apply` could not anchor), above the limit: refused before anything is read.
+    for bad in [0, MAX_CONTEXT_LINES + 1, u32::MAX] {
+        let err = diff_file(&o.state, args(Some(bad))).await.unwrap_err();
+        assert_eq!(err.code_str(), "INVALID_ARGUMENT", "{bad}");
+        assert_eq!(
+            err.detail("field").and_then(|v| v.as_str()),
+            Some("contextLines")
+        );
+    }
+}
+
+#[tokio::test]
+async fn diff_05_cached_commit_diffs_are_keyed_by_context() {
+    let t = mod_repo();
+    t.git(&["add", "mod.txt"]);
+    t.git(&["commit", "-q", "-m", "change mod.txt"]);
+    let oid = t.rev_parse("HEAD");
+    let o = t.open().await;
+    let source = || DiffSource::Commit {
+        oid: oid.clone(),
+        parent: None,
+    };
+    // Asked in turn, twice each (the second read of a size comes from the cache): every answer is its own size's.
+    for context in [3usize, 10, 1, 3, 10, 1] {
+        let d = diff_ctx(&o, "mod.txt", source(), context).await;
+        assert_eq!(
+            ours(&d),
+            git_patch_u(&t, context, &[&format!("{oid}^"), &oid, "--", "mod.txt"]),
+            "-U{context}"
+        );
+    }
+    // A range and a forced load are cached apart as well.
+    let (from, to) = (t.rev_parse("HEAD~1"), oid.clone());
+    for context in [2usize, 6, 2] {
+        let d = diff_ctx(
+            &o,
+            "mod.txt",
+            DiffSource::Range {
+                from: from.clone(),
+                to: to.clone(),
+            },
+            context,
+        )
+        .await;
+        assert_eq!(
+            ours(&d),
+            git_patch_u(&t, context, &[&from, &to, "--", "mod.txt"]),
+            "range -U{context}"
+        );
+    }
+    let forced = diff_with_context(&o.repo, "mod.txt", &source(), true, 10)
+        .await
+        .unwrap();
+    assert_eq!(forced.hunks.len(), 1);
+    assert_eq!(
+        diff_ctx(&o, "mod.txt", source(), 3).await.hunks.len(),
+        3,
+        "a forced wide read does not leak into the narrow one"
+    );
 }

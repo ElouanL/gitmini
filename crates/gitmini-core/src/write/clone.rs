@@ -70,11 +70,11 @@ pub async fn repo_clone(state: &AppState, args: RepoCloneArgs) -> AppResult<Repo
     let _activity = state.shared.activity_guard()?;
     let url = args.url.trim().to_string();
     if url.is_empty() || url.starts_with('-') || url.chars().any(char::is_control) {
-        return Err(AppError::invalid_argument("url", "URL invalide."));
+        return Err(AppError::invalid_argument("url", "Invalid URL."));
     }
     let dest = PathBuf::from(&args.dest);
     let (Some(parent), Some(_)) = (dest.parent().map(Path::to_path_buf), dest.file_name()) else {
-        return Err(AppError::invalid_argument("dest", "Destination invalide."));
+        return Err(AppError::invalid_argument("dest", "Invalid destination."));
     };
     if !dest.is_absolute() {
         return Err(AppError::invalid_argument_reason(
@@ -114,6 +114,10 @@ pub async fn repo_clone(state: &AppState, args: RepoCloneArgs) -> AppResult<Repo
     let dest_str = dest.to_string_lossy().into_owned();
     let opts = RunOpts {
         network: true,
+        remote_urls: vec![rewrite_instead_of(
+            gix::config::File::from_globals().ok().as_ref(),
+            &url,
+        )],
         lfs_skip_smudge: true,
         op_id: Some(args.op_id.clone()),
         cancel: Some(registration.token.clone()),
@@ -152,9 +156,64 @@ pub async fn repo_clone(state: &AppState, args: RepoCloneArgs) -> AppResult<Repo
     repo_open(state, RepoOpenArgs { path: dest_str }).await
 }
 
+/// URL that `git clone` really contacts: `url.<base>.insteadOf` of the global config applied (longest prefix,
+/// like git). There is no repository yet, so gix cannot rewrite it through a remote as `remote.rs` does.
+fn rewrite_instead_of(config: Option<&gix::config::File>, url: &str) -> String {
+    use gix::bstr::ByteSlice;
+    let mut best: Option<(usize, String)> = None;
+    for section in config
+        .and_then(|c| c.sections_by_name("url"))
+        .into_iter()
+        .flatten()
+    {
+        let Some(base) = section.header().subsection_name() else {
+            continue;
+        };
+        for find in section.values("insteadOf") {
+            let find = find.to_str_lossy();
+            if !find.is_empty()
+                && url.starts_with(&*find)
+                && best.as_ref().is_none_or(|(len, _)| find.len() > *len)
+            {
+                best = Some((
+                    find.len(),
+                    format!("{}{}", base.to_str_lossy(), &url[find.len()..]),
+                ));
+            }
+        }
+    }
+    best.map_or_else(|| url.to_string(), |(_, u)| u)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clone_url_follows_the_longest_global_instead_of() {
+        let cfg: gix::config::File =
+            "[url \"https://github.com/\"]\n\tinsteadOf = git@github.com:\n\tinsteadOf = gh:\n\
+             [url \"git@github.com:\"]\n\tinsteadOf = https://github.com/\n\
+             [url \"/srv/mirror/\"]\n\tinsteadOf = https://github.com/octo/\n\
+             [url \"https://example.test/\"]\n\tpushInsteadOf = https://gitlab.com/\n"
+                .parse()
+                .unwrap();
+        let rw = |u: &str| rewrite_instead_of(Some(&cfg), u);
+        assert_eq!(rw("git@github.com:o/r.git"), "https://github.com/o/r.git");
+        assert_eq!(rw("gh:o/r"), "https://github.com/o/r");
+        assert_eq!(rw("https://github.com/o/r.git"), "git@github.com:o/r.git");
+        assert_eq!(
+            rw("https://github.com/octo/r.git"),
+            "/srv/mirror/r.git",
+            "longest prefix"
+        );
+        assert_eq!(
+            rw("https://gitlab.com/o/r.git"),
+            "https://gitlab.com/o/r.git",
+            "push only"
+        );
+        assert_eq!(rewrite_instead_of(None, "gh:o/r"), "gh:o/r");
+    }
 
     #[test]
     fn first_missing_is_the_topmost_nonexistent_ancestor() {

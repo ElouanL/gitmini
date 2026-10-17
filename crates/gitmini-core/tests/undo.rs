@@ -358,6 +358,7 @@ async fn undo_05_undo_is_unavailable_after_an_in_app_push() {
             remote_branch: None,
             set_upstream: false,
             force_with_lease: false,
+            follow_tags: false,
         },
     )
     .await
@@ -391,6 +392,7 @@ async fn undo_05_pushing_another_branch_does_not_block_the_undo() {
             remote_branch: None,
             set_upstream: false,
             force_with_lease: false,
+            follow_tags: false,
         },
     )
     .await

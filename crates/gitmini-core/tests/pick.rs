@@ -1279,6 +1279,41 @@ async fn cp_identity_missing_is_refused_before_git() {
     assert_eq!(subjects(&p.t, 1), vec!["T1: modifies f.txt"]);
 }
 
+/// The pre-check rereads the config from disk (`fresh_repo`): an identity written without changing the size, the
+/// date nor the inode of `~/.gitconfig` (fingerprint of `thread_repo` unchanged) is seen.
+#[tokio::test]
+async fn cp_identity_check_rereads_the_config_from_disk() {
+    let p = cherry_pick_fixture();
+    unset_identity(&p.t);
+    p.t.git(["config", "--global", "user.name", "Ada"]);
+    // wrong key, same length as `email`: no address
+    p.t.git(["config", "--global", "user.xmail", "ada@example.com"]);
+    let o = p.t.open().await;
+    assert_identity_missing(&cherry_pick(&o.state, cp(&o, &[&p.t1])).await.unwrap_err());
+
+    let gitconfig = p.t.home().join(".gitconfig");
+    let before = std::fs::metadata(&gitconfig).unwrap();
+    let text = std::fs::read_to_string(&gitconfig).unwrap();
+    assert!(text.contains("\txmail = "), "{text}");
+    std::fs::write(&gitconfig, text.replace("\txmail = ", "\temail = ")).unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&gitconfig)
+        .unwrap()
+        .set_modified(before.modified().unwrap())
+        .unwrap();
+    let after = std::fs::metadata(&gitconfig).unwrap();
+    assert_eq!(
+        (after.len(), after.modified().unwrap()),
+        (before.len(), before.modified().unwrap())
+    );
+
+    cherry_pick(&o.state, cp(&o, &[&p.t1]))
+        .await
+        .expect("identity reread from disk");
+    assert_eq!(subjects(&p.t, 1), vec!["T1: modifies f.txt"]);
+}
+
 /// `GIT_COMMITTER_*` is enough for a cherry-pick (original author is retained), not a revert (new author).
 #[tokio::test]
 async fn cp_identity_committer_env_is_enough_for_cherry_pick_but_not_for_revert() {

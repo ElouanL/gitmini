@@ -1,0 +1,53 @@
+// Strings of the "tags" flow: create (lightweight or annotated), delete (undoable), push, and delete on a remote (not undoable).
+export default {
+  'tags.action.create': 'New tag...',
+  'tags.action.push': 'Push tag',
+  'tags.action.deleteRemote': 'Delete tag on a remote',
+  'tags.menu.create': 'Create a tag here...',
+  'tags.menu.delete': 'Delete tag',
+  'tags.menu.push': 'Push to {remote}',
+  'tags.menu.pushChoose': 'Push to...',
+  'tags.menu.deleteRemote': 'Delete on {remote}...',
+  'tags.menu.deleteRemoteChoose': 'Delete on a remote...',
+
+  'tags.op.create': 'Create tag',
+  'tags.op.delete': 'Delete tag',
+  'tags.op.push': 'Push tag',
+  'tags.op.remoteDelete': 'Delete tag on remote',
+
+  'tags.name.invalid': 'Invalid tag name: {reason}.',
+  'tags.name.exists': 'A tag named "{name}" already exists.',
+  'tags.name.blockedBy': 'The "{blockedBy}" tag already exists and blocks "{name}".',
+
+  'tags.create.title': 'Create a tag',
+  'tags.create.name': 'Tag name',
+  'tags.create.namePlaceholder': 'v1.0.0',
+  'tags.create.target': 'Tagged commit',
+  'tags.create.target.head': 'HEAD ({name})',
+  'tags.create.target.detached': 'Detached HEAD @ {sha}',
+  'tags.create.message': 'Message (optional)',
+  'tags.create.messageHint': 'With a message the tag is annotated: it records who made it, when, and why. Without one it is a plain pointer.',
+  'tags.create.submit': 'Create',
+  'tags.create.cancel': 'Cancel',
+  'tags.create.done': 'Tag "{name}" created on {sha}.',
+  'tags.create.noCommit': 'There is no commit to tag yet.',
+
+  'tags.delete.done': 'Tag "{name}" deleted.',
+  'tags.error.gone': 'The tag "{name}" no longer exists.',
+
+  'tags.push.title': 'Push tag "{name}"',
+  'tags.push.remote': 'Remote',
+  'tags.push.submit': 'Push',
+  'tags.push.cancel': 'Cancel',
+  'tags.push.done': 'Tag "{name}" pushed to {remote}.',
+  'tags.push.exists': '{remote} already has a different tag named "{name}". Choose another name, or delete that tag on the remote (tag menu, "Delete on {remote}...") and push again.',
+
+  'tags.remoteDelete.title': 'Delete tag "{name}" on a remote',
+  'tags.remoteDelete.message': 'Delete the tag "{name}" from {remote}? Your local tag is kept.',
+  'tags.remoteDelete.warning': 'This cannot be undone from Gitmini. Anyone who has not fetched the tag yet will no longer get it, and to put it back on {remote} you will have to push it again.',
+  'tags.remoteDelete.remote': 'Remote',
+  'tags.remoteDelete.submit': 'Delete on {remote}',
+  'tags.remoteDelete.cancel': 'Cancel',
+  'tags.remoteDelete.done': 'Tag "{name}" deleted on {remote}.',
+  'tags.remoteDelete.absent': '{remote} has no tag named "{name}".',
+} satisfies Record<string, string>;

@@ -17,6 +17,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::{AppError, AppResult, ErrorCode};
 use crate::events::{Event, EventSink, OpProgress};
+use crate::github::GithubState;
+use crate::github::credential;
+use crate::settings::ProxySetting;
 use crate::state::RepoHandle;
 
 const CAPTURE_LIMIT: usize = 4 * 1024 * 1024;
@@ -84,6 +87,9 @@ pub struct RunOpts {
     pub env: Vec<(String, String)>,
     /// Add `-c http.lowSpeed*` , `GIT_SSH_COMMAND` default and credential GitHub inline.
     pub network: bool,
+    /// URLs contacted by a network command (after `insteadOf`). The GitHub token and the credential inline are
+    /// only injected if one of them is on the GitHub host in https ([`credential::token_applies`]).
+    pub remote_urls: Vec<String>,
     /// `GIT_LFS_SKIP_SMUDGE=1`: `clone` and `fetch` only.
     pub lfs_skip_smudge: bool,
     /// rebase Subcommand: adds the five `-c rebase.*` (§3.2). `--empty=drop` is the caller's responsibility.
@@ -163,6 +169,17 @@ pub fn clear_spawn_journal() {
     journal().lock().unwrap().clear();
 }
 
+/// `http.proxy=scheme://user:pass@host` → `http.proxy=scheme://***@host` (journal and logs).
+fn mask_proxy_credentials(arg: &str) -> String {
+    if let Some(url) = arg.strip_prefix("http.proxy=")
+        && let Some((scheme, rest)) = url.split_once("://")
+        && let Some((_, host)) = rest.rsplit_once('@')
+    {
+        return format!("http.proxy={scheme}://***@{host}");
+    }
+    arg.to_string()
+}
+
 fn record_spawn(rec: SpawnRecord) {
     let mut j = journal().lock().unwrap();
     if j.len() >= 500 {
@@ -194,6 +211,7 @@ pub fn build_invocation(
     opts: &RunOpts,
     credential_args: &[String],
     ssh_command_defined: bool,
+    proxy: &ProxySetting,
 ) -> Invocation {
     let mut argv: Vec<String> = Vec::new();
     if let Some(dir) = workdir {
@@ -215,6 +233,13 @@ pub fn build_invocation(
     if opts.network {
         for c in NETWORK_CONFIG {
             push_c(c);
+        }
+        // `http.proxy` takes precedence over `~/.gitconfig` and over the `*_proxy` variables;
+        // empty, it disables the proxy (`remote.<name>.proxy` still wins).
+        match proxy {
+            ProxySetting::System => {}
+            ProxySetting::None => push_c("http.proxy="),
+            ProxySetting::Manual(url) => push_c(&format!("http.proxy={url}")),
         }
     }
     // credential_args is already a suite of `-c`, `valeur`
@@ -278,28 +303,39 @@ pub fn credential_args(base: &str) -> Vec<String> {
     ]
 }
 
+/// GitHub token of a network command: `GITMINI_GH_TOKEN` added to `opts.env` (read at most once per session)
+/// and returns the credential inline, only if one of `opts.remote_urls` is on the GitHub host in https. Any
+/// other remote (ssh, other host, local path, plain http) never receives the token.
+fn github_credentials(gh: &GithubState, opts: &mut RunOpts) -> Vec<String> {
+    let base = gh.credential_base();
+    if !opts.network
+        || !opts
+            .remote_urls
+            .iter()
+            .any(|u| credential::token_applies(&base, u))
+    {
+        return Vec::new();
+    }
+    if let Some(token) = gh.token_for_git() {
+        opts.env.push((
+            "GITMINI_GH_TOKEN".into(),
+            secrecy::ExposeSecret::expose_secret(&token).to_string(),
+        ));
+    }
+    if opts.env.iter().any(|(k, _)| k == "GITMINI_GH_TOKEN") {
+        credential_args(&base)
+    } else {
+        Vec::new()
+    }
+}
+
 //
 /// Run git in repository. An output code 0 is converted to `AppError` (table of §7.2, via
 /// `write::errors`), sauf `opts.allow_failure`.
 pub async fn run(repo: &RepoHandle, args: &[&str], opts: RunOpts) -> AppResult<GitOutput> {
     repo.ensure_present()?;
     let mut opts = opts;
-    if opts.network {
-        // credential GitHub inline: only if a token exists (read at most once per session).
-        if let Some(token) = repo.shared.github.token_for_git() {
-            opts.env.push((
-                "GITMINI_GH_TOKEN".into(),
-                secrecy::ExposeSecret::expose_secret(&token).to_string(),
-            ));
-        }
-    }
-    let base = repo.shared.github.credential_base();
-    let has_token = opts.env.iter().any(|(k, _)| k == "GITMINI_GH_TOKEN");
-    let cred = if opts.network && has_token {
-        credential_args(&base)
-    } else {
-        Vec::new()
-    };
+    let cred = github_credentials(&repo.shared.github, &mut opts);
     let ssh_defined = opts.network && ssh_command_defined(repo);
     let workdir = opts.cwd.clone().unwrap_or_else(|| repo.workdir.clone());
     let inv = build_invocation(
@@ -309,6 +345,7 @@ pub async fn run(repo: &RepoHandle, args: &[&str], opts: RunOpts) -> AppResult<G
         &opts,
         &cred,
         ssh_defined,
+        &repo.shared.proxy(),
     );
     let sink = Some(repo.shared.sink.clone());
     let span = tracing::info_span!("git.spawn", sub = %inv.logical_args.first().map(String::as_str).unwrap_or(""));
@@ -322,20 +359,7 @@ pub async fn run_global(
     opts: RunOpts,
 ) -> AppResult<GitOutput> {
     let mut opts = opts;
-    if opts.network
-        && let Some(token) = shared.github.token_for_git()
-    {
-        opts.env.push((
-            "GITMINI_GH_TOKEN".into(),
-            secrecy::ExposeSecret::expose_secret(&token).to_string(),
-        ));
-    }
-    let has_token = opts.env.iter().any(|(k, _)| k == "GITMINI_GH_TOKEN");
-    let cred = if opts.network && has_token {
-        credential_args(&shared.github.credential_base())
-    } else {
-        Vec::new()
-    };
+    let cred = github_credentials(&shared.github, &mut opts);
     let ssh_defined = opts.network && global_ssh_command_defined();
     let workdir = opts.cwd.clone();
     let inv = build_invocation(
@@ -345,6 +369,7 @@ pub async fn run_global(
         &opts,
         &cred,
         ssh_defined,
+        &shared.proxy(),
     );
     let span = tracing::info_span!("git.spawn", sub = %inv.logical_args.first().map(String::as_str).unwrap_or(""));
     tracing::Instrument::instrument(execute(inv, opts, Some(shared.sink.clone()), None), span).await
@@ -393,6 +418,8 @@ async fn execute(
     cmd.kill_on_drop(true);
     #[cfg(unix)]
     cmd.process_group(0);
+    #[cfg(windows)]
+    cmd.creation_flags(crate::repo::CREATE_NO_WINDOW);
 
     SPAWN_COUNT.fetch_add(1, Ordering::SeqCst);
     let spawn_started = Instant::now();
@@ -401,7 +428,7 @@ async fn execute(
             AppError::new(ErrorCode::GitMissing, "git is not found in the PATH.")
                 .with_details(serde_json::json!({}))
         } else {
-            AppError::internal(format!("Impossible de lancer git : {e}"))
+            AppError::internal(format!("Could not launch git: {e}"))
         }
     })?;
     let pid = child.id();
@@ -516,15 +543,14 @@ async fn execute(
             }
         }
     };
-    let status =
-        status.map_err(|e| AppError::internal(format!("Attente de git impossible : {e}")))?;
+    let status = status.map_err(|e| AppError::internal(format!("Could not wait for git: {e}")))?;
     let stdout_bytes = out_task.await.unwrap_or_default();
     let (stderr_text, _) = err_task.await.map_err(AppError::from)?;
     let code = status.code().unwrap_or(-1);
 
     record_spawn(SpawnRecord {
         argv: std::iter::once(inv.program.to_string_lossy().into_owned())
-            .chain(inv.argv.iter().cloned())
+            .chain(inv.argv.iter().map(|a| mask_proxy_credentials(a)))
             .collect(),
         env: filtered_env(&inv.env_set),
         exit_code: status.code(),
@@ -735,7 +761,70 @@ mod tests {
             &opts,
             cred,
             ssh,
+            &ProxySetting::System,
         )
+    }
+
+    fn inv_proxy(args: &[&str], network: bool, proxy: ProxySetting) -> Invocation {
+        build_invocation(
+            Path::new("git"),
+            Some(Path::new("/repo")),
+            args,
+            &RunOpts {
+                network,
+                ..Default::default()
+            },
+            &[],
+            false,
+            &proxy,
+        )
+    }
+
+    #[test]
+    fn proxy_setting_maps_to_http_proxy() {
+        let has = |i: &Invocation, v: &str| i.argv.windows(2).any(|w| w == ["-c", v]);
+        let any_proxy = |i: &Invocation| i.argv.iter().any(|a| a.starts_with("http.proxy"));
+        let url = "http://u:p@proxy:3128";
+        assert!(has(
+            &inv_proxy(&["fetch"], true, ProxySetting::Manual(url.into())),
+            &format!("http.proxy={url}")
+        ));
+        assert!(has(
+            &inv_proxy(&["fetch"], true, ProxySetting::None),
+            "http.proxy="
+        ));
+        assert!(!any_proxy(&inv_proxy(
+            &["fetch"],
+            true,
+            ProxySetting::System
+        )));
+        assert!(!any_proxy(&inv_proxy(
+            &["status"],
+            false,
+            ProxySetting::Manual(url.into())
+        )));
+        assert!(!any_proxy(&inv_proxy(
+            &["status"],
+            false,
+            ProxySetting::None
+        )));
+        // the proxy is not a logical argument (`details.args`)
+        let i = inv_proxy(&["fetch"], true, ProxySetting::Manual(url.into()));
+        assert_eq!(i.logical_args, ["fetch"]);
+    }
+
+    #[test]
+    fn proxy_credentials_are_masked_in_the_journal() {
+        assert_eq!(
+            mask_proxy_credentials("http.proxy=http://u:p@proxy:3128"),
+            "http.proxy=http://***@proxy:3128"
+        );
+        assert_eq!(
+            mask_proxy_credentials("http.proxy=http://proxy:3128"),
+            "http.proxy=http://proxy:3128"
+        );
+        assert_eq!(mask_proxy_credentials("http.proxy="), "http.proxy=");
+        assert_eq!(mask_proxy_credentials("fetch"), "fetch");
     }
 
     fn env_get<'a>(i: &'a Invocation, k: &str) -> Option<&'a str> {
@@ -879,6 +968,52 @@ mod tests {
             false,
         );
         assert!(!j.argv.iter().any(|a| a.starts_with("credential.")));
+    }
+
+    #[test]
+    fn github_token_only_for_https_remotes_on_the_github_host() {
+        let gh =
+            GithubState::with_store(false, Box::new(crate::github::keyring::MemoryStore::new()));
+        gh.store_token("gho_scoped").unwrap();
+        let opts = |urls: &[&str]| RunOpts {
+            network: true,
+            remote_urls: urls.iter().map(|u| u.to_string()).collect(),
+            ..Default::default()
+        };
+        let has_token = |o: &RunOpts| o.env.iter().any(|(k, _)| k == "GITMINI_GH_TOKEN");
+
+        let mut o = opts(&["https://github.com/o/r.git"]);
+        assert_eq!(
+            github_credentials(&gh, &mut o),
+            credential_args("https://github.com")
+        );
+        assert!(has_token(&o));
+        // `fetch --all`: one GitHub remote among others is enough
+        let mut o = opts(&["git@gitlab.com:o/r.git", "https://github.com/o/r.git"]);
+        assert!(!github_credentials(&gh, &mut o).is_empty());
+        assert!(has_token(&o));
+
+        for urls in [
+            &[][..],
+            &["git@github.com:o/r.git"][..],
+            &["ssh://git@github.com/o/r.git"][..],
+            &["http://github.com/o/r.git"][..],
+            &["https://gitlab.com/o/r.git"][..],
+            &["https://github.com.evil.test/o/r.git"][..],
+            &["/tmp/origin.git"][..],
+            &["file:///tmp/github.com/o/r.git"][..],
+        ] {
+            let mut o = opts(urls);
+            assert!(github_credentials(&gh, &mut o).is_empty(), "{urls:?}");
+            assert!(!has_token(&o), "{urls:?}");
+        }
+        // non-network command: never
+        let mut o = RunOpts {
+            network: false,
+            ..opts(&["https://github.com/o/r.git"])
+        };
+        assert!(github_credentials(&gh, &mut o).is_empty());
+        assert!(!has_token(&o));
     }
 
     #[test]
