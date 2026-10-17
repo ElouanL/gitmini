@@ -30,6 +30,7 @@ export default {
   'remotes.push.remote': 'Remote',
   'remotes.push.remoteBranch': 'Remote branch',
   'remotes.push.setUpstream': "Set the upstream (-u)",
+  'remotes.push.followTags': 'Also push annotated tags (--follow-tags)',
   'remotes.push.submit': 'Push',
   'remotes.push.cancel': 'Cancel',
   'remotes.push.error.empty': 'Enter the name of the remote branch.',
@@ -119,4 +120,9 @@ export default {
 
   // Menu: Open PR
   'remotes.menu.openPr': "Open a PR on GitHub",
+
+  // Last fetch (toolbar-ahead-behind tooltip)
+  'remotes.lastFetch': 'Last fetch: {when}',
+  'remotes.lastFetch.never': 'Not fetched since the repository was opened',
+  'remotes.lastFetch.stale': 'Counts may be out of date: fetch to refresh them',
 } satisfies Record<string, string>;

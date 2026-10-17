@@ -93,6 +93,7 @@ fn push_args(
         remote_branch: None,
         set_upstream,
         force_with_lease,
+        follow_tags: false,
     }
 }
 

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import { captureStores } from '$lib/stores/context';
-  const { reportError, graph, op, repo, status, undo, ui } = captureStores();
+  const { reportError, graph, op, repo, session, status, undo, ui } = captureStores();
   // Toolbar (44 px, 03): repository, current branch, cancel/reflog, fetch/pull/push, branch, stash, search, palette, GitHub,
   // settings, progress and cancellation of a [L] command. Each button initiates a registry action (src/lib/actions).
   import { actionDisabledReason, actionContext, getAction, runAction } from '$lib/actions/registry';
@@ -11,7 +11,10 @@
 
   import { openDialog } from '$lib/dialogs/registry';
   import { app } from '$lib/stores/app.svelte';
+  import { fetchIntervalMs } from '$lib/stores/auto-fetch-logic';
+  import { fetchClock, fetchStateFor, isFetchStale } from '$lib/stores/fetch-state.svelte';
   import { github } from '$lib/stores/github.svelte';
+  import { formatRelative } from '$lib/format';
 
   import { t } from '$i18n/index';
   import Icon from '../ui/Icon.svelte';
@@ -51,6 +54,17 @@
   const ahead = $derived(status.ahead);
   const behind = $derived(status.behind);
   const showAheadBehind = $derived(status.upstream !== null && ahead !== null && behind !== null);
+  // The meters are only as fresh as the last fetch: its time in the tooltip, greyed once stale (twice the interval of `fetch.auto`).
+  const fetchState = fetchStateFor(session);
+  const lastFetch = $derived(fetchState.lastFetch);
+  const fetchStale = $derived(isFetchStale(lastFetch, fetchClock.now, fetchIntervalMs(app.get('fetch.auto'))));
+  const aheadBehindTitle = $derived.by(() => {
+    const counts = t('toolbar.aheadBehind', { ahead: ahead ?? 0, behind: behind ?? 0 });
+    const when = lastFetch === null
+      ? t('remotes.lastFetch.never')
+      : t('remotes.lastFetch', { when: formatRelative(lastFetch / 1000, Math.max(fetchClock.now, lastFetch)) });
+    return [counts, when, ...(fetchStale ? [t('remotes.lastFetch.stale')] : [])].join('\n');
+  });
 
   let pullMenuOpen = $state(false);
   let pullBtn = $state<HTMLButtonElement | null>(null);
@@ -217,10 +231,12 @@
     <span
       class="ahead-behind"
       class:disabled={head?.detached}
+      class:stale={fetchStale}
       data-testid="toolbar-ahead-behind"
       data-ahead={ahead}
       data-behind={behind}
-      title={t('toolbar.aheadBehind', { ahead: ahead ?? 0, behind: behind ?? 0 })}
+      data-stale={fetchStale}
+      title={aheadBehindTitle}
     >↑{ahead} ↓{behind}</span>
   {/if}
 
@@ -369,6 +385,10 @@
   }
   .ahead-behind.disabled {
     opacity: 0.45;
+  }
+  .ahead-behind.stale {
+    opacity: 0.5;
+    font-style: italic;
   }
   .progress {
     position: relative;

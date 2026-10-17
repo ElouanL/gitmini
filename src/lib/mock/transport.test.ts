@@ -130,6 +130,29 @@ describe('mock transport: tags', () => {
   });
 });
 
+describe('mock transport: push with followTags', () => {
+  it('sends the annotated tags with the branch, and only when asked to', async () => {
+    const transport = createMockTransport();
+    const call = <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => transport.invoke(command, { repoId: 1, ...args }) as Promise<T>;
+    await call('tag_create', { name: 'f-annotated', message: 'Fix' });
+    await call('tag_create', { name: 'f-light' });
+    const push = (followTags?: boolean) => call('remote_push', { opId: 'x', remote: 'origin', branch: 'main', setUpstream: false, forceWithLease: false, ...(followTags === undefined ? {} : { followTags }) });
+    const remoteHas = (name: string) => call('tag_push', { opId: 'x', remote: 'origin', name, delete: true }).then(() => true, () => false);
+
+    await push();
+    await push(false);
+    // The remote lacks both: deleting there says so (and changes nothing, the check is repeatable).
+    await expect(call('tag_push', { opId: 'x', remote: 'origin', name: 'f-annotated', delete: true })).rejects.toMatchObject({ code: 'NOT_FOUND', details: { what: 'remote-tag' } });
+
+    await push(true);
+    expect(await remoteHas('f-light')).toBe(false);
+    expect(await remoteHas('f-annotated')).toBe(true);
+    // A tag the remote holds under another commit stays theirs, annotated or not.
+    await push(true);
+    await expect(call('tag_push', { opId: 'x', remote: 'origin', name: 'v0.2.0' })).rejects.toMatchObject({ code: 'ALREADY_EXISTS', details: { what: 'remote-tag' } });
+  });
+});
+
 describe('mock transport: discarded files', () => {
   const transport = createMockTransport();
   const call = <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => transport.invoke(command, { repoId: 1, ...args }) as Promise<T>;

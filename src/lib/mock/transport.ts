@@ -51,7 +51,7 @@ function tagDeleteUndo(tag: TagInfo): UndoStatus {
   return {
     ...base,
     entry: {
-      ...base.entry!, id: `undo-tag-${tag.name}`, kind: 'tag-delete', label: `Restore the ${tag.name} tag`, effect: `Restore the ${tag.name} tag on ${tag.targetOid.slice(0, 7)}.`,
+      ...base.entry!, id: `undo-tag-${tag.name}`, kind: 'tag-delete', label: `Restore the ${tag.name} tag`, effect: `Restore the ${tag.name} tag on ${tag.targetOid.slice(0, 7)} (local only).`,
       refName: tag.fullRef, before: tag.oid, after: null, upstreamRef: null, upstreamAtOp: null,
     },
   };
@@ -334,8 +334,11 @@ export function createMockTransport(): Transport {
       emit('repo:changed', { repoId: 1, kinds: ['refs', 'head'] });
       return { head: { branch: 'main', oid: oid(61), detached: false, unborn: false } };
     },
-    remote_push: async () => {
+    remote_push: async (a) => {
       await sleep(600);
+      // `--follow-tags`: the annotated tags go with the branch (lightweight ones never do), but a tag the remote holds under
+      // another commit is never overwritten.
+      if (a.followTags === true) for (const tag of refs.tags) if (tag.annotated && !remoteTags.has(tag.name)) remoteTags.set(tag.name, 'ours');
       return null;
     },
     tag_create: (a) => {

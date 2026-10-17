@@ -17,6 +17,8 @@ import { openTestRepo } from '../components/flows/test-support';
 import { app } from './app.svelte';
 import { autoFetch, PULL_ACTION_TESTID, TICK_MS } from './auto-fetch';
 import { FIRST_FETCH_DELAY, MINUTE } from './auto-fetch-logic';
+import { fetchClock, fetchStateFor } from './fetch-state.svelte';
+import { github } from './github.svelte';
 import { op } from './op.svelte';
 import { refs } from './refs.svelte';
 import { repo } from './repo.svelte';
@@ -314,6 +316,59 @@ describe('failures', () => {
     expect(fetches()).toHaveLength(2);
   });
 
+  describe('are forgiven when what they depended on changes', () => {
+    /** One refused fetch: the next try is an hour away (authentication), until something changes. */
+    async function afterARefusedFetch(): Promise<void> {
+      await setup(5);
+      fake.reject('remote_fetch', err('AUTH_REQUIRED'));
+      await pass(FIRST_FETCH_DELAY);
+      expect(autoFetch.state().entries[0]).toMatchObject({ failures: 1, code: 'AUTH_REQUIRED' });
+      await pass(5 * MINUTE);
+      expect(fetches(), 'still backing off').toHaveLength(1);
+    }
+
+    it.each([
+      ['the proxy mode', () => app.set('network.proxy.mode', 'none')],
+      ['the proxy URL', () => app.set('network.proxy.url', 'http://proxy.example:8080', { optimistic: false })],
+      ['the GitHub sign-in', () => { github.setLoggedIn('octocat'); }],
+    ])('%s', async (_what, change) => {
+      await afterARefusedFetch();
+      await change();
+      autoFetch.evaluate();
+      expect(autoFetch.state().entries[0]).toMatchObject({ failures: 0, code: null });
+      await pass(5 * MINUTE);
+      expect(fetches()).toHaveLength(2);
+    });
+
+    it('the GitHub account (signing in as someone else) and the sign-out too', async () => {
+      await setup(5);
+      github.setLoggedIn('octocat');
+      fake.reject('remote_fetch', err('AUTH_REQUIRED'));
+      await pass(FIRST_FETCH_DELAY);
+      expect(autoFetch.state().entries[0]!.failures).toBe(1);
+      github.setLoggedIn('hubot');
+      autoFetch.evaluate();
+      expect(autoFetch.state().entries[0]!.failures).toBe(0);
+      fake.reject('remote_fetch', err('AUTH_REQUIRED'));
+      await pass(5 * MINUTE);
+      expect(autoFetch.state().entries[0]!.failures).toBe(1);
+      github.setLoggedOut();
+      autoFetch.evaluate();
+      expect(autoFetch.state().entries[0]!.failures).toBe(0);
+    });
+
+    it('but not when something unrelated is written or the same state is read again', async () => {
+      await afterARefusedFetch();
+      await app.set('graph.dimUnreachable', false);
+      await app.set('network.proxy.mode', 'system'); // the value it already has
+      github.setLoggedOut(); // not signed in before, not signed in after
+      autoFetch.evaluate();
+      expect(autoFetch.state().entries[0]).toMatchObject({ failures: 1, code: 'AUTH_REQUIRED' });
+      await pass(5 * MINUTE);
+      expect(fetches()).toHaveLength(1);
+    });
+  });
+
   it('count neither a busy backend nor a cancel as a failure', async () => {
     await setup(5);
     fake.reject('remote_fetch', err('BUSY'));
@@ -331,6 +386,69 @@ describe('failures', () => {
     expect(fetches()).toHaveLength(3);
     await pass(1000);
     expect(fetches()).toHaveLength(4);
+  });
+});
+
+describe('last fetch (the toolbar tooltip)', () => {
+  const lastFetch = () => fetchStateFor(activeSession.current).lastFetch;
+
+  it('is unknown until a fetch succeeds, then the instant of the automatic fetch on the schedule\'s clock', async () => {
+    await setup(5);
+    expect(lastFetch()).toBeNull();
+    await pass(FIRST_FETCH_DELAY - 1000);
+    expect(lastFetch()).toBeNull();
+    await pass(1000);
+    expect(fetches()).toHaveLength(1);
+    expect(lastFetch()).not.toBeNull();
+    expect(lastFetch()).toBe(autoFetch.state().entries[0]!.lastAt);
+    await pass(5 * MINUTE);
+    expect(fetches()).toHaveLength(2);
+    expect(lastFetch()).toBe(autoFetch.state().entries[0]!.lastAt);
+  });
+
+  it('is left alone by a fetch that failed, was busy or was cancelled', async () => {
+    await setup(5);
+    for (const code of ['NETWORK', 'BUSY', 'CANCELLED'] as const) {
+      fake.reject('remote_fetch', err(code));
+      await pass(60 * MINUTE);
+    }
+    expect(fetches().length).toBeGreaterThanOrEqual(3);
+    expect(lastFetch()).toBeNull();
+  });
+
+  it('is the instant of a fetch the user ran, and of a pull', async () => {
+    await setup(5);
+    await runAction('git.fetch');
+    await whenIdle();
+    expect(fetches()[0]!.args).not.toHaveProperty('background');
+    const afterFetch = lastFetch();
+    expect(afterFetch).not.toBeNull();
+    expect(afterFetch).toBe(autoFetch.state().entries[0]!.lastAt);
+    await pass(3 * MINUTE);
+    await runAction('git.pullFfOnly');
+    await whenIdle();
+    expect(fake.callsOf('remote_pull')).toHaveLength(1);
+    expect(lastFetch()).toBe(autoFetch.state().entries[0]!.lastAt);
+    expect(lastFetch()!).toBeGreaterThanOrEqual(afterFetch! + 3 * MINUTE);
+  });
+
+  it('is kept per tab', async () => {
+    await setup(5);
+    repo.adopt(makeRepoInfo({ id: 2, workdir: '/b', name: 'b' }), false);
+    await whenIdle();
+    await pass(FIRST_FETCH_DELAY + 1);
+    expect(fetches().map((c) => c.args.repoId)).toEqual([1]);
+    expect(fetchStateFor(repo.tabs[0]!).lastFetch).not.toBeNull();
+    expect(fetchStateFor(repo.tabs[1]!).lastFetch).toBeNull();
+  });
+
+  it('moves the toolbar clock at every look, so a tooltip that has been open for a while keeps counting', async () => {
+    await setup(5);
+    autoFetch.evaluate();
+    const before = fetchClock.now;
+    await pass(7 * MINUTE);
+    expect(fetchClock.now).toBeGreaterThanOrEqual(before + 7 * MINUTE);
+    expect(fetchClock.now).toBeLessThanOrEqual(autoFetch.now()); // the clock of the schedule (real time plus the test offset)
   });
 });
 

@@ -215,7 +215,7 @@ export const commands = {
     call<WriteResult>('remote_pull', a),
   remotePush: (a: {
     repoId: RepoId; opId: OpId; remote: string; branch: string; remoteBranch?: string; setUpstream: boolean;
-    forceWithLease: boolean;
+    forceWithLease: boolean; followTags?: boolean;
   }) => call<null>('remote_push', a),
   remoteAdd: (a: { repoId: RepoId; name: string; url: string }) => call<RemoteInfo>('remote_add', a),
   remoteRemove: (a: { repoId: RepoId; name: string }) => call<null>('remote_remove', a),

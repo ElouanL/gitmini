@@ -11,6 +11,7 @@ use gitmini_core::events::ChangeKindEv;
 use gitmini_core::types::{RefsSnapshot, TagInfo, UndoBlockReason, UndoKind};
 use gitmini_core::undo::{UndoPeekArgs, undo_peek};
 use gitmini_core::write::branch::{BranchDeleteArgs, branch_delete};
+use gitmini_core::write::remote::{RemotePushArgs, remote_push};
 use gitmini_core::write::tag::{
     TagCreateArgs, TagDeleteArgs, TagPushArgs, tag_create, tag_delete, tag_push,
 };
@@ -295,7 +296,7 @@ async fn deleting_a_lightweight_tag_is_undone() {
     assert_eq!(entry.label, "Restore the light tag");
     assert_eq!(
         entry.effect,
-        format!("Restore the light tag on {}.", &target[..7])
+        format!("Restore the light tag on {} (local only).", &target[..7])
     );
 
     assert_eq!(undo(&o).await, UndoKind::TagDelete);
@@ -324,7 +325,10 @@ async fn deleting_an_annotated_tag_restores_the_tag_object() {
         .unwrap();
     assert_eq!(
         st.entry.unwrap().effect,
-        format!("Restore the v1.0 tag (annotated) on {}.", &commit[..7])
+        format!(
+            "Restore the v1.0 tag (annotated) on {} (local only).",
+            &commit[..7]
+        )
     );
 
     undo(&o).await;
@@ -686,4 +690,57 @@ async fn a_tag_deleted_on_the_remote_can_be_pushed_again_with_other_content() {
         t.git_in(t.origin(), ["rev-parse", "refs/tags/v3.0"]),
         t.rev_parse("refs/tags/v3.0")
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn push_with_follow_tags_publishes_the_annotated_tags_of_the_branch() {
+    let t = Env::load("with-remote");
+    let o = t.open().await;
+    let tip = t.rev_parse("refs/heads/feature");
+    tag_create(
+        &o.state,
+        create_args(&o, "f-annotated", Some(&tip), Some("f")),
+    )
+    .await
+    .unwrap();
+    tag_create(&o.state, create_args(&o, "f-light", Some(&tip), None))
+        .await
+        .unwrap();
+    let push_branch = |follow_tags| RemotePushArgs {
+        repo_id: o.repo.id,
+        op_id: uuid::Uuid::new_v4().to_string(),
+        remote: "origin".to_string(),
+        branch: "feature".to_string(),
+        remote_branch: None,
+        set_upstream: false,
+        force_with_lease: false,
+        follow_tags,
+    };
+    let origin_tags = || t.git_in(t.origin(), ["tag", "-l", "f-*"]);
+
+    // Without the option the branch goes alone.
+    remote_push(&o.state, push_branch(false)).await.unwrap();
+    assert_eq!(
+        t.git_in(t.origin(), ["rev-parse", "refs/heads/feature"]),
+        t.rev_parse("refs/heads/feature")
+    );
+    assert!(origin_tags().is_empty(), "no tag by default");
+    let pushes = |journal: Vec<Vec<String>>| {
+        journal
+            .iter()
+            .filter(|a| a.iter().any(|x| x == "push"))
+            .filter(|a| a.iter().any(|x| x == "--follow-tags"))
+            .count()
+    };
+    assert_eq!(pushes(spawned(&o)), 0, "the flag is not sent by default");
+
+    // With it, the annotated tag follows (the branch being already up to date is no obstacle); a lightweight one never does.
+    remote_push(&o.state, push_branch(true)).await.unwrap();
+    assert_eq!(origin_tags(), "f-annotated");
+    assert_eq!(
+        t.git_in(t.origin(), ["rev-parse", "refs/tags/f-annotated"]),
+        t.rev_parse("refs/tags/f-annotated"),
+        "same tag object on the remote"
+    );
+    assert_eq!(pushes(spawned(&o)), 1, "--follow-tags reaches git once");
 }

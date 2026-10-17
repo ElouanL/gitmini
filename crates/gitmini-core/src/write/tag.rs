@@ -325,6 +325,12 @@ pub fn validate_tag_name(field: &str, name: &str) -> AppResult<()> {
         .map_err(|e| bad("invalid-format", &e.to_string()))
 }
 
+/// `refs/tags/<name>` with a valid name: an undo entry is re-checked with it before its ref is handed to git.
+pub(crate) fn valid_tag_ref(full: &str) -> bool {
+    full.strip_prefix("refs/tags/")
+        .is_some_and(|n| validate_tag_name("name", n).is_ok())
+}
+
 /// The name is free: neither identical to an existing tag (`ALREADY_EXISTS { what: "tag", name }`), nor in hierarchy
 /// conflict with it (`blockedBy`, e.g. `v1` versus `v1/rc`).
 fn check_tag_free(r: &gix::Repository, name: &str) -> AppResult<()> {
@@ -380,6 +386,18 @@ mod tests {
             assert_eq!(e.detail("field").and_then(|v| v.as_str()), Some("name"));
             assert!(e.detail("reason").is_some(), "{bad}");
         }
+    }
+
+    #[test]
+    fn undo_refs_are_checked() {
+        assert!(valid_tag_ref("refs/tags/v1.0"));
+        assert!(valid_tag_ref("refs/tags/release/1.2"));
+        assert!(!valid_tag_ref("refs/heads/v1.0"));
+        assert!(!valid_tag_ref("refs/tags/--force"));
+        assert!(!valid_tag_ref("refs/tags/-x"));
+        assert!(!valid_tag_ref("refs/tags/a..b"));
+        assert!(!valid_tag_ref("refs/tags/"));
+        assert!(!valid_tag_ref("v1.0"));
     }
 
     #[test]

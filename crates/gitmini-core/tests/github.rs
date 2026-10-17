@@ -1525,6 +1525,7 @@ async fn gh_08_init_create_on_github_and_push_with_upstream() {
             remote_branch: None,
             set_upstream: true,
             force_with_lease: false,
+            follow_tags: false,
         },
     )
     .await

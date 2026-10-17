@@ -21,6 +21,8 @@ export interface PushArgs {
   remoteBranch?: string;
   setUpstream: boolean;
   forceWithLease: boolean;
+  /** `--follow-tags`: also pushes the annotated tags reachable from the branch (`push-follow-tags-toggle`). */
+  followTags?: boolean;
   /** `Everything up-to-date` does not see itself in the answer (`void`): the caller knows if the branch was already published. */
   expectUpToDate?: boolean;
 }

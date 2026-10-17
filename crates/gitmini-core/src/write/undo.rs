@@ -197,7 +197,7 @@ async fn run_undo(repo: &Arc<RepoHandle>, entry: &UndoEntry) -> AppResult<()> {
             let name = entry
                 .ref_name
                 .as_deref()
-                .filter(|r| r.starts_with("refs/tags/"))
+                .filter(|r| super::tag::valid_tag_ref(r))
                 .ok_or_else(|| corrupt("tag name"))?;
             let before = entry
                 .before

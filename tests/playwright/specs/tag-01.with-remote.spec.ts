@@ -204,7 +204,7 @@ test.describe('TAG-01 — Tags', () => {
     // The shortcut asks before it restores, and names what it restores.
     await app.press('Mod+Z');
     await app.waitFor('undo-confirm-dialog', { kind: 'tag-delete' });
-    await expect(app.byTid('undo-confirm-description')).toHaveText(`Restore the v1.0 tag (annotated) on ${commit.slice(0, 7)}.`);
+    await expect(app.byTid('undo-confirm-description')).toHaveText(`Restore the v1.0 tag (annotated) on ${commit.slice(0, 7)} (local only).`);
     expect(revParseOpt(repo.path, 'refs/tags/v1.0')).toBeNull(); // not before the confirmation
     await app.click('undo-confirm-btn');
     await app.idle();

@@ -16,6 +16,8 @@ import { exposeToBridge } from '../test-bridge-hooks';
 import { t, tp } from '../../i18n/index';
 import { app } from './app.svelte';
 import { captureStores } from './context';
+import { fetchClock, fetchStateFor } from './fetch-state.svelte';
+import { github } from './github.svelte';
 import { repo } from './repo.svelte';
 import { activeSession, type Session } from './session.svelte';
 import { toast } from './toast.svelte';
@@ -39,12 +41,25 @@ export interface AutoFetchState {
   entries: (ScheduleEntry & { dueAt: number | null })[];
 }
 
+/**
+ * What a failed fetch depended on besides the interval: the proxy (an unreachable host may be reachable through another) and the GitHub
+ * sign-in (a refused token may have been replaced). When it changes, the back-off earned so far no longer says anything.
+ */
+function networkContext(): string {
+  return JSON.stringify([
+    app.get('network.proxy.mode'),
+    app.get('network.proxy.url') ?? null,
+    github.loggedIn ? (github.login ?? '') : null,
+  ]);
+}
+
 class AutoFetch {
   readonly #schedule = new FetchSchedule();
   readonly #toasts = new Map<number, number>();
   #timer: ReturnType<typeof setInterval> | null = null;
   #fetching: number | null = null;
   #interval: number | null | undefined;
+  #network: string | undefined;
   /** Added to `Date.now()`; only the e2e bridge moves it, to cross an interval without waiting for it. */
   #skew = 0;
 
@@ -66,26 +81,41 @@ class AutoFetch {
     this.#toasts.clear();
     this.#fetching = null;
     this.#interval = undefined;
+    this.#network = undefined;
     this.#skew = 0;
+    fetchClock.now = Date.now();
   }
 
   now(): number {
     return Date.now() + this.#skew;
   }
 
-  /** The user fetched or pulled by hand: the next automatic fetch is a full interval away. */
+  /**
+   * The user fetched or pulled by hand: the next automatic fetch is a full interval away, and the toolbar's "Last fetch" is now.
+   * (`doFetch` and `pullRun` call this once their command succeeded.)
+   */
   noteFetched(owner: Session): void {
-    if (owner.repoId !== null) this.#schedule.succeeded(owner.repoId, this.now());
+    if (owner.repoId !== null) this.#fetched(owner, owner.repoId, this.now());
+  }
+
+  /** A fetch of `repoId` succeeded, ours or the user's: schedule it, and let the toolbar show when. */
+  #fetched(owner: Session, repoId: number, now: number): void {
+    this.#schedule.succeeded(repoId, now);
+    fetchStateFor(owner).markFetched(now);
   }
 
   /** Looks at the schedule once and starts at most one fetch. Cheap enough to call on every tick and every wake-up. */
   evaluate(): void {
     const now = this.now();
+    fetchClock.now = now;
     const interval = fetchIntervalMs(app.get('fetch.auto'));
-    if (interval !== this.#interval) {
-      // A new interval, or the feature switched off and on: past failures (bad credentials, no network) no longer count.
+    const network = networkContext();
+    if (interval !== this.#interval || network !== this.#network) {
+      // A new interval, the feature switched off and on, another proxy or another GitHub sign-in: past failures (bad credentials,
+      // no network) no longer count.
       this.#schedule.forgiveAll();
       this.#interval = interval;
+      this.#network = network;
     }
     const owner = activeSession.current;
     const repoId = owner.repoId;
@@ -150,7 +180,7 @@ class AutoFetch {
         else if (result.error.code !== 'BUSY') this.#schedule.failed(repoId, now, result.error.code);
         return;
       }
-      this.#schedule.succeeded(repoId, now);
+      this.#fetched(owner, repoId, now);
       await refs.reloadRefs();
       if (owner.closed || owner.repoId !== repoId) return;
       const news = pullableNews(before, upstreamView(refs.snapshot));

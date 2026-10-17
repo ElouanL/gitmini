@@ -520,7 +520,8 @@ fn texts(
         } => {
             let label = format!("Restore the {name} tag");
             let annotated = if oid == target { "" } else { " (annotated)" };
-            let effect = format!("{label}{annotated} on {}.", short7(target));
+            // Only the local ref comes back: a tag deleted on a remote stays deleted there.
+            let effect = format!("{label}{annotated} on {} (local only).", short7(target));
             (label, effect)
         }
         UndoOp::StashDrop { message, .. } => {
@@ -870,6 +871,31 @@ mod tests {
         assert_eq!(
             effect,
             "Restore the stash \"On main: wip parser\" to stash@{0}."
+        );
+    }
+
+    #[test]
+    fn tag_delete_texts_say_the_restore_is_local_only() {
+        let text = |oid: &str| {
+            texts(
+                &UndoOp::TagDelete {
+                    name: "v1.0".into(),
+                    oid: oid.into(),
+                    target: A.into(),
+                },
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+        let (label, effect) = text(A);
+        assert_eq!(label, "Restore the v1.0 tag");
+        assert_eq!(effect, "Restore the v1.0 tag on aaaaaaa (local only).");
+        let (_, effect) = text(B);
+        assert_eq!(
+            effect,
+            "Restore the v1.0 tag (annotated) on aaaaaaa (local only)."
         );
     }
 

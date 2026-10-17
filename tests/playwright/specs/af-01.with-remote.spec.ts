@@ -2,6 +2,8 @@
 // Port of tests/e2e/specs/af-01.with-remote.e2e.ts (WebdriverIO). The interval is crossed with the clock of the test bridge
 // (`__gitmini.autoFetch.advance`), never waited for; everything else is the real flow: Settings, the real backend, the toast
 // button, the pull. What the application did is read from git (refs, work tree) and from the log of the git subprocesses.
+// The ahead/behind meters of the toolbar carry the "Last fetch: ..." tooltip and the stale mark; the first test follows them from
+// "never fetched" through the automatic fetches, a pull, a broken server and a manual fetch.
 import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, revParse, statusPorcelainV2, test } from '../support';
@@ -17,13 +19,20 @@ test.describe('AF-01 — Auto-fetch', () => {
     const originMain = () => repo.gitIn(repo.origin, 'rev-parse', 'main');
     const base = fetches();
     const mainBefore = revParse(repo.path, 'main');
+    const meters = app.byTid('toolbar-ahead-behind');
     expect(revParse(repo.path, 'origin/main'), 'the collaborator\'s last push is not fetched yet').not.toBe(originMain());
+    // Nothing fetched yet: the tooltip says so.
+    await expect(meters).toHaveAttribute('title', '0 commit(s) to push, 2 to pull\nNot fetched since the repository was opened');
+    await expect(meters).toHaveAttribute('data-stale', 'false');
 
     // Off by default: a whole day goes by and gitmini never touches the network by itself.
     expect((await autoFetchState(app)).intervalMs).toBeNull();
     await advanceClock(app, DAY);
     await app.idle();
     expect(fetches()).toBe(base);
+    // An unknown last fetch is not a stale one, however long the repository has been open.
+    await expect(meters).toHaveAttribute('title', /\nNot fetched since the repository was opened$/);
+    await expect(meters).toHaveAttribute('data-stale', 'false');
 
     // Settings -> every 5 minutes. The repository has been open for a while, so the first fetch is due at once.
     await app.click('toolbar-settings-btn');
@@ -46,6 +55,9 @@ test.describe('AF-01 — Auto-fetch', () => {
     expect(existsSync(join(repo.path, 'origin3.txt'))).toBe(false);
     await app.waitFor('toolbar-ahead-behind', { behind: 3 });
     expect(await app.isShown('toolbar-op-progress')).toBe(false);
+    // The automatic fetch is the last fetch, and the counts it refreshed are not stale.
+    await expect(meters).toHaveAttribute('title', '0 commit(s) to push, 3 to pull\nLast fetch: now');
+    await expect(meters).toHaveAttribute('data-stale', 'false');
 
     // The toast's Pull button is the toolbar's Pull.
     await app.click('toast-pull-btn');
@@ -54,6 +66,11 @@ test.describe('AF-01 — Auto-fetch', () => {
     expect(revParse(repo.path, 'main')).toBe(originMain());
     for (const name of ['origin1.txt', 'origin2.txt', 'origin3.txt']) expect(existsSync(join(repo.path, name)), name).toBe(true);
     expect(statusPorcelainV2(repo.path)).toEqual([]);
+    // A pull fetches too: the tooltip counts from it, and the clock of the schedule keeps it honest (3 minutes later, inside the interval).
+    await expect(meters).toHaveAttribute('title', '0 commit(s) to push, 0 to pull\nLast fetch: now');
+    await advanceClock(app, 3 * MINUTE);
+    await expect(meters).toHaveAttribute('title', '0 commit(s) to push, 0 to pull\nLast fetch: 3 minutes ago');
+    await expect(meters).toHaveAttribute('data-stale', 'false');
 
     // A fetch that brings nothing says nothing.
     await advanceClock(app, 5 * MINUTE + 1000);
@@ -83,6 +100,9 @@ test.describe('AF-01 — Auto-fetch', () => {
     await expect.poll(fetches, { message: 'automatic fetch against the broken remote not started' }).toBe(base + 4);
     await app.idle();
     await expect.poll(async () => (await autoFetchState(app)).entries[0]).toMatchObject({ failures: 1, code: 'NETWORK' });
+    // The failed fetch is not a fetch: the tooltip still shows the last good one, not yet old enough to call the counts stale (2 x 5 minutes).
+    await expect(meters).toHaveAttribute('data-stale', 'false');
+    await expect(meters).toHaveAttribute('title', /\nLast fetch: [5-6] minutes ago$/);
     await expect(app.toast('error')).toHaveCount(0);
     expect(await app.isShown('auth-required-dialog')).toBe(false);
     await expect(app.byTid('toolbar-fetch-btn')).toBeEnabled();
@@ -91,6 +111,10 @@ test.describe('AF-01 — Auto-fetch', () => {
     await expect.poll(fetches, { message: 'retry after the first failure not started' }).toBe(base + 5);
     await app.idle();
     await expect.poll(async () => (await autoFetchState(app)).entries[0]).toMatchObject({ failures: 2 });
+    // Ten minutes without a successful fetch: the meters are greyed and the tooltip says the counts may be out of date.
+    await expect(meters).toHaveAttribute('data-stale', 'true');
+    await expect(meters).toHaveClass(/\bstale\b/);
+    await expect(meters).toHaveAttribute('title', /\nLast fetch: 1[01] minutes ago\nCounts may be out of date: fetch to refresh them$/);
     await advanceClock(app, 6 * MINUTE); // two failures: ten minutes
     await app.idle();
     expect(fetches()).toBe(base + 5);
@@ -102,6 +126,9 @@ test.describe('AF-01 — Auto-fetch', () => {
     await app.idle();
     await expect.poll(async () => (await autoFetchState(app)).entries[0]).toMatchObject({ failures: 0, code: null });
     await expect(app.toast('error')).toHaveCount(0);
+    // ...and so is the grey: the fetch that worked is the last fetch again.
+    await expect(meters).toHaveAttribute('data-stale', 'false');
+    await expect(meters).toHaveAttribute('title', /\nLast fetch: now$/);
 
     // Back to never: another day passes and nothing happens.
     await chooseInterval(app, 0);
@@ -109,6 +136,14 @@ test.describe('AF-01 — Auto-fetch', () => {
     await advanceClock(app, DAY);
     await app.idle();
     expect(fetches()).toBe(base + 6);
+    // Without automatic fetch the counts go stale after an hour; a fetch by hand (the toolbar's) is what clears the mark.
+    await expect(meters).toHaveAttribute('data-stale', 'true');
+    await expect(meters).toHaveAttribute('title', /\nLast fetch: yesterday\nCounts may be out of date: fetch to refresh them$/);
+    await app.click('toolbar-fetch-btn');
+    await app.idle();
+    await expect(app.toast('success', 'Fetch finished')).toBeVisible();
+    await expect(meters).toHaveAttribute('data-stale', 'false');
+    await expect(meters).toHaveAttribute('title', /\nLast fetch: now$/);
   });
 
   test('AF-01 — every 15 and every 30 minutes: the spacing between two fetches follows the choice', async ({ app, repo }) => {

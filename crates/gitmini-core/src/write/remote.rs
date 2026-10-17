@@ -59,6 +59,9 @@ pub struct RemotePushArgs {
     pub remote_branch: Option<String>,
     pub set_upstream: bool,
     pub force_with_lease: bool,
+    /// `--follow-tags`: also pushes the annotated tags reachable from the pushed branch (absent = `false`).
+    #[serde(default)]
+    pub follow_tags: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Type)]
@@ -785,7 +788,8 @@ async fn tracked_changes(repo: &Arc<RepoHandle>) -> AppResult<Vec<String>> {
 
 // ── remote_push
 
-/// `git push --progress [-u] [--force-with-lease --force-if-includes] <remote> refs/heads/<b>:refs/heads/<rb>`.
+/// `git push --progress [-u] [--force-with-lease --force-if-includes] [--follow-tags] <remote>
+/// refs/heads/<b>:refs/heads/<rb>`.
 /// The lease has no explicit value: it takes the local remote-tracking, and `--force-if-includes` requires in
 /// more than this tip has been locally integrated.
 pub async fn remote_push(state: &AppState, args: RemotePushArgs) -> AppResult<()> {
@@ -854,6 +858,9 @@ async fn push_locked(
     if args.force_with_lease {
         flags.push("--force-with-lease");
         flags.push("--force-if-includes");
+    }
+    if args.follow_tags {
+        flags.push("--follow-tags");
     }
     let target = PushTarget {
         remote: &args.remote,

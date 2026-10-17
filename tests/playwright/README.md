@@ -165,7 +165,7 @@ Copy `tests/e2e/specs/<id>.<fixture>.e2e.ts` to `tests/playwright/specs/<id>.<fi
 | `support/shared.ts` | The only file importing from `tests/e2e/helpers` (run marker, process tracking, session, `BridgeRunner`) and `tests/support`. Repoint it if the WebdriverIO harness is retired. |
 | `support/mock-app.ts` | The `?mock=1` demo page: starts `vite` once per worker, `mockTest` and `MockApp` (see below). Does not use `repo`, `bridge` or `app`. |
 | `helpers/` | Code shared by several specs of one feature (`linediff-*`, `mp-*`, `pal-ui`, `hist-support`, `rsv-af-support`, `tagtrash-ui`). Type-checked and linted like `support/` and `specs/`. `hist-support.ts` also imports `tests/e2e/specs/history-support.ts`, so that file must move here if the WebdriverIO harness is retired. |
-| `specs/` | `pw-01` (harness smoke), `pw-02` (GitHub mock smoke), `mock-smoke` (the `?mock=1` journeys), then one `<id>.<fixture>.spec.ts` per scenario (ports of the WebdriverIO ones, and extra ones such as `rsv-02`..`rsv-06`, `af-02`..`af-04`, `tag-03`, `mp-03`..`mp-09`, `pal-03`..`pal-08`). |
+| `specs/` | `pw-01` (harness smoke), `pw-02` (GitHub mock smoke), `mock-smoke` (the `?mock=1` journeys), then one `<id>.<fixture>.spec.ts` per scenario (ports of the WebdriverIO ones, and extra ones such as `rsv-02`..`rsv-06`, `af-02`..`af-04`, `tag-03`, `tag-04`, `mp-03`..`mp-09`, `pal-03`..`pal-08`). |
 
 ## Mock mode (`?mock=1`)
 
