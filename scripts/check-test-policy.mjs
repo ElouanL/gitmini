@@ -33,8 +33,14 @@ export function inspectSource(file, source) {
         if (/^(?:it|test|describe)(?:\.[\w]+)*\.only$/.test(name) || /^(?:fit|fdescribe)$/.test(name)) {
           add(node.getStart(ast), 'focused tests are forbidden');
         }
-        if (/^(?:it|test|describe)(?:\.[\w]+)*\.skip$|^(?:xit|xtest|xdescribe|this\.skip|ctx\.skip|t\.skip)$/.test(name)
+        // Playwright adds `.fixme`, `testInfo.skip()` and `test.info().skip()`; `test.fail()` hides a regression behind an expected failure.
+        if (/^(?:it|test|describe)(?:\.[\w]+)*\.(?:skip|fixme)$|^(?:xit|xtest|xdescribe|this\.skip|ctx\.skip|t\.skip)$|^(?:testInfo|test\.info\(\))\.(?:skip|fixme)$/.test(name)
           && !conditionalSkips.has(file)) add(node.getStart(ast), 'skipped tests are forbidden');
+        if (/^(?:it|test|describe)(?:\.[\w]+)*\.fail$|^(?:testInfo|test\.info\(\))\.fail$/.test(name)) add(node.getStart(ast), 'expected-failure tests are forbidden');
+      }
+      // No retries in the harnesses (an unstable test is a bug): `retries: 0` only.
+      if (file.startsWith('tests/') && ts.isPropertyAssignment(node) && node.name.getText(ast) === 'retries' && node.initializer.getText(ast) !== '0') {
+        add(node.getStart(ast), 'test retries are forbidden');
       }
       ts.forEachChild(node, walk);
     };
@@ -45,7 +51,7 @@ export function inspectSource(file, source) {
 
 function walk(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
-    if (['node_modules', 'target', '.git', 'artifacts', 'generated'].includes(entry.name)) return [];
+    if (['node_modules', 'target', '.git', 'artifacts', '.artifacts', 'test-results', 'playwright-report', 'generated'].includes(entry.name)) return [];
     const path = join(directory, entry.name);
     return entry.isDirectory() ? walk(path) : /\.(?:rs|ts|mjs)$/.test(entry.name) ? [path] : [];
   });

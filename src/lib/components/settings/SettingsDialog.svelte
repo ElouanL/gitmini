@@ -1,12 +1,12 @@
 <script lang="ts">
   // Settings (03): `settings-dialog`, `settings-theme-select`, `settings-pull-mode-select`, `settings-editor-command-input`,
-  // `settings-graph-dim-unreachable-checkbox`, `settings-proxy-mode-select`, `settings-proxy-url-input`, `settings-close-btn`. Each change calls `settings_set` (debum 300 ms).
+  // `settings-fetch-auto-select`, `settings-diff-context-select`, `settings-graph-dim-unreachable-checkbox`, `settings-proxy-mode-select`, `settings-proxy-url-input`, `settings-close-btn`. Each change calls `settings_set` (debum 300 ms).
   import type { DialogProps } from '$lib/dialogs/registry';
   import { onMount } from 'svelte';
   import { updates } from '$lib/updates/global.svelte';
-  import type { ProxyModeSetting, PullModeSetting, ThemeSetting } from '$lib/ipc/settings-types';
+  import { DIFF_CONTEXT_CHOICES, FETCH_AUTO_CHOICES, normalizeDiffContext, type DiffContextSetting, type FetchAutoSetting, type ProxyModeSetting, type PullModeSetting, type ThemeSetting } from '$lib/ipc/settings-types';
   import { app } from '$lib/stores/app.svelte';
-  import { t } from '$i18n/index';
+  import { t, tp } from '$i18n/index';
   import DialogShell from '../dialogs-base/DialogShell.svelte';
 
   let { close }: DialogProps<void> = $props();
@@ -23,6 +23,8 @@
   const theme = $derived(app.get('theme'));
   const proxyMode = $derived(app.get('network.proxy.mode'));
   const pullMode = $derived(app.get('pull.mode'));
+  const fetchAuto = $derived(app.get('fetch.auto'));
+  const diffContext = $derived(normalizeDiffContext(app.get('diff.contextLines')));
   const dim = $derived(app.get('graph.dimUnreachable'));
   onMount(() => { void updates.refresh(); });
 
@@ -88,6 +90,40 @@
       <option value="ff-only">{t('settings.pullMode.ff-only')}</option>
       <option value="rebase">{t('settings.pullMode.rebase')}</option>
     </select>
+  </div>
+
+  <div class="field">
+    <label for="settings-fetch-auto">{t('settings.fetchAuto')}</label>
+    <select
+      id="settings-fetch-auto"
+      class="select"
+      data-testid="settings-fetch-auto-select"
+      value={String(fetchAuto)}
+      aria-describedby="settings-fetch-auto-hint"
+      onchange={(e) => void app.set('fetch.auto', Number(e.currentTarget.value) as FetchAutoSetting)}
+    >
+      {#each FETCH_AUTO_CHOICES as minutes (minutes)}
+        <option value={String(minutes)}>{t(minutes === 0 ? 'settings.fetchAuto.off' : `settings.fetchAuto.${minutes}`)}</option>
+      {/each}
+    </select>
+    <div class="muted hint" id="settings-fetch-auto-hint">{t('settings.fetchAuto.hint')}</div>
+  </div>
+
+  <div class="field">
+    <label for="settings-diff-context">{t('settings.diffContext')}</label>
+    <select
+      id="settings-diff-context"
+      class="select"
+      data-testid="settings-diff-context-select"
+      value={String(diffContext)}
+      aria-describedby="settings-diff-context-hint"
+      onchange={(e) => void app.set('diff.contextLines', Number(e.currentTarget.value) as DiffContextSetting)}
+    >
+      {#each DIFF_CONTEXT_CHOICES as n (n)}
+        <option value={String(n)}>{tp('diff.context.option', n)}</option>
+      {/each}
+    </select>
+    <div class="muted hint" id="settings-diff-context-hint">{t('settings.diffContext.hint')}</div>
   </div>
 
   <div class="field">

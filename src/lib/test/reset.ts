@@ -11,6 +11,7 @@ import { resetMenus } from '../menus/registry';
 import { resetPanels } from '../panels/registry';
 import { resetPopovers } from '../popovers/registry';
 import { app } from '../stores/app.svelte';
+import { autoFetch } from '../stores/auto-fetch';
 import { github } from '../stores/github.svelte';
 import { graph } from '../stores/graph.svelte';
 import { op } from '../stores/op.svelte';
@@ -24,6 +25,7 @@ import { undo } from '../stores/undo.svelte';
 /** `keepRegistrations`: Keeps records (actions, menus, dialogs, panels) filled by `register-core` / `register-domains`. */
 export function resetAll(opts: { keepRegistrations?: boolean } = {}): void {
   updates.stop();
+  autoFetch.stop();
   lifecycle.updating = false;
   setTransport(null);
   resetEventBus();

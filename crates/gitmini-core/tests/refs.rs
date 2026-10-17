@@ -270,6 +270,91 @@ async fn refs_list_packed_refs_and_remote_names_with_slashes() {
     );
 }
 
+/// The sidebar groups names by `/` prefix and keeps the order it receives: this is what it counts on. Names sharing a
+/// prefix stay together at any depth (`feature-x`, `feature.x` and `feature0` sort around `feature/`, never inside),
+/// for local branches, remote branches and tags; the current branch alone is moved to the top, wherever it lives.
+#[tokio::test]
+async fn refs_list_keeps_names_sharing_a_prefix_together() {
+    let t = TestRepo::init();
+    t.commit_file("a.txt", "1\n", "c1");
+    t.commit_file("b.txt", "2\n", "c2");
+    for name in [
+        "feature/ui/modal",
+        "feature0",
+        "feature/login",
+        "bugfix/crash",
+        "feature.x",
+        "feature/ui/button",
+        "feature-x",
+    ] {
+        t.git(&["branch", name]);
+    }
+    for tag in ["release/1.0", "v1.0", "release/1.1"] {
+        t.git(&["tag", tag]);
+    }
+    let origin = t.root().join("origin.git");
+    t.git(&[
+        "init",
+        "-q",
+        "--bare",
+        "-b",
+        "main",
+        origin.to_str().unwrap(),
+    ]);
+    t.git(&["remote", "add", "origin", origin.to_str().unwrap()]);
+    t.git(&[
+        "push",
+        "-q",
+        "origin",
+        "main",
+        "feature/ui/button",
+        "feature/login",
+        "bugfix/crash",
+    ]);
+    t.git(&["fetch", "-q", "origin"]);
+    let o = t.open().await;
+
+    let snap = refs_list(&o.state, args(&o)).await.unwrap();
+    assert_eq!(
+        names(&snap.local, |b| &b.name),
+        [
+            "main",
+            "bugfix/crash",
+            "feature-x",
+            "feature.x",
+            "feature/login",
+            "feature/ui/button",
+            "feature/ui/modal",
+            "feature0"
+        ]
+    );
+    assert_eq!(
+        names(&snap.remote, |b| &b.name),
+        ["bugfix/crash", "feature/login", "feature/ui/button", "main"]
+    );
+    assert_eq!(
+        names(&snap.tags, |t| &t.name),
+        ["v1.0", "release/1.1", "release/1.0"]
+    );
+
+    // Current branch inside a folder: it comes first, its folder mates keep their alphabetical order after the others.
+    t.git(&["switch", "-q", "feature/login"]);
+    let snap = refs_list(&o.state, args(&o)).await.unwrap();
+    assert_eq!(
+        names(&snap.local, |b| &b.name),
+        [
+            "feature/login",
+            "bugfix/crash",
+            "feature-x",
+            "feature.x",
+            "feature/ui/button",
+            "feature/ui/modal",
+            "feature0",
+            "main"
+        ]
+    );
+}
+
 #[tokio::test]
 async fn st_01_stash_list_matches_git_and_stash_show_matches_stash_show() {
     let t = TestRepo::init();

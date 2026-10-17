@@ -1,4 +1,5 @@
 
+import { tick } from 'svelte';
 import { captureStores } from '$lib/stores/context';
 // Base actions (command palette identifiers). Domains can replace an action
 // by recording the same `id` from their `register.ts`. Pull and push (`git.pull`, `git.pullFfOnly`, `git.pullRebase`, `git.push`)
@@ -8,10 +9,11 @@ import { featureFlags } from '../feature-flags';
 import { pickFolder } from '../ipc/dialog';
 import { openDialog, hasDialog } from '../dialogs/registry';
 import { t } from '../../i18n/index';
+import { autoFetch } from '../stores/auto-fetch';
 import { repo } from '../stores/repo.svelte';
 
 import { toast } from '../stores/toast.svelte';
-import { focusZone } from './focus';
+import { focusSidebarFilter, focusZone } from './focus';
 import { registerActions, type ActionContext, type ActionDef } from './registry';
 
 const noRepo = (ctx: ActionContext): string | null => (ctx.repoId === null ? t('action.noRepo') : null);
@@ -35,7 +37,9 @@ async function doFetch(ctx: ActionContext, remote: string | null = null): Promis
     ({ opId }) => commands.remoteFetch({ repoId, opId: opId!, remote, prune: true }),
     { long: true, command: 'remote_fetch' },
   );
-  if (r.ok) toast.success(t('toast.fetchDone'));
+  if (!r.ok) return;
+  autoFetch.noteFetched(owner);
+  toast.success(t('toast.fetchDone'));
 }
 
 async function stashSaveNow(ctx: ActionContext): Promise<void> {
@@ -188,6 +192,19 @@ export const builtinActions: ActionDef[] = [
     run: (ctx) => {
       ctx.ui.closeCenter();
       ctx.graph.searchOpen = true;
+    },
+  },
+  {
+    id: 'sidebar.filter',
+    label: () => t('action.sidebarFilter'),
+    disabledReason: noRepo,
+    run: async (ctx) => {
+      // A collapsed sidebar is shown first (the setting applies at once, its write is debounced).
+      if (ctx.app.layout.leftCollapsed) {
+        void ctx.app.set('layout', { ...ctx.app.layout, leftCollapsed: false });
+        await tick();
+      }
+      focusSidebarFilter();
     },
   },
   // Service actions (not in the palette).

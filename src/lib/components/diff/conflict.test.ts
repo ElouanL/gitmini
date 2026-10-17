@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ConflictKind } from '$lib/ipc/types';
-import { conflictLabels, conflictTabs } from './conflict';
+import { conflictLabels, conflictSideLabel, conflictTabs, resolvableSides, resolveSideText, resolveSideTitle, sideOutcome } from './conflict';
 
 describe('onglets de conflit', () => {
   it("Both-* : markers, bears and theirs", () => {
@@ -33,5 +33,44 @@ describe("side-worded", () => {
   });
   it("without operation (stash applied)", () => {
     expect(conflictLabels(null)).toEqual({ ours: 'ours.head', theirs: 'theirs.stash' });
+  });
+});
+
+describe('"Take ours / theirs"', () => {
+  const kinds: ConflictKind[] = ['both-modified', 'both-added', 'both-deleted', 'added-by-us', 'added-by-them', 'deleted-by-us', 'deleted-by-them'];
+
+  it('offers both sides for every conflict that has content, none when both sides deleted the file', () => {
+    for (const kind of kinds) expect(resolvableSides(kind), kind).toEqual(kind === 'both-deleted' ? [] : ['ours', 'theirs']);
+    expect(resolvableSides(null)).toEqual([]);
+    expect(resolvableSides(undefined)).toEqual([]);
+  });
+
+  it('taking a side keeps its version, or deletes the file when that side deleted it (same rule as the tabs)', () => {
+    const cases: [ConflictKind, 'keep' | 'delete', 'keep' | 'delete'][] = [
+      ['both-modified', 'keep', 'keep'],
+      ['both-added', 'keep', 'keep'],
+      ['added-by-us', 'keep', 'delete'],
+      ['added-by-them', 'delete', 'keep'],
+      ['deleted-by-us', 'delete', 'keep'],
+      ['deleted-by-them', 'keep', 'delete'],
+    ];
+    for (const [kind, ours, theirs] of cases) {
+      expect([sideOutcome(kind, 'ours'), sideOutcome(kind, 'theirs')], kind).toEqual([ours, theirs]);
+    }
+  });
+
+  it('names the sides after the operation: in a rebase "ours" is the base, "theirs" your commit', () => {
+    expect(conflictSideLabel('ours', { kind: 'rebase' })).toBe('Base (onto)');
+    expect(conflictSideLabel('theirs', { kind: 'rebase' })).toBe('Your commit');
+    expect(conflictSideLabel('ours', { kind: 'merge', incoming: 'refs/heads/feature' })).toBe('HEAD');
+    expect(conflictSideLabel('theirs', { kind: 'merge', incoming: 'refs/heads/feature' })).toBe('feature');
+    expect(conflictSideLabel('theirs', null)).toBe('Stash applied');
+  });
+
+  it('button text keeps git\'s vocabulary and says which side it is; the tooltip says what happens to the file', () => {
+    expect(resolveSideText('ours', { kind: 'rebase' })).toBe('Take ours: Base (onto)');
+    expect(resolveSideText('theirs', { kind: 'cherry-pick' })).toBe('Take theirs: Applied commit');
+    expect(resolveSideTitle('both-modified', 'theirs', { kind: 'rebase' })).toBe('Resolve with the version from Your commit and mark the file as resolved');
+    expect(resolveSideTitle('deleted-by-us', 'ours', { kind: 'merge', incoming: 'feature' })).toBe('Resolve by deleting the file: HEAD deleted it');
   });
 });

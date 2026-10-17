@@ -306,13 +306,14 @@ const CDP_PUNCTUATION: Record<string, { code: string; vk: number }> = { ',': { c
  * Description of an event `Input.dispatchKeyEvent` (CDP) for a shortcut "modify(s) + digit or punctuation",
  * `null` for any other shortcut. Reason: chromedriver converts `Mod+3` to `key: '#'` (the offset symbol) on macOS and for
  * any non-alphabetical key associated with a modifier; the application, which compares `e.key`, does not recognize
- * `Mod+1/2/3` or `Mod+,`. Named letters and keys (Enter, Escape...) go well through `browser.keys`.
+ * `Mod+1/2/3` or `Mod+,`. Named letters and keys (Enter, Escape...) go well through `browser.keys`; the bare `/` does not.
  */
 export function cdpKeyEvent(spec: string): { key: string; code: string; windowsVirtualKeyCode: number; modifiers: number } | null {
   const keys = chord(spec);
   const key = keys[keys.length - 1] as string;
   const modifiers = keys.slice(0, -1);
-  if (modifiers.length === 0) return null;
+  // A bare `/` (sidebar filter) is also sent as Shift+Slash `>` by chromedriver on some keyboard layouts.
+  if (modifiers.length === 0) return key === '/' ? { key, code: 'Slash', windowsVirtualKeyCode: 191, modifiers: 0 } : null;
   const bits = modifiers.reduce((acc, m) => acc | (CDP_MODIFIER_BITS[m] ?? 0), 0);
   if (/^[0-9]$/.test(key)) return { key, code: `Digit${key}`, windowsVirtualKeyCode: key.charCodeAt(0), modifiers: bits };
   const punctuation = CDP_PUNCTUATION[key];
@@ -360,4 +361,18 @@ export async function cancelDialog(action: string): Promise<void> {
 /** Attend un `toast[data-kind=<kind>]`. */
 export async function waitForToast(kind: 'info' | 'success' | 'error' | 'undo'): Promise<WebdriverIO.Element> {
   return waitForTestId(`toast[data-kind=${kind}]`);
+}
+
+/** Waits for a `toast[data-kind=<kind>]` whose message contains `text`: older toasts of the same kind may still be showing. */
+export async function waitForToastText(kind: 'info' | 'success' | 'error' | 'undo', text: string): Promise<void> {
+  await until(
+    () =>
+      browser.execute(
+        (k: string, needle: string) =>
+          Array.from(document.querySelectorAll(`[data-testid="toast"][data-kind="${k}"]`)).some((e) => (e.textContent ?? '').includes(needle)),
+        kind,
+        text,
+      ),
+    { message: `no ${kind} toast containing "${text}"` },
+  );
 }

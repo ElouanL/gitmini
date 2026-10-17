@@ -32,6 +32,8 @@ pub mod repo;
 pub mod settings;
 pub mod stash;
 pub mod status;
+pub mod tag;
+pub mod trash;
 pub mod undo;
 pub mod updater;
 
@@ -126,7 +128,7 @@ pub(crate) async fn call<T>(
 /// tests) and the manager `invoke_handler`.
 macro_rules! registry {
     ($($module:ident => [$($cmd:ident),+ $(,)?]),+ $(,)?; desktop $desktop:ident => [$($extra:ident),+ $(,)?]) => {
-        /// Common controls at the office and the HTTP bridge (: 69).
+        /// Common controls at the office and the HTTP bridge (: 78).
         pub const COMMAND_NAMES: &[&str] = &[$($(stringify!($cmd)),+),+];
         pub const DESKTOP_COMMAND_NAMES: &[&str] = &[$(stringify!($extra)),+];
         pub const ALL_COMMAND_NAMES: &[&str] = &[$($(stringify!($cmd)),+),+, $(stringify!($extra)),+];
@@ -143,12 +145,14 @@ registry! {
     repo => [repo_open, repo_close, repo_activate, repo_recent_list, repo_clone, repo_init],
     settings => [settings_get, settings_set],
     log => [log_page, log_search],
-    diff => [commit_details, diff_file],
+    diff => [commit_details, diff_file, file_log, file_blame],
     status => [status_get],
-    index => [stage_paths, unstage_paths, discard_paths, stage_hunk, unstage_hunk, discard_hunk],
+    index => [stage_paths, unstage_paths, discard_paths, resolve_paths, stage_hunk, unstage_hunk, discard_hunk],
     commit => [commit_create, config_set_identity],
     branch => [refs_list, reflog_list, branch_compare, branch_create, branch_checkout, branch_rename, branch_delete, branch_reset],
-    merge => [merge_branch, merge_continue, merge_abort],
+    tag => [tag_create, tag_delete, tag_push],
+    trash => [discard_list, discard_restore],
+    merge => [merge_preview, merge_branch, merge_continue, merge_abort],
     rebase => [rebase_todo_preview, rebase_start, rebase_interactive_start, rebase_continue, rebase_skip, rebase_abort],
     stash => [stash_list, stash_show, stash_save, stash_apply, stash_pop, stash_drop, stash_branch],
     pick => [cherry_pick, revert_commit, sequencer_continue, sequencer_skip, sequencer_abort],

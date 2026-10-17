@@ -11,6 +11,8 @@ log_search
 commit_details
 status_get
 diff_file
+file_log
+file_blame
 refs_list
 reflog_list
 branch_compare
@@ -22,6 +24,9 @@ undo_peek
 stage_paths
 unstage_paths
 discard_paths
+discard_list
+discard_restore
+resolve_paths
 stage_hunk
 unstage_hunk
 discard_hunk
@@ -32,6 +37,10 @@ branch_checkout
 branch_rename
 branch_delete
 branch_reset
+tag_create
+tag_delete
+tag_push
+merge_preview
 merge_branch
 merge_continue
 merge_abort

@@ -16,6 +16,11 @@ export function branchOf(entry: Pick<UndoEntry, 'refName'>): string {
   return entry.refName?.replace(/^refs\/heads\//, '') ?? '';
 }
 
+/** `refs/tags/v1.0` → `v1.0`. */
+export function tagOf(entry: Pick<UndoEntry, 'refName'>): string {
+  return entry.refName?.replace(/^refs\/tags\//, '') ?? '';
+}
+
 /** First text enters "" in the wording (the summary of the commit, the message of the stash). */
 export function quotedIn(label: string): string | null {
   const m = /["«]\s*(.*)\s*["»]\s*$/u.exec(label) ?? /["«]\s*(.*)\s*["»]/u.exec(label);
@@ -77,6 +82,8 @@ export function derivedDescription(entry: UndoEntry): string {
     case 'reset-mixed':
     case 'reset-keep':
       return t(`undo.confirm.description.${entry.kind}`, { branch, sha });
+    case 'tag-delete':
+      return t("undo.confirm.description.tag-delete", { tag: tagOf(entry) });
     case 'stash-drop':
       return t("undo.confirm.description.stash-drop", { message: entry.stashMessage ?? quotedIn(entry.label) ?? '' });
     default:

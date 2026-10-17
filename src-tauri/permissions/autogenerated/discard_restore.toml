@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-discard-restore"
+description = "Enables the discard_restore command without any pre-configured scope."
+commands.allow = ["discard_restore"]
+
+[[permission]]
+identifier = "deny-discard-restore"
+description = "Denies the discard_restore command without any pre-configured scope."
+commands.deny = ["discard_restore"]

@@ -56,6 +56,9 @@ async fn defaults_without_a_file() {
         "updates.auto": true,
         "network.proxy.mode": "system",
         "network.proxy.url": null,
+        "fetch.auto": 0,
+        "diff.contextLines": 3,
+        "palette.recent": [],
         "layout": { "left": 240, "right": 360, "leftCollapsed": false, "rightCollapsed": false }
     });
     assert_eq!(Value::Object(got), expected);
@@ -494,4 +497,189 @@ async fn network_proxy_is_validated_and_applied_to_the_shared_state() {
         reopened.state.shared.proxy(),
         ProxySetting::Manual("http://proxy.corp:8080".into())
     );
+}
+
+#[tokio::test]
+async fn fetch_auto_is_validated_persisted_and_off_by_default() {
+    init();
+    let (_tmp, root) = tempdir();
+    let config = root.join("config");
+    let app = app(&config);
+    let s = &app.state;
+    assert_eq!(settings_get(s).await.unwrap()["fetch.auto"], 0);
+
+    for minutes in [5, 15, 30, 0] {
+        settings_set(s, set("fetch.auto", json!(minutes)))
+            .await
+            .unwrap();
+        assert_eq!(settings_get(s).await.unwrap()["fetch.auto"], minutes);
+        assert_eq!(read_json(&config)["fetch.auto"], minutes);
+    }
+    for bad in [
+        json!(1),
+        json!(10),
+        json!(60),
+        json!(-5),
+        json!(7.5),
+        json!("5"),
+        json!("off"),
+        json!(true),
+        Value::Null,
+    ] {
+        let err = settings_set(s, set("fetch.auto", bad.clone()))
+            .await
+            .unwrap_err();
+        expect_invalid(err, "value");
+        assert_eq!(
+            read_json(&config)["fetch.auto"],
+            0,
+            "{bad} did not reach the file"
+        );
+    }
+
+    // reopened: the choice survives a restart
+    settings_set(s, set("fetch.auto", json!(15))).await.unwrap();
+    drop(app);
+    let reopened = repo_support::app(&config);
+    assert_eq!(
+        settings_get(&reopened.state).await.unwrap()["fetch.auto"],
+        15
+    );
+}
+
+#[tokio::test]
+async fn diff_context_lines_is_validated_persisted_and_three_by_default() {
+    init();
+    let (_tmp, root) = tempdir();
+    let config = root.join("config");
+    let app = app(&config);
+    let s = &app.state;
+    assert_eq!(settings_get(s).await.unwrap()["diff.contextLines"], 3);
+
+    for lines in [1, 5, 10, 25, 3] {
+        settings_set(s, set("diff.contextLines", json!(lines)))
+            .await
+            .unwrap();
+        assert_eq!(settings_get(s).await.unwrap()["diff.contextLines"], lines);
+        assert_eq!(read_json(&config)["diff.contextLines"], lines);
+    }
+    for bad in [
+        json!(0),
+        json!(2),
+        json!(26),
+        json!(100),
+        json!(-3),
+        json!(3.5),
+        json!("3"),
+        json!(true),
+        Value::Null,
+    ] {
+        let err = settings_set(s, set("diff.contextLines", bad.clone()))
+            .await
+            .unwrap_err();
+        expect_invalid(err, "value");
+        assert_eq!(
+            read_json(&config)["diff.contextLines"],
+            3,
+            "{bad} did not reach the file"
+        );
+    }
+
+    // reopened: the choice survives a restart
+    settings_set(s, set("diff.contextLines", json!(10)))
+        .await
+        .unwrap();
+    drop(app);
+    let reopened = repo_support::app(&config);
+    assert_eq!(
+        settings_get(&reopened.state).await.unwrap()["diff.contextLines"],
+        10
+    );
+}
+
+#[tokio::test]
+async fn palette_recent_is_validated_deduplicated_persisted_and_empty_by_default() {
+    init();
+    let (_tmp, root) = tempdir();
+    let config = root.join("config");
+    let app = app(&config);
+    let s = &app.state;
+    assert_eq!(settings_get(s).await.unwrap()["palette.recent"], json!([]));
+
+    settings_set(
+        s,
+        set("palette.recent", json!(["git.fetch", "theme.toggle"])),
+    )
+    .await
+    .unwrap();
+    let expected = json!(["git.fetch", "theme.toggle"]);
+    assert_eq!(settings_get(s).await.unwrap()["palette.recent"], expected);
+    assert_eq!(read_json(&config)["palette.recent"], expected);
+
+    // A repeated id collapses onto its most recent (first) occurrence, in the file as in memory.
+    settings_set(
+        s,
+        set(
+            "palette.recent",
+            json!(["theme.toggle", "git.fetch", "theme.toggle"]),
+        ),
+    )
+    .await
+    .unwrap();
+    let collapsed = json!(["theme.toggle", "git.fetch"]);
+    assert_eq!(settings_get(s).await.unwrap()["palette.recent"], collapsed);
+    assert_eq!(read_json(&config)["palette.recent"], collapsed);
+
+    let too_many: Vec<String> = (0..=settings::PALETTE_RECENT_MAX)
+        .map(|i| format!("cmd.{i}"))
+        .collect();
+    for bad in [
+        json!("git.fetch"),
+        json!([""]),
+        json!([3]),
+        json!([["git.fetch"]]),
+        json!(null),
+        json!(["x".repeat(settings::PALETTE_COMMAND_ID_MAX + 1)]),
+        json!(too_many),
+    ] {
+        let err = settings_set(s, set("palette.recent", bad.clone()))
+            .await
+            .unwrap_err();
+        expect_invalid(err, "value");
+        assert_eq!(
+            read_json(&config)["palette.recent"],
+            collapsed,
+            "{bad} did not reach the file"
+        );
+    }
+
+    // reopened: the list survives a restart, and clearing it is allowed
+    drop(app);
+    let reopened = repo_support::app(&config);
+    assert_eq!(
+        settings_get(&reopened.state).await.unwrap()["palette.recent"],
+        collapsed
+    );
+    settings_set(&reopened.state, set("palette.recent", json!([])))
+        .await
+        .unwrap();
+    assert_eq!(read_json(&config)["palette.recent"], json!([]));
+}
+
+/// A hand-edited `settings.json` holding a bad `palette.recent` falls back to the default instead of failing the load.
+#[tokio::test]
+async fn palette_recent_hand_edited_garbage_falls_back_to_the_default() {
+    init();
+    let (_tmp, root) = tempdir();
+    let config = root.join("config");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("settings.json"),
+        r#"{ "theme": "dark", "palette.recent": "git.fetch" }"#,
+    )
+    .unwrap();
+    let app = app(&config);
+    let got = settings_get(&app.state).await.unwrap();
+    assert_eq!(got["palette.recent"], json!([]));
+    assert_eq!(got["theme"], "dark");
 }

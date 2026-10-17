@@ -384,6 +384,7 @@ fn diff_file_bench(c: &mut Criterion) {
                         source: DiffSource::Unstaged,
                         force: None,
                         if_none_match: None,
+                        context_lines: None,
                     },
                 ))
                 .unwrap();

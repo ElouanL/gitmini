@@ -52,6 +52,8 @@ async fn hunk_args(
         path: path.into(),
         diff_hash: d.hash,
         hunk_index: index,
+        lines: None,
+        context_lines: None,
     }
 }
 
@@ -469,6 +471,8 @@ async fn stage_02_hunks_are_refused_on_submodules_binaries_and_conflicts() {
             path: "image.png".into(),
             diff_hash: d.hash,
             hunk_index: 0,
+            lines: None,
+            context_lines: None,
         },
     )
     .await
@@ -484,6 +488,8 @@ async fn stage_02_hunks_are_refused_on_submodules_binaries_and_conflicts() {
             path: "lib".into(),
             diff_hash: "x".into(),
             hunk_index: 0,
+            lines: None,
+            context_lines: None,
         },
     )
     .await
@@ -1017,6 +1023,8 @@ async fn safe_02_submodule_paths_are_refused_and_all_skips_them() {
                 path: "lib".into(),
                 diff_hash: "x".into(),
                 hunk_index: 0,
+                lines: None,
+                context_lines: None,
             },
         )
         .await
@@ -1030,6 +1038,8 @@ async fn safe_02_submodule_paths_are_refused_and_all_skips_them() {
                 path: "lib".into(),
                 diff_hash: "x".into(),
                 hunk_index: 0,
+                lines: None,
+                context_lines: None,
             },
         )
         .await
@@ -1043,6 +1053,8 @@ async fn safe_02_submodule_paths_are_refused_and_all_skips_them() {
                 path: "lib".into(),
                 diff_hash: "x".into(),
                 hunk_index: 0,
+                lines: None,
+                context_lines: None,
             },
         )
         .await
@@ -1175,6 +1187,8 @@ async fn safe_02_a_gitlink_that_is_only_in_head_is_still_a_submodule() {
         path: path.into(),
         diff_hash: "x".into(),
         hunk_index: 0,
+        lines: None,
+        context_lines: None,
     };
     errors.push(stage_hunk(&o.state, hunk("lib")).await.unwrap_err());
     errors.push(unstage_hunk(&o.state, hunk("lib")).await.unwrap_err());

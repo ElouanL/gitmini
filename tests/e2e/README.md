@@ -17,4 +17,6 @@ Spec names use `<scenario-id>.<fixture>.e2e.ts`; optional matching `.setup.ts` f
 
 Artifacts live in `.artifacts` and include `run.json`, logs, screenshots and failure recordings. `GITMINI_E2E_ARTIFACTS` selects another directory. `GITMINI_TEST_SEED` reproduces scheduling, `GITMINI_E2E_WORKERS` controls concurrency, and `GITMINI_E2E_KEEP_TMP=1` preserves temporary files for investigation. Run `node scripts/check-ghosts.mjs` after manually invoking WDIO to detect surviving processes.
 
+A second, Playwright-based browser harness lives in [`tests/playwright`](../playwright/README.md) (`just e2e-pw`). It reuses this harness's fixtures, bridge runner, process marker and ghost check, and gives each test its own repository and bridge so specs run in parallel; new browser-mode specs can be written there.
+
 Harness self-tests use `wdio.selftest.conf.ts` and `wdio.selftest-tauri.conf.ts`; performance tests use `wdio.perf.conf.ts`. See [testing](../../docs/testing.md) for the full validation workflow.

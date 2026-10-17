@@ -2,7 +2,8 @@
   import { captureStores } from '$lib/stores/context';
   const { reportError, op, refs, repo, runWrite } = captureStores();
   // `merge-dialog` (06 "Merge") : standalone dialog. Opened by the `merge` menu entries and by the repository of a branch on the
-  // current branch (`openDialog('merge-dialog', { ref })`). Pre-analysis by `branch_compare { branch: null, target: ref }`,
+  // current branch (`openDialog('merge-dialog', { ref })`). Pre-analysis by `branch_compare { branch: null, target: ref }`.
+  // When a merge commit is needed, `merge_preview { ref }` tells beforehand whether it would conflict and in which files.
   // Then `merge_branch { ref, mode, message? }`. A conflict closes the dialogue: the banner of the base takes over.
   import { onMount } from 'svelte';
   import { t, tp } from '$i18n/index';
@@ -10,6 +11,9 @@
   import { runAction } from '$lib/actions/registry';
   import DialogShell from '$lib/components/dialogs-base/DialogShell.svelte';
   import { offerUndo } from '$lib/components/flows/undo/offer-undo';
+  import { MergePreviewLoader, readyPreview } from '$lib/components/merge-preview/loader.svelte';
+  import MergePreviewNote from '$lib/components/merge-preview/MergePreviewNote.svelte';
+  import { blocksMerge } from '$lib/components/merge-preview/preview';
   import type { DialogProps } from '$lib/dialogs/registry';
   import { commands, type MergeMode } from '$lib/ipc/commands';
   import type { BranchCompare } from '$lib/ipc/types';
@@ -34,6 +38,8 @@
   /** `DIRTY_WORKTREE` received from backend after pre-analysis (race): same effect as `compare.dirty`. */
   let serverDirty = $state(false);
   let busy = $state(false);
+  /** Dry run of the merge, asked only when branches have diverged (a fast-forward cannot conflict). */
+  const preview = new MergePreviewLoader();
 
   const head = $derived(headBranchName() ?? 'HEAD');
   const kind = $derived(compare ? mergeKind(compare) : null);
@@ -41,7 +47,9 @@
   const showMessage = $derived(kind ? willCreateMergeCommit(kind, mode) : false);
   const dirty = $derived((compare?.dirty ?? false) || serverDirty);
   const error = $derived(serverError ?? (dirty ? t('merge.error.dirty') : null));
-  const canSubmit = $derived(canSubmitMerge(compare, { busy: busy || op.busy, serverDirty }));
+  const canSubmit = $derived(
+    canSubmitMerge(compare, { busy: busy || op.busy, serverDirty, refused: blocksMerge(readyPreview(preview.state)) }),
+  );
 
   const hint = $derived.by(() => {
     if (!compare || !kind) return '';
@@ -67,8 +75,11 @@
       const c = await commands.branchCompare({ repoId, branch: null, target: ref });
       compare = c;
       if (!messageEdited) message = c.defaultMergeMessage;
+      if (mergeKind(c) === 'diverged') void preview.load(repoId, ref);
+      else preview.reset();
     } catch (e) {
       compare = null;
+      preview.reset();
       reportError(e, {
         command: 'branch_compare',
         onError: (er) => {
@@ -152,6 +163,7 @@
   {:else}
     <p class="summary" data-testid="merge-summary">{summary}</p>
     <p class="hint" data-testid="merge-ff-hint" data-kind={kind ?? undefined}>{hint}</p>
+    <MergePreviewNote value={preview.state} testid="merge-preview" />
 
     <fieldset class="modes" disabled={!compare}>
       <legend class="sr-only">{t('merge.mode.label')}</legend>

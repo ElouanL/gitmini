@@ -90,7 +90,7 @@
       <h3>{t('graph.multi.compare')}</h3>
       <p class="muted range">{t('graph.multi.compareHint', { from: shortOid(pair.older), to: shortOid(pair.newer) })}</p>
       {#if data}
-        <FileList files={data.files} truncated={data.truncated} onopen={openFile} selectedPath={openedPath} />
+        <FileList files={data.files} truncated={data.truncated} onopen={openFile} selectedPath={openedPath} menuOid={pair.newer} />
       {:else if ds.status === 'error'}
         <div class="muted err" role="alert">{ds.error.message}</div>
       {:else}

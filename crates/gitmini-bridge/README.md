@@ -20,4 +20,4 @@ pnpm dev
 
 The bridge binds only to loopback because it can access Git repositories and the filesystem. It does not expose desktop updater commands and is not a production server.
 
-The bridge always enables core test configuration. `scripts/dev-web.sh` defaults to an in-memory GitHub keyring (`GITMINI_TEST_MODE=1`). Other test variables include `GITMINI_GITHUB_API_BASE`, `GITMINI_GITHUB_OAUTH_BASE`, `GITMINI_OPEN_URL_LOG` and `GITMINI_WATCH_DEBOUNCE_MS`. Use the [E2E harness](../../tests/e2e/README.md) for isolated per-test settings and repositories.
+The bridge always enables core test configuration. `scripts/dev-web.sh` defaults to an in-memory GitHub keyring (`GITMINI_TEST_MODE=1`). Other test variables include `GITMINI_GITHUB_API_BASE`, `GITMINI_GITHUB_OAUTH_BASE`, `GITMINI_OPEN_URL_LOG` and `GITMINI_WATCH_DEBOUNCE_MS`. Use the E2E harnesses ([WebdriverIO](../../tests/e2e/README.md), [Playwright](../../tests/playwright/README.md)) for isolated per-test settings and repositories.

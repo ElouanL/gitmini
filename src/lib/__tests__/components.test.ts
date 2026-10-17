@@ -19,7 +19,7 @@ import { ui } from '../stores/ui.svelte';
 import { github } from '../stores/github.svelte';
 import { unwireEvents } from '../stores/wiring';
 import { createFakeTransport, type FakeTransport } from '../test/fake-transport';
-import { makeAppInfo, makeLogPage, makeRecents, makeRefs, makeRemotes, makeRepoInfo, makeStashes, makeStatus, makeUndo } from '../test/fixtures';
+import { makeAppInfo, makeBranch, makeLogPage, makeRecents, makeRefs, makeRemotes, makeRepoInfo, makeStashes, makeStatus, makeUndo } from '../test/fixtures';
 import { resetAll } from '../test/reset';
 import { exposeToBridge } from '../test-bridge-hooks';
 import '../register-core';
@@ -415,15 +415,275 @@ describe('sidebar : interactions', () => {
     expect(screen.getAllByTestId('sidebar-tag-item').length).toBe(3); // the Tags section is unfolded by default
   });
 
-  it("arrows ↑/▼ : moving tabindex in sidebar", async () => {
+  it("arrows ↑/▼ : moving tabindex in sidebar (folders are stops of the list)", async () => {
     await openShell();
-    const items = screen.getAllByTestId('sidebar-branch-item');
+    const items = [...document.querySelectorAll<HTMLElement>('[data-zone="sidebar"] [data-roving]')];
+    expect(items[1]).toHaveAttribute('data-testid', 'sidebar-folder-item'); // main, then the `feature` folder
     items[0]!.focus();
     await userEvent.keyboard('{ArrowDown}');
     expect(document.activeElement).toBe(items[1]);
+    await userEvent.keyboard('{ArrowDown}');
+    expect(document.activeElement).toBe(items[2]); // feature/login, inside the folder
     await userEvent.keyboard('{ArrowUp}{ArrowUp}');
     expect(document.activeElement).toBe(items[0]);
     expect(items.filter((i) => i.getAttribute('tabindex') === '0')).toHaveLength(1);
+  });
+});
+
+/** Local branches, `current` being the HEAD one; remote, tags and stashes are those of `makeRefs`. */
+function refsWith(current: string, names: string[]) {
+  return { ...makeRefs(), head: { kind: 'branch' as const, name: current }, local: names.map((n, i) => makeBranch(n, 50 - i, { isHead: n === current })) };
+}
+
+const branchRefs = () => screen.queryAllByTestId('sidebar-branch-item').map((e) => e.dataset.ref);
+const folderEl = (scope: string, folder: string) => screen.getAllByTestId('sidebar-folder-item').find((e) => e.dataset.scope === scope && e.dataset.folder === folder)!;
+
+describe('sidebar : prefix folders', () => {
+  it("branches sharing a prefix sit in a folder labelled by their last segment; click and ←/→ fold it", async () => {
+    await openShell();
+    const feature = folderEl('local', 'feature');
+    expect(feature).toHaveAttribute('aria-expanded', 'true');
+    expect(feature).toHaveTextContent('feature');
+    expect(feature).toHaveTextContent('(1)');
+    const login = () => screen.queryAllByTestId('sidebar-branch-item').find((e) => e.dataset.ref === 'refs/heads/feature/login');
+    expect(login()!.querySelector('.name')!.textContent).toBe('login');
+    expect(login()).toHaveAttribute('title', 'feature/login');
+    // Root-level branches stay at the root, the remote list has its own `main` and no folder for it.
+    expect(branchRefs()).toEqual(['refs/heads/main', 'refs/heads/feature/login', 'refs/heads/fix/typo', 'refs/heads/topic']);
+
+    await userEvent.click(folderEl('local', 'feature'));
+    expect(folderEl('local', 'feature')).toHaveAttribute('aria-expanded', 'false');
+    expect(login()).toBeUndefined();
+    folderEl('local', 'feature').focus();
+    await userEvent.keyboard('{ArrowRight}');
+    expect(login()).toBeDefined();
+    await userEvent.keyboard('{ArrowLeft}');
+    expect(login()).toBeUndefined();
+    await userEvent.keyboard('{Enter}');
+    expect(login()).toBeDefined();
+  });
+
+  it("the same prefix is a distinct folder in the local, remote and tag lists", async () => {
+    const data = { ...makeRefs(), tags: [{ ...makeRefs().tags[0]!, name: 'feature/v1', fullRef: 'refs/tags/feature/v1' }, makeRefs().tags[1]!] };
+    await openShell({ refs_list: () => data });
+    expect(screen.getAllByTestId('sidebar-folder-item').map((e) => `${e.dataset.scope}:${e.dataset.folder}`)).toEqual([
+      'local:feature', 'local:fix', 'remote:origin:feature', 'tags:feature',
+    ]);
+    await userEvent.click(folderEl('tags', 'feature'));
+    expect(screen.queryAllByTestId('sidebar-tag-item').map((e) => e.dataset.ref)).toEqual(['refs/tags/v0.2.0']);
+    expect(screen.getAllByTestId('sidebar-remote-branch-item')).toHaveLength(2); // the remote folder is untouched
+    expect(branchRefs()).toContain('refs/heads/feature/login');
+  });
+
+  it("a collapsed folder holding the current branch shows a marker and takes the Mod+1 focus", async () => {
+    await openShell({ refs_list: () => refsWith('feature/login', ['feature/login', 'main']) });
+    const { focusZone } = await import('../actions/focus');
+    expect(focusZone('sidebar')).toBe(true);
+    expect(document.activeElement).toHaveAttribute('data-current', 'true');
+    await userEvent.click(folderEl('local', 'feature'));
+    const feature = folderEl('local', 'feature');
+    expect(feature.querySelector('[role="img"]')).toHaveAttribute('aria-label', 'contains the current branch');
+    expect(feature).toHaveAttribute('data-zone-focus');
+    expect(focusZone('sidebar')).toBe(true);
+    expect(document.activeElement).toBe(feature);
+  });
+
+  it("each list is a tree for a screen reader: items with a level and a place among their siblings, folders and remotes with their state", async () => {
+    await openShell();
+    const place = (el: HTMLElement) => `${el.getAttribute('aria-level')}:${el.getAttribute('aria-posinset')}/${el.getAttribute('aria-setsize')}`;
+    const [local, remote, tags] = screen.getAllByRole('tree');
+    expect(screen.getAllByRole('tree').map((e) => e.getAttribute('aria-label'))).toEqual(['Local', 'Remote', 'Tags']);
+    // main, feature (login), fix (typo), topic: four at the top; the branch of a folder is level 2, alone in it.
+    expect(within(local!).getAllByRole('treeitem').map(place)).toEqual(['1:1/4', '1:2/4', '2:1/1', '1:3/4', '2:1/1', '1:4/4']);
+    expect(within(local!).getAllByRole('treeitem').map((e) => e.getAttribute('aria-expanded'))).toEqual([null, 'true', null, 'true', null, null]);
+    // The branches of a remote hang under it: they start at level 2.
+    const origin = within(remote!).getByTestId('sidebar-remote-item');
+    expect(origin).toHaveAttribute('role', 'treeitem');
+    expect([place(origin), origin.getAttribute('aria-expanded')]).toEqual(['1:1/1', 'true']);
+    expect(within(within(remote!).getByRole('group')).getAllByRole('treeitem').map(place)).toEqual(['2:1/2', '2:2/2', '3:1/1']);
+    expect(within(tags!).getAllByRole('treeitem')).toHaveLength(2);
+
+    // Folding a folder changes what is listed, and the rest is numbered again.
+    await userEvent.click(folderEl('local', 'feature'));
+    expect(within(local!).getAllByRole('treeitem').map(place)).toEqual(['1:1/4', '1:2/4', '1:3/4', '2:1/1', '1:4/4']);
+    expect(folderEl('local', 'feature')).toHaveAttribute('aria-expanded', 'false');
+    // The keyboard model is unchanged: one stop in the tab order, ↓ walks the items.
+    const stops = [...document.querySelectorAll<HTMLElement>('[data-zone="sidebar"] [data-roving]')];
+    expect(stops.filter((e) => e.dataset.testid !== 'sidebar-stash-item').every((e) => e.getAttribute('role') === 'treeitem')).toBe(true); // stashes are a plain list
+    expect(stops.filter((e) => e.getAttribute('tabindex') === '0')).toHaveLength(1);
+  });
+
+  it("the toolbar's current branch button reaches the branch: it opens a closed folder or section and clears a filter that hides it", async () => {
+    await openShell({ refs_list: () => refsWith('feature/login', ['feature/login', 'main']) });
+    const current = () => screen.queryAllByTestId('sidebar-branch-item').find((e) => e.dataset.current === 'true');
+    const filter = () => tid('sidebar-filter-input') as HTMLInputElement;
+    await userEvent.click(tid('toolbar-current-branch'));
+    await waitFor(() => expect(document.activeElement).toBe(current()));
+
+    // Its folder is closed.
+    await userEvent.click(folderEl('local', 'feature'));
+    expect(current()).toBeUndefined();
+    await userEvent.click(tid('toolbar-current-branch'));
+    await waitFor(() => expect(document.activeElement).toBe(current()));
+    expect(folderEl('local', 'feature')).toHaveAttribute('aria-expanded', 'true');
+
+    // The whole section is closed.
+    await userEvent.click(screen.getByRole('button', { name: /^Local/ }));
+    expect(current()).toBeUndefined();
+    await userEvent.click(tid('toolbar-current-branch'));
+    await waitFor(() => expect(document.activeElement).toBe(current()));
+
+    // A filter hides it.
+    await userEvent.type(filter(), 'main');
+    expect(current()).toBeUndefined();
+    await userEvent.click(tid('toolbar-current-branch'));
+    await waitFor(() => expect(document.activeElement).toBe(current()));
+    expect(filter()).toHaveValue('');
+
+    // A filter that keeps it, with its folder closed since the last keystroke.
+    await userEvent.type(filter(), 'login');
+    await userEvent.click(folderEl('local', 'feature'));
+    expect(current()).toBeUndefined();
+    await userEvent.click(tid('toolbar-current-branch'));
+    await waitFor(() => expect(document.activeElement).toBe(current()));
+    expect(filter()).toHaveValue('login');
+  });
+});
+
+describe('sidebar : filter', () => {
+  const input = () => tid('sidebar-filter-input') as HTMLInputElement;
+
+  it("narrows branches, remote branches, tags and stashes by name, with counts, whatever the case", async () => {
+    await openShell();
+    await userEvent.type(input(), 'LOGIN');
+    expect(branchRefs()).toEqual(['refs/heads/feature/login']);
+    expect(screen.getAllByTestId('sidebar-remote-branch-item').map((e) => e.dataset.ref)).toEqual(['refs/remotes/origin/feature/login']);
+    expect(screen.queryByTestId('sidebar-tags-section')).toBeNull(); // no tag matches: the section leaves
+    expect(screen.getAllByTestId('sidebar-stash-item')).toHaveLength(1); // "On feature/login: experiment"
+    expect(tid('sidebar-local-count')).toHaveTextContent('(1/4)');
+    expect(tid('sidebar-stash-count')).toHaveTextContent('(1/2)');
+    expect(tid('sidebar-filter-status')).toHaveTextContent('3 references match');
+    expect(screen.getByTestId('sidebar-remote-item')).toHaveTextContent('(1/2)');
+  });
+
+  it("matches every term anywhere in the name, the remote name included", async () => {
+    await openShell();
+    await userEvent.type(input(), 'typo fix');
+    expect(branchRefs()).toEqual(['refs/heads/fix/typo']);
+    await userEvent.clear(input());
+    await userEvent.type(input(), 'origin/feat');
+    expect(branchRefs()).toEqual([]);
+    expect(screen.getAllByTestId('sidebar-remote-branch-item').map((e) => e.dataset.ref)).toEqual(['refs/remotes/origin/feature/login']);
+    await userEvent.clear(input());
+    await userEvent.type(input(), 'v0.2');
+    expect(screen.getAllByTestId('sidebar-tag-item').map((e) => e.dataset.ref)).toEqual(['refs/tags/v0.2.0']);
+  });
+
+  it("opens the folders and sections that were closed, then gives them back as they were", async () => {
+    await openShell();
+    await userEvent.click(folderEl('local', 'feature'));
+    await userEvent.click(screen.getByRole('button', { name: /^Tags/ })); // the tags section header
+    expect(branchRefs()).not.toContain('refs/heads/feature/login');
+    expect(screen.queryAllByTestId('sidebar-tag-item')).toHaveLength(0);
+
+    await userEvent.type(input(), 'v0.1 login');
+    expect(branchRefs()).toEqual([]); // both terms are needed: nothing has v0.1 and login together
+    await userEvent.clear(input());
+    await userEvent.type(input(), 'login');
+    expect(branchRefs()).toEqual(['refs/heads/feature/login']);
+    await userEvent.clear(input());
+    await userEvent.type(input(), 'v0');
+    expect(screen.getAllByTestId('sidebar-tag-item')).toHaveLength(2);
+
+    // Closing a folder while filtering only lasts until the text changes.
+    await userEvent.clear(input());
+    await userEvent.type(input(), 'login');
+    await userEvent.click(folderEl('local', 'feature'));
+    expect(branchRefs()).toEqual([]);
+    await userEvent.type(input(), '{Backspace}');
+    expect(branchRefs()).toEqual(['refs/heads/feature/login']);
+
+    await userEvent.click(tid('sidebar-filter-clear-btn'));
+    expect(input()).toHaveValue('');
+    expect(document.activeElement).toBe(input());
+    expect(branchRefs()).not.toContain('refs/heads/feature/login'); // the folder is closed again
+    expect(folderEl('local', 'feature')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryAllByTestId('sidebar-tag-item')).toHaveLength(0);
+    expect(tid('sidebar-local-count')).toHaveTextContent('(4)');
+  });
+
+  it("says so when nothing matches and puts everything back when the filter is cleared", async () => {
+    await openShell();
+    await userEvent.type(input(), 'zzz');
+    expect(tid('sidebar-filter-empty')).toHaveTextContent('Nothing matches "zzz"');
+    for (const id of ['sidebar-local-section', 'sidebar-remote-section', 'sidebar-tags-section', 'sidebar-stash-section']) expect(screen.queryByTestId(id)).toBeNull();
+    await userEvent.keyboard('{Escape}');
+    expect(input()).toHaveValue('');
+    expect(screen.queryByTestId('sidebar-filter-empty')).toBeNull();
+    for (const id of ['sidebar-local-section', 'sidebar-remote-section', 'sidebar-tags-section', 'sidebar-stash-section']) expect(tid(id)).toBeInTheDocument();
+    expect(branchRefs()).toHaveLength(4);
+  });
+
+  it("a blank filter filters nothing", async () => {
+    await openShell();
+    await userEvent.type(input(), '   ');
+    expect(branchRefs()).toHaveLength(4);
+    expect(tid('sidebar-local-count')).toHaveTextContent('(4)');
+    expect(screen.queryByTestId('sidebar-filter-empty')).toBeNull();
+  });
+
+  it("follows the refs while typed: a branch created meanwhile that matches appears", async () => {
+    await openShell();
+    await userEvent.type(input(), 'login');
+    const { refs } = await import('../stores/refs.svelte');
+    refs.apply({ ...makeRefs(), local: [...makeRefs().local, makeBranch('feature/login-v2', 20)] });
+    await waitFor(() => expect(branchRefs()).toEqual(['refs/heads/feature/login', 'refs/heads/feature/login-v2']));
+    expect(tid('sidebar-local-count')).toHaveTextContent('(2/5)');
+  });
+
+  it("is forgotten when the repository is closed", async () => {
+    await openShell();
+    await userEvent.type(input(), 'login');
+    expect(ui.sidebarFilter).toBe('login');
+    ui.resetForRepo();
+    expect(ui.sidebarFilter).toBe('');
+    expect(ui.sidebarFoldersOpen).toEqual({});
+  });
+
+  it("keyboard: / reaches the field from the lists, ↓ jumps to the first leaf, Enter then checks it out, Escape clears then leaves", async () => {
+    await openShell({ branch_checkout: () => makeRefs() });
+    const main = screen.getAllByTestId('sidebar-branch-item').find((e) => e.dataset.current === 'true')!;
+    main.focus();
+    await userEvent.keyboard('/');
+    expect(document.activeElement).toBe(input());
+    expect(input()).toHaveValue(''); // the slash opens the field, it is not typed in it
+    await userEvent.keyboard('feature/{ArrowDown}');
+    expect(input()).toHaveValue('feature/'); // a slash typed in the field stays a character
+    expect(document.activeElement).toHaveAttribute('data-ref', 'refs/heads/feature/login'); // not the folder row before it
+    await userEvent.keyboard('{Enter}');
+    await whenIdle();
+    expect(fake.callsOf('branch_checkout').at(-1)!.args).toEqual({ repoId: 1, target: { kind: 'local', name: 'feature/login' } });
+
+    input().focus();
+    await userEvent.keyboard('{Escape}');
+    expect(input()).toHaveValue('');
+    expect(document.activeElement).toBe(input()); // first Escape clears
+    await userEvent.keyboard('{Escape}');
+    expect(document.activeElement).toHaveAttribute('data-testid', 'sidebar-branch-item'); // second one leaves the field
+  });
+
+  it("palette: 'Filter branches and tags' focuses the field, showing a collapsed sidebar first", async () => {
+    await openShell();
+    ui.paletteOpen = true;
+    await userEvent.type(await screen.findByTestId('palette-input'), 'filter bra');
+    expect(screen.getAllByTestId('palette-item').map((i) => i.dataset.commandId)).toEqual(['sidebar.filter']);
+    await userEvent.keyboard('{Enter}');
+    await waitFor(() => expect(document.activeElement).toBe(input()));
+
+    await userEvent.click(tid('layout-sidebar-toggle-btn'));
+    expect(screen.queryByTestId('sidebar-filter-input')).toBeNull();
+    expect(await runAction('sidebar.filter')).toBe(true);
+    await waitFor(() => expect(document.activeElement).toBe(input()));
   });
 });
 

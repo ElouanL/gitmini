@@ -17,6 +17,7 @@
   import { t } from '$i18n/index';
   import Icon from '$lib/components/ui/Icon.svelte';
   import Spinner from '$lib/components/ui/Spinner.svelte';
+  import RecoveryTabs from './RecoveryTabs.svelte';
   import { reflogRefLabel } from './reflog';
 
   let { close }: { close: () => void } = $props();
@@ -79,18 +80,15 @@
   }
 </script>
 
-<section class="reflog" data-testid="reflog-panel" aria-label={t('reflog.title')}>
+<div class="reflog" id="recovery-panel" role="tabpanel" aria-labelledby="recovery-tab-reflog" data-testid="reflog-panel">
+  <RecoveryTabs active="reflog-panel" {close} closeTestid="reflog-close-btn" closeLabel={t('reflog.close')} />
   <header>
-    <h2>{t('reflog.title')}</h2>
     <select class="select" data-testid="reflog-ref-select" aria-label={t('reflog.ref')} value={ref} onchange={selectRef}>
       <option value="HEAD">{t('reflog.ref.head')}</option>
       {#each branches as b (b)}
         <option value={b}>{b}</option>
       {/each}
     </select>
-    <button type="button" class="icon-btn" data-testid="reflog-close-btn" aria-label={t('reflog.close')} title={t('reflog.close')} onclick={close}>
-      <Icon name="x" size={14} />
-    </button>
   </header>
 
   {#if loading}
@@ -119,7 +117,7 @@
       {/each}
     </ul>
   {/if}
-</section>
+</div>
 
 <style>
   .reflog {
@@ -134,9 +132,6 @@
     gap: 8px;
     padding: 8px;
     border-bottom: 1px solid var(--border);
-  }
-  h2 {
-    font-size: 13px;
   }
   .select {
     flex: 1;

@@ -13,3 +13,12 @@ export function focusZone(zone: FocusZone, root: ParentNode = document): boolean
   target.focus({ preventScroll: true });
   return document.activeElement === target;
 }
+
+/** Puts the caret in the sidebar filter field (`data-sidebar-filter`), selecting the text typed earlier. */
+export function focusSidebarFilter(root: ParentNode = document): boolean {
+  const el = root.querySelector<HTMLInputElement>('[data-zone="sidebar"] [data-sidebar-filter]');
+  if (!el) return false;
+  el.focus({ preventScroll: true });
+  el.select();
+  return document.activeElement === el;
+}

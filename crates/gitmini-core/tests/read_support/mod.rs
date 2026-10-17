@@ -31,6 +31,8 @@ pub struct TestRepo {
     pub path: PathBuf,
     pub home: PathBuf,
     tick: Cell<i64>,
+    /// Seconds between two git calls' dates (60 by default; 0 gives every commit the same date).
+    tick_step: Cell<i64>,
 }
 
 pub struct Opened {
@@ -142,6 +144,7 @@ impl TestRepo {
             path,
             home,
             tick: Cell::new(1_700_000_000),
+            tick_step: Cell::new(60),
         };
         t.git(&["init", "-q", "-b", "main", "."]);
         t.git(&["config", "user.name", "Fixture Bot"]);
@@ -156,6 +159,12 @@ impl TestRepo {
 
     pub fn root(&self) -> &Path {
         self.tmp.path()
+    }
+
+    /// Sets the seconds that separate the dates of two git calls from now on (0: all the same date, as scripted or
+    /// rebased commits are).
+    pub fn set_clock_step(&self, seconds: i64) {
+        self.tick_step.set(seconds);
     }
 
     fn command_in(&self, dir: &Path, args: &[&str]) -> Command {
@@ -177,7 +186,7 @@ impl TestRepo {
     }
 
     fn tick_env(&self, c: &mut Command) {
-        let t = self.tick.get() + 60;
+        let t = self.tick.get() + self.tick_step.get();
         self.tick.set(t);
         let date = format!("@{t} +0000");
         c.env("GIT_AUTHOR_DATE", &date)

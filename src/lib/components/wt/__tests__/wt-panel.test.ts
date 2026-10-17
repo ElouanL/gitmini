@@ -1,9 +1,11 @@
 // `wt-panel` (05): lists, buttons, display confirmation, multiple selection, keyboard, conflicts, virtualization.
 import { screen, within, waitFor } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { resolveMenu } from '$lib/menus/registry';
 import { op } from '$lib/stores/op.svelte';
 import { status } from '$lib/stores/status.svelte';
+import { toast } from '$lib/stores/toast.svelte';
 import { ui } from '$lib/stores/ui.svelte';
 import { whenIdle } from '$lib/activity';
 import '../../dialogs-base/register';
@@ -258,6 +260,105 @@ describe('conflits (RBC-02, RBC-07)', () => {
     mountWithDialogs(WtPanel);
     await userEvent.click(screen.getByTestId('wt-open-external-btn'));
     expect(fake.callsOf('open_external')[0]!.args).toEqual({ repoId: 1, target: { kind: 'file', path: 'c.txt', line: null } });
+  });
+});
+
+describe('take ours / theirs (RSV-01)', () => {
+  const c = (path: string, conflict: NonNullable<FileStatus['conflict']> = 'both-modified', over: Partial<FileStatus> = {}) => file(path, { conflict, ...over });
+  const menu = (...files: FileStatus[]) => resolveMenu({ menu: 'wt-file', file: files[0]!, files });
+  const listbox = () => within(screen.getByTestId('wt-conflict-list')).getByRole('listbox');
+
+  it('the context menu of conflicted files offers both sides, named after the operation', () => {
+    setup({}, [c('a.txt')]);
+    op.setState(opState({ kind: 'rebase', conflictedPaths: ['a.txt'] }));
+    expect(menu(c('a.txt')).map((i) => [i.id, i.label, i.disabled])).toEqual(
+      expect.arrayContaining([['resolve-ours', 'Take ours: Base (onto)', false], ['resolve-theirs', 'Take theirs: Your commit', false]]),
+    );
+    op.setState(opState({ kind: 'merge', incoming: 'refs/heads/feature', conflictedPaths: ['a.txt'] }));
+    expect(menu(c('a.txt')).find((i) => i.id === 'resolve-theirs')!.label).toBe('Take theirs: feature');
+    // More than one file: the count is part of the label.
+    expect(menu(c('a.txt'), c('b.txt')).find((i) => i.id === 'resolve-ours')!.label).toBe('Take ours: HEAD (2 files)');
+  });
+
+  it('the entries are masked when there is nothing to take: no conflict, both sides deleted, read only', () => {
+    setup();
+    const ids = (...files: FileStatus[]) => menu(...files).map((i) => i.id);
+    expect(ids(unstaged('plain.txt'))).not.toContain('resolve-ours');
+    expect(ids(c('gone.txt', 'both-deleted'))).not.toContain('resolve-theirs');
+    expect(ids(c('lib', 'both-modified', { submodule: true }))).not.toContain('resolve-ours');
+    expect(ids(c('bad', 'both-added', { nonUtf8: true }))).not.toContain('resolve-ours');
+    expect(ids(c('a.txt'), unstaged('plain.txt'))).not.toContain('resolve-ours');
+    expect(ids(c('a.txt'), c('gone.txt', 'both-deleted'))).toContain('resolve-ours');
+  });
+
+  it('the entries are disabled while another write is running', () => {
+    setup();
+    const end = op.begin('Fetch', null);
+    expect(menu(c('a.txt')).filter((i) => i.id.startsWith('resolve-')).map((i) => i.disabled)).toEqual([true, true]);
+    end();
+  });
+
+  it('a menu entry sends the selected conflicts in one resolve_paths and the answer updates the list', async () => {
+    const files = [c('a.txt'), c('b.txt'), c('c.txt')];
+    fake = setup({ resolve_paths: () => snapshot([c('c.txt')]) }, files);
+    op.setState(opState({ kind: 'merge', conflictedPaths: files.map((f) => f.path) }));
+    mountWithDialogs(WtPanel);
+    expect(paths('wt-conflict-item')).toEqual(['a.txt', 'b.txt', 'c.txt']);
+    await menu(files[0]!, files[1]!).find((i) => i.id === 'resolve-theirs')!.run();
+    await whenIdle();
+    expect(fake.callsOf('resolve_paths')[0]!.args).toEqual({ repoId: 1, paths: ['a.txt', 'b.txt'], side: 'theirs' });
+    await waitFor(() => expect(paths('wt-conflict-item')).toEqual(['c.txt']));
+  });
+
+  it('keyboard: `o` takes ours and `t` takes theirs for the focused conflict, the focus moves on', async () => {
+    const files = [c('a.txt'), c('b.txt')];
+    fake = setup({ resolve_paths: () => snapshot([c('b.txt')]) }, files);
+    op.setState(opState({ kind: 'rebase', conflictedPaths: ['a.txt', 'b.txt'] }));
+    mountWithDialogs(WtPanel);
+    listbox().focus();
+    await waitFor(() => expect(items('wt-conflict-item')[0]).toHaveClass('focused'));
+    await userEvent.keyboard('o');
+    await whenIdle();
+    expect(fake.callsOf('resolve_paths')[0]!.args).toEqual({ repoId: 1, paths: ['a.txt'], side: 'ours' });
+    await waitFor(() => expect(paths('wt-conflict-item')).toEqual(['b.txt']));
+    expect(items('wt-conflict-item')[0]).toHaveClass('focused');
+    // The key acts without asking, so a toast says what was taken for which file, and where the old content went.
+    expect(toast.items.at(-1)?.message).toBe('Took ours for a.txt: Base (onto). What the file held before is kept in Discarded files.');
+
+    // The last conflict takes its list with it: what runs after the write must not read the list that is gone (Svelte warns of it).
+    const warn = vi.spyOn(console, 'warn');
+    fake.on('resolve_paths', () => snapshot([]));
+    await userEvent.keyboard('t');
+    await whenIdle();
+    expect(fake.callsOf('resolve_paths')[1]!.args).toEqual({ repoId: 1, paths: ['b.txt'], side: 'theirs' });
+    await waitFor(() => expect(screen.queryByTestId('wt-conflict-list')).toBeNull());
+    await waitFor(() => expect(toast.items.at(-1)?.message).toBe('Took theirs for b.txt: Your commit. What the file held before is kept in Discarded files.'));
+    await whenIdle();
+    expect(warn.mock.calls.map((call) => String(call[0]))).toEqual([]);
+  });
+
+  it('`o` and `t` do nothing outside the conflict list, nor on a read only conflict', async () => {
+    fake = setup({}, [unstaged('a.txt'), c('lib', 'both-modified', { submodule: true })]);
+    op.setState(opState({ kind: 'merge', conflictedPaths: ['lib'] }));
+    mountWithDialogs(WtPanel);
+    within(screen.getByTestId('wt-unstaged-list')).getByRole('listbox').focus();
+    await userEvent.keyboard('ot');
+    listbox().focus();
+    await waitFor(() => expect(items('wt-conflict-item')[0]).toHaveClass('focused'));
+    await userEvent.keyboard('ot');
+    expect(fake.callsOf('resolve_paths')).toHaveLength(0);
+  });
+
+  it('a file that is no longer in conflict refreshes the status and shows the error', async () => {
+    fake = setup({ status_get: () => snapshot([]) }, [c('a.txt')]);
+    op.setState(opState({ kind: 'merge', conflictedPaths: ['a.txt'] }));
+    fake.reject('resolve_paths', { code: 'INVALID_ARGUMENT', message: 'The file is no longer in conflict.', details: { field: 'paths', reason: 'not-conflicted', paths: ['a.txt'] } });
+    mountWithDialogs(WtPanel);
+    const before = fake.callsOf('status_get').length;
+    await menu(c('a.txt')).find((i) => i.id === 'resolve-ours')!.run();
+    await whenIdle();
+    expect(fake.callsOf('status_get').length).toBeGreaterThan(before);
+    await waitFor(() => expect(items('wt-conflict-item')).toHaveLength(0));
   });
 });
 

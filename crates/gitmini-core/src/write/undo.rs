@@ -13,6 +13,7 @@ use crate::error::{AppError, AppResult, ErrorCode};
 use crate::events::ChangeKindEv;
 use crate::state::{AppState, RepoHandle, WriteGuard, WriteSpec};
 use crate::types::{Oid, RepoId, UndoEntry, UndoKind, WriteResult};
+use crate::undo::ZERO_OID;
 
 #[derive(Debug, Clone, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -92,7 +93,7 @@ fn declare_kinds(g: &mut WriteGuard, kind: UndoKind) {
         | UndoKind::Pull => g.declare(&[Head, Refs, Index, Worktree]),
         UndoKind::ResetSoft | UndoKind::ResetMixed => g.declare(&[Head, Refs, Index]),
         UndoKind::ResetKeep => g.declare(&[Head, Refs, Index, Worktree]),
-        UndoKind::BranchDelete => g.declare(&[Refs]),
+        UndoKind::BranchDelete | UndoKind::TagDelete => g.declare(&[Refs]),
         UndoKind::StashDrop => g.declare(&[Stash]),
     }
 }
@@ -191,6 +192,24 @@ async fn run_undo(repo: &Arc<RepoHandle>, entry: &UndoEntry) -> AppResult<()> {
                 .filter(|b| is_full_hex(b))
                 .ok_or_else(|| corrupt("oid \"before\""))?;
             git(repo, &["branch", "--", name, before]).await
+        }
+        UndoKind::TagDelete => {
+            let name = entry
+                .ref_name
+                .as_deref()
+                .filter(|r| r.starts_with("refs/tags/"))
+                .ok_or_else(|| corrupt("tag name"))?;
+            let before = entry
+                .before
+                .as_deref()
+                .filter(|b| is_full_hex(b))
+                .ok_or_else(|| corrupt("oid \"before\""))?;
+            // The null old value makes git refuse if the tag was created again in the meantime.
+            git(
+                repo,
+                &["update-ref", "--end-of-options", name, before, ZERO_OID],
+            )
+            .await
         }
         UndoKind::StashDrop => {
             let oid = entry

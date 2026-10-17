@@ -31,9 +31,12 @@ export function willCreateMergeCommit(kind: MergeKind, mode: MergeMode): boolean
   return false;
 }
 
-/** `merge-submit-btn`: analysis ready, not up to date, no changes followed, no flight write. */
-export function canSubmitMerge(c: BranchCompare | null, opts: { busy: boolean; serverDirty: boolean }): boolean {
-  if (!c || opts.busy || opts.serverDirty) return false;
+/**
+ * `merge-submit-btn`: analysis ready, not up to date, no changes followed, no flight write. `refused`: the dry run
+ * says git would refuse the merge (unrelated histories).
+ */
+export function canSubmitMerge(c: BranchCompare | null, opts: { busy: boolean; serverDirty: boolean; refused?: boolean }): boolean {
+  if (!c || opts.busy || opts.serverDirty || opts.refused) return false;
   if (c.dirty) return false;
   return mergeKind(c) !== 'up-to-date';
 }

@@ -8,11 +8,14 @@
   import { openContextMenu } from '$lib/menus/registry';
   import type { MenuTarget } from '$lib/menus/types';
   import type { FileStatus } from '$lib/ipc/types';
+  import type { ConflictSide } from '$lib/ipc/commands';
 
+  import { toast } from '$lib/stores/toast.svelte';
   import { t, tp } from '$i18n/index';
-  import { discardAll, discardFiles, isOpenDiff, openFileDiff, openInEditor, resolveConflict, stagePaths, unstagePaths } from './actions';
+  import { conflictSideLabel } from '../diff/conflict';
+  import { discardAll, discardFiles, isOpenDiff, openFileDiff, openInEditor, resolveConflict, resolveWithSide, stagePaths, unstagePaths } from './actions';
   import FileRow from './FileRow.svelte';
-  import { isWritable, stageable, unstageable, type ListSide } from './list-model';
+  import { isWritable, resolvable, stageable, unstageable, type ListSide } from './list-model';
   import { measureHeight } from './measure';
   import RowIcon from './RowIcon.svelte';
   import { clickSelect, EMPTY_SELECTION, keyboardTargets, moveFocus, neighborAfterRemoval, prune, targetsFor } from './selection';
@@ -36,6 +39,10 @@
   const paths = $derived(files.map((f) => f.path));
   const sel = $derived(wt.selections[side]);
   const locked = $derived(op.busy);
+
+  // The Conflicts list leaves with its last file: what follows a write must not read the list once it is gone.
+  let mounted = true;
+  $effect(() => () => { mounted = false; });
 
   let scroller = $state<HTMLDivElement>();
   let scrollTop = $state(0);
@@ -109,14 +116,20 @@
 
   // ── Clavier
   /** After writing to the keyboard, the focus goes to the next file: `s`, `s`, `s` can be chained. */
-  async function keyboardWrite(kind: 'stage' | 'unstage' | 'discard'): Promise<void> {
-    const targets = writableOf(keyboardTargets(sel, paths));
+  async function keyboardWrite(kind: 'stage' | 'unstage' | 'discard' | ConflictSide): Promise<void> {
+    const take = kind === 'ours' || kind === 'theirs' ? kind : null;
+    const targets = take ? resolvable(filesOf(keyboardTargets(sel, paths))) : writableOf(keyboardTargets(sel, paths));
     if (targets.length === 0) return;
     const ps = targets.map((f) => f.path);
     const before = paths;
-    const ok = kind === 'stage' ? await stagePaths(ps) : kind === 'unstage' ? await unstagePaths(ps) : await discardFiles(targets);
+    const ok = take
+      ? await resolveWithSide(ps, take)
+      : kind === 'stage' ? await stagePaths(ps) : kind === 'unstage' ? await unstagePaths(ps) : await discardFiles(targets);
     if (!ok) return;
+    // One key replaces a hand-made resolution without asking (the old content is saved): say what was taken, from which side.
+    if (take) toast.info(tp('wt.resolve.done', ps.length, { side: take, label: conflictSideLabel(take, op.state), file: ps[0] ?? '' }));
     await tick();
+    if (!mounted) return; // the last conflict was resolved: the list, and the neighbour to focus, left with it
     const neighbor = neighborAfterRemoval(before, paths, ps);
     wt.select(side, neighbor ? { paths: new Set(), anchor: neighbor, focus: neighbor } : EMPTY_SELECTION);
     if (neighbor) reveal(neighbor);
@@ -187,6 +200,10 @@
     } else if (e.key === 'Delete' && side === 'unstaged') {
       e.preventDefault();
       void keyboardWrite('discard');
+    } else if ((e.key === 'o' || e.key === 't') && side === 'conflict') {
+      // Take ours / theirs: git's names, as on the buttons of the conflict diff.
+      e.preventDefault();
+      void keyboardWrite(e.key === 'o' ? 'ours' : 'theirs');
     }
   }
 
