@@ -12,6 +12,7 @@ pub mod read;
 pub mod repo;
 pub mod settings;
 pub mod state;
+pub mod trash;
 pub mod ts;
 pub mod types;
 pub mod undo;

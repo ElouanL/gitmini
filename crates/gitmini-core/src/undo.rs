@@ -36,6 +36,8 @@
 //! `branch_delete`: `BranchDelete { name, oid }`: after git:
 //!
 //! `stash_drop`: `StashDrop { oid, message }`: after git:
+//! `branch_reset` (soft, mixed, keep): `Reset { mode }`: after git; `hard` calls [`clear`] instead.
+//! `tag_delete`: `TagDelete { name, oid, target }`: after git (the tag ref must have disappeared).
 //! - I'm sorry. `remote_push` —— `mark_pushed(&repo, &branch)` after push successful
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
@@ -50,8 +52,9 @@ use crate::error::{AppError, AppResult, ErrorCode};
 use crate::read::opstate::read_opstate;
 use crate::state::{AppState, RepoHandle};
 use crate::types::{Oid, RepoId, UndoBlockReason, UndoEntry, UndoKind, UndoStatus};
+use crate::write::reset::ResetMode;
 
-const ZERO_OID: &str = "0000000000000000000000000000000000000000";
+pub(crate) const ZERO_OID: &str = "0000000000000000000000000000000000000000";
 
 // ── Journal
 
@@ -76,6 +79,11 @@ pub enum UndoOp {
     BranchDelete { name: String, oid: Oid },
     /// `stash_drop`: Oid of stash and message **full** of the refrog ("On main: wip parser").
     StashDrop { oid: Oid, message: String },
+    /// `branch_reset` in `soft`, `mixed` or `keep` mode (`hard` is never recorded).
+    Reset { mode: ResetMode },
+    /// `tag_delete`: short name, what the ref pointed to (`oid`: the tag object of an annotated tag) and the commit it
+    /// peels to (`target`).
+    TagDelete { name: String, oid: Oid, target: Oid },
 }
 
 impl UndoOp {
@@ -90,6 +98,13 @@ impl UndoOp {
             UndoOp::Pull => UndoKind::Pull,
             UndoOp::BranchDelete { .. } => UndoKind::BranchDelete,
             UndoOp::StashDrop { .. } => UndoKind::StashDrop,
+            UndoOp::TagDelete { .. } => UndoKind::TagDelete,
+            UndoOp::Reset { mode } => match mode {
+                ResetMode::Soft => UndoKind::ResetSoft,
+                ResetMode::Mixed => UndoKind::ResetMixed,
+                // `hard` is not recorded; `--keep` would move the ref back without touching local changes.
+                ResetMode::Keep | ResetMode::Hard => UndoKind::ResetKeep,
+            },
         }
     }
 }
@@ -133,7 +148,9 @@ fn short7(oid: &str) -> &str {
 }
 
 fn short_ref(full: &str) -> &str {
-    full.strip_prefix("refs/heads/").unwrap_or(full)
+    full.strip_prefix("refs/heads/")
+        .or_else(|| full.strip_prefix("refs/tags/"))
+        .unwrap_or(full)
 }
 
 fn full_branch(name: &str) -> String {
@@ -187,6 +204,9 @@ pub fn begin(repo: &RepoHandle, op: UndoOp) {
     let (ref_name, before): (Option<String>, Option<Oid>) = match &op {
         UndoOp::StashDrop { .. } => (None, None),
         UndoOp::BranchDelete { name, oid } => (Some(full_branch(name)), Some(oid.clone())),
+        UndoOp::TagDelete { name, oid, .. } => {
+            (Some(format!("refs/tags/{name}")), Some(oid.clone()))
+        }
         UndoOp::Rebase { branch: Some(b) } => {
             let full = full_branch(b);
             match ref_target(&git, &full) {
@@ -217,6 +237,13 @@ pub fn begin(repo: &RepoHandle, op: UndoOp) {
         reflog_offset,
     };
     repo.undo.lock().unwrap().pending = Some(pending);
+}
+
+/// Forgets the pending operation and the last entry: an operation that cannot be undone has just replaced them.
+pub fn clear(repo: &RepoHandle) {
+    let mut slot = repo.undo.lock().unwrap();
+    slot.entry = None;
+    slot.pending = None;
 }
 
 /// End of an cancelable operation (see the module header). No effect if there is no `pending` , or as long as
@@ -254,7 +281,10 @@ pub fn mark_pushed(repo: &RepoHandle, branch: &str) {
 
 /// Kinds moving a branch (`commit` to `pull`): rule 3 of
 fn moves_a_branch(kind: UndoKind) -> bool {
-    !matches!(kind, UndoKind::BranchDelete | UndoKind::StashDrop)
+    !matches!(
+        kind,
+        UndoKind::BranchDelete | UndoKind::StashDrop | UndoKind::TagDelete
+    )
 }
 
 // ── Finalisation
@@ -290,6 +320,19 @@ fn settle(repo: &RepoHandle, git: &gix::Repository, p: &PendingUndo) -> Option<U
                 return None;
             }
             let (label, effect) = texts(&p.op, None, Some(oid), None, None);
+            Some(base(label, effect))
+        }
+        UndoOp::TagDelete { name, .. } => {
+            // Immediate completion: the ref must have disappeared (if not `git tag -d` failed).
+            if git
+                .try_find_reference(format!("refs/tags/{name}").as_str())
+                .ok()
+                .flatten()
+                .is_some()
+            {
+                return None;
+            }
+            let (label, effect) = texts(&p.op, None, p.before.as_ref(), None, None);
             Some(base(label, effect))
         }
         UndoOp::StashDrop { oid, message } => {
@@ -472,9 +515,32 @@ fn texts(
             let effect = format!("{label} on {} (without its upstream).", short7(oid));
             (label, effect)
         }
+        UndoOp::TagDelete {
+            name, oid, target, ..
+        } => {
+            let label = format!("Restore the {name} tag");
+            let annotated = if oid == target { "" } else { " (annotated)" };
+            let effect = format!("{label}{annotated} on {}.", short7(target));
+            (label, effect)
+        }
         UndoOp::StashDrop { message, .. } => {
             let label = format!("Restore the stash \"{message}\"");
             let effect = format!("{label} to stash@{{0}}.");
+            (label, effect)
+        }
+        UndoOp::Reset { mode } => {
+            let label = format!("Cancel reset of {branch}");
+            let effect = match mode {
+                ResetMode::Soft => {
+                    format!("{label}; {branch} returns to {before7}. The index is kept.")
+                }
+                ResetMode::Mixed => format!(
+                    "{label}; {branch} returns to {before7} and the index is restored. Working files are kept."
+                ),
+                ResetMode::Keep | ResetMode::Hard => format!(
+                    "{label}; {branch} returns to {before7}. Your local changes are preserved."
+                ),
+            };
             (label, effect)
         }
     }
@@ -487,6 +553,7 @@ pub fn reason_message(reason: UndoBlockReason, entry: Option<&UndoEntry>) -> Str
         .map(short_ref)
         .unwrap_or("the branch");
     let is_stash = entry.is_some_and(|e| e.kind == UndoKind::StashDrop);
+    let is_tag = entry.is_some_and(|e| e.kind == UndoKind::TagDelete);
     match reason {
         UndoBlockReason::Empty => "Nothing to cancel.".into(),
         UndoBlockReason::Pushed => "Could not cancel an already published operation.".into(),
@@ -498,6 +565,7 @@ pub fn reason_message(reason: UndoBlockReason, entry: Option<&UndoEntry>) -> Str
         }
         UndoBlockReason::OpInProgress => "Complete or abandon the current operation first.".into(),
         UndoBlockReason::Exists if is_stash => "This stash is already present.".into(),
+        UndoBlockReason::Exists if is_tag => format!("The {name} tag already exists."),
         UndoBlockReason::Exists => format!("The {name} branch already exists."),
         UndoBlockReason::ObjectMissing => {
             "The original state no longer exists in the repository.".into()
@@ -542,7 +610,7 @@ pub(crate) fn blocked_reason(
             (!object_exists(git, oid)).then_some(ObjectMissing)
         }
         // 4.
-        UndoKind::BranchDelete => {
+        UndoKind::BranchDelete | UndoKind::TagDelete => {
             let name = entry.ref_name.as_deref()?;
             if git.try_find_reference(name).ok().flatten().is_some() {
                 return Some(Exists);

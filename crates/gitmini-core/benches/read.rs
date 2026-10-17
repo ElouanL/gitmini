@@ -324,6 +324,7 @@ fn diff_file_bench(c: &mut Criterion) {
                         path: format!("big{i:02}.txt"),
                         source: DiffSource::Unstaged,
                         force: None,
+                        context_lines: None,
                     },
                 ))
                 .unwrap();

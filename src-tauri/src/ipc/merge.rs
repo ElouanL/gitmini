@@ -1,12 +1,25 @@
-//! Merge [W] : `merge_branch`, `merge_continue`, `merge_abort` .
+//! Merge: `merge_preview` [R] ; `merge_branch`, `merge_continue`, `merge_abort` [W] .
 use gitmini_core::AppError;
 use gitmini_core::read::status::RepoArgs;
 use gitmini_core::types::WriteResult;
 use gitmini_core::write::merge::{
-    MergeBranchArgs, MergeBranchResult, MergeContinueArgs, OidResult,
+    MergeBranchArgs, MergeBranchResult, MergeContinueArgs, MergePreview, MergePreviewArgs,
+    OidResult,
 };
 
 use super::{Args, Core, call};
+
+#[tauri::command]
+pub async fn merge_preview(
+    state: Core<'_>,
+    args: Args<MergePreviewArgs>,
+) -> Result<MergePreview, AppError> {
+    call(
+        "merge_preview",
+        gitmini_core::write::merge::merge_preview(&state, args.0),
+    )
+    .await
+}
 
 #[tauri::command]
 pub async fn merge_branch(

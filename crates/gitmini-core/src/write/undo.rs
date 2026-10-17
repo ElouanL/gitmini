@@ -1,7 +1,7 @@
 //! `undo_last` . Ownership of the
 //!
-//! Only documented exception to "no exposed branch reset": `git reset --soft|--keep` only serves here, on
-//! the "before" oid recorded by the log (`undo`), never on a user input.
+//! `git reset` here only targets the "before" oid recorded by the log (`undo`), never a user input. The user-facing
+//! reset is `write::reset`.
 use std::sync::Arc;
 
 use serde::Deserialize;
@@ -13,6 +13,7 @@ use crate::error::{AppError, AppResult, ErrorCode};
 use crate::events::ChangeKindEv;
 use crate::state::{AppState, RepoHandle, WriteGuard, WriteSpec};
 use crate::types::{Oid, RepoId, UndoEntry, UndoKind, WriteResult};
+use crate::undo::ZERO_OID;
 
 #[derive(Debug, Clone, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -90,7 +91,9 @@ fn declare_kinds(g: &mut WriteGuard, kind: UndoKind) {
         | UndoKind::CherryPick
         | UndoKind::Revert
         | UndoKind::Pull => g.declare(&[Head, Refs, Index, Worktree]),
-        UndoKind::BranchDelete => g.declare(&[Refs]),
+        UndoKind::ResetSoft | UndoKind::ResetMixed => g.declare(&[Head, Refs, Index]),
+        UndoKind::ResetKeep => g.declare(&[Head, Refs, Index, Worktree]),
+        UndoKind::BranchDelete | UndoKind::TagDelete => g.declare(&[Refs]),
         UndoKind::StashDrop => g.declare(&[Stash]),
     }
 }
@@ -162,6 +165,21 @@ async fn run_undo(repo: &Arc<RepoHandle>, entry: &UndoEntry) -> AppResult<()> {
                 .await
                 .map_err(dirty_message)
         }
+        // Same mode as the reset: `--keep` would refuse the files that `soft` / `mixed` left modified.
+        UndoKind::ResetSoft | UndoKind::ResetMixed | UndoKind::ResetKeep => {
+            let before = entry
+                .before
+                .as_deref()
+                .filter(|b| is_full_hex(b))
+                .ok_or_else(|| corrupt("oid \"before\""))?;
+            match entry.kind {
+                UndoKind::ResetSoft => git(repo, &["reset", "--soft", before, "--"]).await,
+                UndoKind::ResetMixed => git(repo, &["reset", "--mixed", before, "--"]).await,
+                _ => git(repo, &["reset", "--keep", before, "--"])
+                    .await
+                    .map_err(dirty_message),
+            }
+        }
         UndoKind::BranchDelete => {
             let name = entry
                 .ref_name
@@ -174,6 +192,24 @@ async fn run_undo(repo: &Arc<RepoHandle>, entry: &UndoEntry) -> AppResult<()> {
                 .filter(|b| is_full_hex(b))
                 .ok_or_else(|| corrupt("oid \"before\""))?;
             git(repo, &["branch", "--", name, before]).await
+        }
+        UndoKind::TagDelete => {
+            let name = entry
+                .ref_name
+                .as_deref()
+                .filter(|r| r.starts_with("refs/tags/"))
+                .ok_or_else(|| corrupt("tag name"))?;
+            let before = entry
+                .before
+                .as_deref()
+                .filter(|b| is_full_hex(b))
+                .ok_or_else(|| corrupt("oid \"before\""))?;
+            // The null old value makes git refuse if the tag was created again in the meantime.
+            git(
+                repo,
+                &["update-ref", "--end-of-options", name, before, ZERO_OID],
+            )
+            .await
         }
         UndoKind::StashDrop => {
             let oid = entry

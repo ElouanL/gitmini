@@ -1,4 +1,4 @@
-// Contract of the 65 commands: one wrapper per order, exact name, arguments transmitted as is.
+// Contract of the 75 commands: one wrapper per order, exact name, arguments transmitted as is.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -15,10 +15,10 @@ function rustCommandList(): string[] {
 }
 
 describe('commands.ts', () => {
-  it("exactly displays the 65 backend commands", () => {
+  it("exactly displays the 75 backend commands", () => {
     const names = Object.values(COMMAND_NAMES).sort();
-    expect(names).toHaveLength(65);
-    expect(new Set(names).size).toBe(65);
+    expect(names).toHaveLength(75);
+    expect(new Set(names).size).toBe(75);
     expect(names).toEqual([...rustCommandList()].sort());
   });
 
@@ -41,6 +41,26 @@ describe('commands.ts', () => {
     expect(fake.calls[fake.calls.length - 1]).toEqual({ command: 'app_info', args: {} });
     await commands.stagePaths({ repoId: 3, paths: 'all' });
     expect(fake.calls[fake.calls.length - 1]).toEqual({ command: 'stage_paths', args: { repoId: 3, paths: 'all' } });
+    await commands.resolvePaths({ repoId: 3, paths: ['a.txt'], side: 'theirs' });
+    expect(fake.calls[fake.calls.length - 1]).toEqual({ command: 'resolve_paths', args: { repoId: 3, paths: ['a.txt'], side: 'theirs' } });
+    // Discarded files: listed, then restored by id.
+    await commands.discardList({ repoId: 3 });
+    expect(fake.calls[fake.calls.length - 1]).toEqual({ command: 'discard_list', args: { repoId: 3 } });
+    await commands.discardRestore({ repoId: 3, ids: ['a1', 'b2'] });
+    expect(fake.calls[fake.calls.length - 1]).toEqual({ command: 'discard_restore', args: { repoId: 3, ids: ['a1', 'b2'] } });
+    // File history and blame: optional fields are left out when absent.
+    await commands.fileLog({ repoId: 3, path: 'src/a.ts' });
+    expect(fake.calls[fake.calls.length - 1]).toEqual({ command: 'file_log', args: { repoId: 3, path: 'src/a.ts' } });
+    await commands.fileLog({ repoId: 3, path: 'src/a.ts', rev: 'topic', follow: false, limit: 50, cursor: 'c1' });
+    expect(fake.calls[fake.calls.length - 1]).toEqual({ command: 'file_log', args: { repoId: 3, path: 'src/a.ts', rev: 'topic', follow: false, limit: 50, cursor: 'c1' } });
+    await commands.fileBlame({ repoId: 3, path: 'src/a.ts', rev: 'abc', force: true });
+    expect(fake.calls[fake.calls.length - 1]).toEqual({ command: 'file_blame', args: { repoId: 3, path: 'src/a.ts', rev: 'abc', force: true } });
+    // Merge dry run: the branch to merge travels as `ref`, as for `merge_branch`.
+    await commands.mergePreview({ repoId: 3, ref: 'feature' });
+    expect(fake.calls[fake.calls.length - 1]).toEqual({ command: 'merge_preview', args: { repoId: 3, ref: 'feature' } });
+    // Line staging: the same hunk commands, narrowed by the indexes of the lines.
+    await commands.stageHunk({ repoId: 3, path: 'a.txt', diffHash: 'h', hunkIndex: 1, lines: [2, 5] });
+    expect(fake.calls[fake.calls.length - 1]).toEqual({ command: 'stage_hunk', args: { repoId: 3, path: 'a.txt', diffHash: 'h', hunkIndex: 1, lines: [2, 5] } });
   });
 
   it("a rejection of the transport is an AppError", async () => {

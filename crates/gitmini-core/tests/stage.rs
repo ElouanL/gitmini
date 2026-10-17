@@ -52,6 +52,8 @@ async fn hunk_args(
         path: path.into(),
         diff_hash: d.hash,
         hunk_index: index,
+        lines: None,
+        context_lines: None,
     }
 }
 
@@ -469,6 +471,8 @@ async fn stage_02_hunks_are_refused_on_submodules_binaries_and_conflicts() {
             path: "image.png".into(),
             diff_hash: d.hash,
             hunk_index: 0,
+            lines: None,
+            context_lines: None,
         },
     )
     .await
@@ -484,6 +488,8 @@ async fn stage_02_hunks_are_refused_on_submodules_binaries_and_conflicts() {
             path: "lib".into(),
             diff_hash: "x".into(),
             hunk_index: 0,
+            lines: None,
+            context_lines: None,
         },
     )
     .await
@@ -935,6 +941,8 @@ async fn safe_02_submodule_paths_are_refused_and_all_skips_them() {
                 path: "lib".into(),
                 diff_hash: "x".into(),
                 hunk_index: 0,
+                lines: None,
+                context_lines: None,
             },
         )
         .await
@@ -948,6 +956,8 @@ async fn safe_02_submodule_paths_are_refused_and_all_skips_them() {
                 path: "lib".into(),
                 diff_hash: "x".into(),
                 hunk_index: 0,
+                lines: None,
+                context_lines: None,
             },
         )
         .await
@@ -961,6 +971,8 @@ async fn safe_02_submodule_paths_are_refused_and_all_skips_them() {
                 path: "lib".into(),
                 diff_hash: "x".into(),
                 hunk_index: 0,
+                lines: None,
+                context_lines: None,
             },
         )
         .await
@@ -1093,6 +1105,8 @@ async fn safe_02_a_gitlink_that_is_only_in_head_is_still_a_submodule() {
         path: path.into(),
         diff_hash: "x".into(),
         hunk_index: 0,
+        lines: None,
+        context_lines: None,
     };
     errors.push(stage_hunk(&o.state, hunk("lib")).await.unwrap_err());
     errors.push(unstage_hunk(&o.state, hunk("lib")).await.unwrap_err());
@@ -1276,19 +1290,16 @@ fn has_reset_word(text: &str) -> bool {
     })
 }
 
-/// Branch reset: outside v1 perimeter (decision n°2 of ), no menu, no command, no confirmation.
-/// Only the undo (`write/undo.rs`) moves a branch back, with `reset --soft` / `--keep`, without exposing it.
+/// Branch reset is confined: only `write/reset.rs` (`branch_reset`, the user command) and `write/undo.rs` (back to the
+/// "before" oid of the log) move a branch with `git reset`; elsewhere the only `git reset` is "all unstage" (`reset -q`).
 #[test]
-fn no_reset_command_is_exposed() {
+fn reset_is_confined() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
 
-    // 1. All `crates/gitmini-core/src/write/`, excluding `undo.rs`: no hard reset, "soft", `--keep` or `--mixed`, none
-    //    `reset*` function, and the only `git reset` is "all unstage" (`reset -q` index only: HEAD does not move).
+    // 1. `crates/gitmini-core/src/write/`: mode flags and `reset*` functions only in `reset.rs` and `undo.rs`;
+    //    `--merge` nowhere.
     let mut checked = 0;
     for f in source_files(&root.join("crates/gitmini-core/src/write"), &["rs"]) {
-        if f.file_name().is_some_and(|n| n == "undo.rs") {
-            continue;
-        }
         let name = f.file_name().unwrap().to_string_lossy().into_owned();
         let src = std::fs::read_to_string(&f).unwrap();
         let code: String = src
@@ -1299,12 +1310,16 @@ fn no_reset_command_is_exposed() {
             .filter(|l| !l.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
             .join("\n");
+        checked += 1;
+        assert!(!code.contains("\"--merge\""), "{name} contient \"--merge\"");
+        if name == "reset.rs" || name == "undo.rs" {
+            continue;
+        }
         for forbidden in [
             "\"--hard\"",
             "\"--soft\"",
             "\"--keep\"",
             "\"--mixed\"",
-            "\"--merge\"",
             "async fn reset",
             "pub fn reset",
         ] {
@@ -1318,70 +1333,22 @@ fn no_reset_command_is_exposed() {
                 "{name} : reset suivi de {after:?}"
             );
         }
-        checked += 1;
     }
     assert!(
         checked >= 10,
         "the scan must cover all write/ files ({checked})"
     );
 
-    // 2. `gitmini-core` command and Tauri glue register: no name containing `reset`.
+    // 2. Command register: `branch_reset` is the only command named `reset`.
     let dispatch =
         std::fs::read_to_string(root.join("crates/gitmini-core/src/dispatch.rs")).unwrap();
-    for lit in dispatch.split('"').skip(1).step_by(2) {
-        assert!(!has_reset_word(lit), "dispatch.rs: command \"{lit}\"");
-    }
-    for f in source_files(&root.join("src-tauri/src"), &["rs"]) {
-        let src = std::fs::read_to_string(&f).unwrap();
-        assert!(!has_reset_word(&src), "{} mentionne reset", f.display());
-    }
-
-    // 3. Frontend: neither IPC command, nor menu entry, nor action, nor test ID, nor text named `reset`.
-    //    (The `resetAll`, `perfReset`... test helpers and `type="reset"` of a `<input>` are not.)
-    for rel in ["src/lib/ipc/commands.ts", "src/lib/ipc/types.ts"] {
-        let src = std::fs::read_to_string(root.join(rel)).unwrap();
-        assert!(!has_reset_word(&src), "{rel} mentionne reset");
-    }
-    for f in source_files(&root.join("src/i18n"), &["ts"]) {
-        let src = std::fs::read_to_string(&f).unwrap();
-        assert!(!has_reset_word(&src), "{}: \"reset\" text", f.display());
-    }
-    let mut scanned = 0;
-    for f in source_files(&root.join("src"), &["ts", "svelte"]) {
-        let rel = f
-            .strip_prefix(&root)
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        if rel.ends_with(".test.ts") || rel.contains("/test/") {
-            continue;
-        }
-        scanned += 1;
-        for (n, line) in std::fs::read_to_string(&f).unwrap().lines().enumerate() {
-            let t = line.trim_start();
-            if t.starts_with("//") || t.starts_with('*') || t.starts_with("/*") {
-                continue; // a comment can say "no reset entries"
-            }
-            let id_line = [
-                "testid",
-                "data-action",
-                "data-menu",
-                "context-menu-item",
-                "MENU_ITEM",
-                "registerAction",
-                "invoke(",
-            ]
-            .iter()
-            .any(|k| line.contains(k));
-            assert!(
-                !(id_line && has_reset_word(line)),
-                "{rel}:{} : identifiant ou action « reset » : {line}",
-                n + 1
-            );
-        }
-    }
-    assert!(
-        scanned > 20,
-        "the scan must cover the sources of the frontend ({scanned})"
-    );
+    let mut names: Vec<&str> = dispatch
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .filter(|lit| has_reset_word(lit))
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(names, ["branch_reset"], "dispatch.rs: reset commands");
 }

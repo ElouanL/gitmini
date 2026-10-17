@@ -37,6 +37,16 @@ export function isWritable(f: FileStatus): boolean {
   return !isReadonly(f) && (f.conflict === null || f.conflict === undefined);
 }
 
+/** Conflicted files that "Take ours / theirs" can act on: not a submodule nor a non-UTF-8 path (read only). */
+export function resolvable(files: readonly FileStatus[]): FileStatus[] {
+  return files.filter((f) => f.conflict !== null && f.conflict !== undefined && !isReadonly(f));
+}
+
+/** The menu entries "Take ours / theirs" apply to exactly these files: all conflicted, and at least one with a side to take. */
+export function offersSides(files: readonly FileStatus[]): boolean {
+  return files.length > 0 && resolvable(files).length === files.length && files.some((f) => f.conflict !== 'both-deleted');
+}
+
 export function changeOf(f: FileStatus, side: ListSide): ChangeKind | null {
   return side === 'staged' ? f.staged : side === 'unstaged' ? f.unstaged : null;
 }

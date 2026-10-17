@@ -3,11 +3,15 @@
 //!
 //! All that is cached is **immutable** (identified by an oid): details of commit, diffs of commit / of
 //! stash / range, metadata of a stash. diffs `unstaged` / `staged` never go through here (never cache
-//! working tree,).
+//! working tree,). One thing can still move under an oid: the commits at the border of a shallow repository gain
+//! parents when it is deepened, so [`RepoCache::sync_shallow`] drops the entries of commits, diffs and blames then.
 use lru::LruCache;
 use std::num::NonZeroUsize;
+use std::path::Path;
 use std::sync::Arc;
+use std::time::SystemTime;
 
+use crate::read::history::FileBlame;
 use crate::types::{CommitDetails, FileDiff, Oid};
 
 /// Capacity of commit details.
@@ -16,6 +20,10 @@ pub const COMMITS_CAPACITY: usize = 256;
 pub const DIFFS_CAPACITY: usize = 64;
 /// diffs cache memory ceiling.
 pub const DIFFS_MAX_BYTES: usize = 16 * 1024 * 1024;
+/// Capacity of blames (a blame costs a walk of the file's history; flipping between commits asks for the same ones again).
+pub const BLAMES_CAPACITY: usize = 8;
+/// A blame whose text is larger than this is not kept.
+pub const BLAME_MAX_BYTES: usize = 2 * 1024 * 1024;
 
 /// What `stash_list` learns from the commits of a stash (immutable, so stored by oid).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +43,10 @@ pub struct RepoCache {
     pub stash_meta: LruCache<Oid, StashMeta>,
     /// Date of author of commits pointed by branch (`BranchInfo.tipDate`), by oid.
     pub author_times: LruCache<gix::ObjectId, i64>,
+    /// Blames of a file at a commit, immutable like the commit. Key: `blame_key`.
+    pub blames: LruCache<String, Arc<FileBlame>>,
+    /// The `shallow` file as `commits`, `diffs` and `blames` were filled under (`None`: the repository is not shallow).
+    shallow_stamp: Option<(Option<SystemTime>, u64)>,
 }
 
 impl Default for RepoCache {
@@ -45,6 +57,8 @@ impl Default for RepoCache {
             diffs_bytes: 0,
             stash_meta: LruCache::new(NonZeroUsize::new(256).unwrap()),
             author_times: LruCache::new(NonZeroUsize::new(4096).unwrap()),
+            blames: LruCache::new(NonZeroUsize::new(BLAMES_CAPACITY).unwrap()),
+            shallow_stamp: None,
         }
     }
 }
@@ -54,9 +68,15 @@ pub fn commit_key(oid: &str, against: Option<&str>) -> String {
     format!("{oid}\u{0}{}", against.unwrap_or(""))
 }
 
-/// diffs cache key: immutable source + path (+ `force`, which changes the result of a `tooLarge`).
-pub fn diff_key(source: &str, path: &str, force: bool) -> String {
-    format!("{source}\u{0}{path}\u{0}{}", u8::from(force))
+/// Blame cache key: the commit and the file's name in it (a `force`d blame is the same blame, only the gate differs).
+pub fn blame_key(rev: &str, path: &str) -> String {
+    format!("{rev}\u{0}{path}")
+}
+
+/// diffs cache key: immutable source + path (+ `force`, which changes the result of a `tooLarge`, + the number of
+/// context lines, which changes the hunks).
+pub fn diff_key(source: &str, path: &str, force: bool, context: usize) -> String {
+    format!("{source}\u{0}{path}\u{0}{}\u{0}{context}", u8::from(force))
 }
 
 /// Approximate size of a diff in memory (text of lines + extra cost per line).
@@ -70,6 +90,22 @@ pub fn approx_size(d: &FileDiff) -> usize {
 }
 
 impl RepoCache {
+    /// Forgets the details, diffs and blames when the `shallow` file of `common_dir` has changed since they were stored
+    /// (`git fetch --deepen`, `--unshallow`): the commits at the old border have parents now, so what was read for them,
+    /// and for the history above them, is out of date. A stat of one file; call it before reading these caches.
+    pub fn sync_shallow(&mut self, common_dir: &Path) {
+        let stamp = std::fs::metadata(common_dir.join("shallow"))
+            .ok()
+            .map(|m| (m.modified().ok(), m.len()));
+        if stamp != self.shallow_stamp {
+            self.commits.clear();
+            self.diffs.clear();
+            self.diffs_bytes = 0;
+            self.blames.clear();
+            self.shallow_stamp = stamp;
+        }
+    }
+
     pub fn get_diff(&mut self, key: &str) -> Option<Arc<FileDiff>> {
         self.diffs.get(key).cloned()
     }
@@ -175,10 +211,43 @@ mod tests {
     }
 
     #[test]
-    fn keys_distinguish_force_and_against() {
+    fn the_caches_are_dropped_when_the_shallow_border_moves() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut c = RepoCache::default();
+        // not shallow: nothing to drop, now or later
+        c.sync_shallow(dir.path());
+        c.put_diff("k".into(), diff_with_text("a", 10));
+        c.sync_shallow(dir.path());
+        assert!(c.get_diff("k").is_some());
+
+        // the repository became shallow
+        std::fs::write(dir.path().join("shallow"), "a\n").unwrap();
+        c.sync_shallow(dir.path());
+        assert!(c.get_diff("k").is_none());
+        assert_eq!(c.diffs_bytes(), 0);
+        c.put_diff("k".into(), diff_with_text("a", 10));
+        c.sync_shallow(dir.path());
+        assert!(c.get_diff("k").is_some(), "the same border keeps them");
+
+        // deepened, then unshallowed
+        std::fs::write(dir.path().join("shallow"), "a\nb\n").unwrap();
+        c.sync_shallow(dir.path());
+        assert!(c.get_diff("k").is_none());
+        c.put_diff("k".into(), diff_with_text("a", 10));
+        std::fs::remove_file(dir.path().join("shallow")).unwrap();
+        c.sync_shallow(dir.path());
+        assert!(c.get_diff("k").is_none());
+    }
+
+    #[test]
+    fn keys_distinguish_force_context_and_against() {
         assert_ne!(
-            diff_key("commit:abc", "f", false),
-            diff_key("commit:abc", "f", true)
+            diff_key("commit:abc", "f", false, 3),
+            diff_key("commit:abc", "f", true, 3)
+        );
+        assert_ne!(
+            diff_key("commit:abc", "f", false, 3),
+            diff_key("commit:abc", "f", false, 10)
         );
         assert_ne!(commit_key("abc", None), commit_key("abc", Some("def")));
     }

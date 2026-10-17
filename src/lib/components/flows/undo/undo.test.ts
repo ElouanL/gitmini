@@ -121,8 +121,8 @@ describe('undo-confirm-dialog', () => {
     expect(maybe('undo-confirm-dialog')).toBeNull();
   });
 
-  it("only one kind per text: the 9 Kinds open the dialogue with their data-kind", async () => {
-    const kinds = ['commit', 'amend', 'merge', 'rebase', 'cherry-pick', 'revert', 'pull', 'branch-delete', 'stash-drop'] as const;
+  it("only one kind per text: the 10 Kinds open the dialogue with their data-kind", async () => {
+    const kinds = ['commit', 'amend', 'merge', 'rebase', 'cherry-pick', 'revert', 'pull', 'branch-delete', 'stash-drop', 'tag-delete'] as const;
     await openTestRepo();
     render(DialogHost);
     for (const kind of kinds) {
@@ -135,6 +135,12 @@ describe('undo-confirm-dialog', () => {
 });
 
 describe("toolbar-undo-btn: Availability Infobull (11 §IU)", () => {
+  it("a tag that came back is named as a tag, not as a branch", async () => {
+    await openTestRepo({ undo_peek: () => ({ entry: entry({ kind: 'tag-delete', refName: 'refs/tags/v1.0' }), available: false, reason: 'exists', head: HEAD }) });
+    const { undo } = await import('$lib/stores/undo.svelte');
+    await undo.peekNow();
+    expect(undo.tooltip).toBe('The v1.0 tag already exists.');
+  });
   it("not available: the text of the motif (UndoBlockReason)", async () => {
     await openTestRepo({ undo_peek: () => ({ entry: entry({ pushed: true }), available: false, reason: 'pushed', head: HEAD }) });
     const { undo } = await import('$lib/stores/undo.svelte');

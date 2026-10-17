@@ -1,10 +1,13 @@
 //! Index : `stage_paths`, `unstage_paths`, `discard_paths`, `stage_hunk`, `unstage_hunk`, `discard_hunk`
-//! . Ownership of
+//! (a hunk, or only some of its lines). Ownership of
 //!
 //! All commands take the writing lock, check their preconditions with gix (submodule,
 //! path no UTF-8, conflict), launch the CLI git by `write::runner`, then return the new
 //! `StatusSnapshot`. The paths pass through stdin (`--pathspec-from-file=- --pathspec-file-nul`).
-use std::collections::BTreeSet;
+//!
+//! What a discard (or a conflict resolution) throws away is saved first by `backup_files` and listed in the trash
+//! (`crate::trash`), from where `discard_restore` puts it back.
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -14,10 +17,12 @@ use serde_json::json;
 use specta::Type;
 
 use super::PathsOrAll;
+use super::patch::{self, Direction};
 use super::runner::{RunOpts, run};
 use crate::error::{AppError, AppResult, ErrorCode, gix_err};
 use crate::events::ChangeKindEv;
 use crate::state::{AppState, RepoHandle, WriteSpec};
+use crate::trash::{DiscardKind, DiscardSource, DiscardedFile};
 use crate::types::{ChangeKind, DiffSource, FileDiff, StatusSnapshot};
 
 #[derive(Debug, Clone, Deserialize, Type)]
@@ -27,6 +32,40 @@ pub struct PathsArgs {
     pub paths: PathsOrAll,
 }
 
+/// Side of a conflict that `resolve_paths` keeps, with git's own meaning: `ours` is stage 2 (HEAD when the operation
+/// started; during a rebase, the branch being rebased onto), `theirs` is stage 3 (the incoming side).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum ConflictSide {
+    Ours,
+    Theirs,
+}
+
+impl ConflictSide {
+    fn flag(self) -> &'static str {
+        match self {
+            ConflictSide::Ours => "--ours",
+            ConflictSide::Theirs => "--theirs",
+        }
+    }
+
+    /// Index stage holding this side.
+    fn stage(self) -> u8 {
+        match self {
+            ConflictSide::Ours => 2,
+            ConflictSide::Theirs => 3,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolveArgs {
+    pub repo_id: crate::types::RepoId,
+    pub paths: Vec<String>,
+    pub side: ConflictSide,
+}
+
 #[derive(Debug, Clone, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct HunkArgs {
@@ -34,6 +73,13 @@ pub struct HunkArgs {
     pub path: String,
     pub diff_hash: String,
     pub hunk_index: u32,
+    /// Changed lines of the hunk to act on, as indexes into its `lines`; the other lines are left alone. Absent: the
+    /// whole hunk.
+    #[serde(default)]
+    pub lines: Option<Vec<u32>>,
+    /// Context lines of the diff `diff_hash` and `hunk_index` refer to (absent: 3), as given to `diff_file`.
+    #[serde(default)]
+    pub context_lines: Option<u32>,
 }
 
 /// Maximum size of a lot of paths passed in argv to `git clean` (§3.2): number of paths and bytes, to stay
@@ -68,6 +114,17 @@ pub async fn discard_paths(state: &AppState, args: PathsArgs) -> AppResult<Statu
             .declares(&[ChangeKindEv::Index, ChangeKindEv::Worktree]),
     )?;
     let res = discard_paths_locked(&repo, args.paths).await;
+    g.finish();
+    res
+}
+
+pub async fn resolve_paths(state: &AppState, args: ResolveArgs) -> AppResult<StatusSnapshot> {
+    let repo = state.repo(args.repo_id)?;
+    let g = repo.begin_write(
+        WriteSpec::new("resolve", "Conflict resolution")
+            .declares(&[ChangeKindEv::Index, ChangeKindEv::Worktree]),
+    )?;
+    let res = resolve_paths_locked(&repo, args.paths, args.side).await;
     g.finish();
     res
 }
@@ -109,8 +166,8 @@ pub(crate) struct IndexView {
     file: Option<gix::index::File>,
     /// Gitlink paths (mode 160000).
     gitlinks: Vec<BString>,
-    /// Paths with an entrance to courses 1 to 3.
-    conflicted: BTreeSet<BString>,
+    /// Paths with an entrance to courses 1 to 3, with the stages present as a bit mask (bit `n` = stage `n`).
+    conflicted: BTreeMap<BString, u8>,
     /// Tracked paths that are not of the valid UTF-8 (raw bytes).
     non_utf8: Vec<BString>,
 }
@@ -128,7 +185,7 @@ impl IndexView {
         let mut view = IndexView {
             file: None,
             gitlinks: Vec::new(),
-            conflicted: BTreeSet::new(),
+            conflicted: BTreeMap::new(),
             non_utf8: Vec::new(),
         };
         if let Some(f) = &file {
@@ -138,7 +195,7 @@ impl IndexView {
                     view.gitlinks.push(path.to_owned());
                 }
                 if e.stage_raw() != 0 {
-                    view.conflicted.insert(path.to_owned());
+                    *view.conflicted.entry(path.to_owned()).or_insert(0) |= 1 << e.stage_raw();
                 }
                 if path.to_str().is_err() {
                     view.non_utf8.push(path.to_owned());
@@ -177,7 +234,14 @@ impl IndexView {
     }
 
     fn is_conflicted(&self, path: &str) -> bool {
-        self.conflicted.contains(BStr::new(path))
+        self.conflicted.contains_key(BStr::new(path))
+    }
+
+    /// The conflicted `path` has an entry at `stage` (a side that deleted the file has none).
+    fn has_stage(&self, path: &str, stage: u8) -> bool {
+        self.conflicted
+            .get(BStr::new(path))
+            .is_some_and(|mask| mask & (1 << stage) != 0)
     }
 
     /// For `"all"`: submodules and non-UTF-8 paths followed (crude bytes), plus conflicts if requested.
@@ -189,7 +253,7 @@ impl IndexView {
             .cloned()
             .collect();
         if with_conflicts {
-            v.extend(self.conflicted.iter().cloned());
+            v.extend(self.conflicted.keys().cloned());
         }
         v
     }
@@ -231,18 +295,22 @@ fn head_gitlinks(repo: &gix::Repository) -> Vec<BString> {
     out
 }
 
-async fn load_index_view(repo: &Arc<RepoHandle>) -> AppResult<IndexView> {
+pub(crate) async fn load_index_view(repo: &Arc<RepoHandle>) -> AppResult<IndexView> {
     let repo = repo.clone();
     tokio::task::spawn_blocking(move || IndexView::load(&repo.thread_repo())).await?
 }
 
 //
-fn invalid_paths(reason: &str, paths: Vec<String>) -> AppError {
+pub(crate) fn invalid_paths(reason: &str, paths: Vec<String>) -> AppError {
     let message = match reason {
         "submodule" => "A submodule is read-only: modify it from its own repository.",
         "non-utf8" => "Path no UTF-8: read only.",
         "conflicted" => "Conflicted file: resolve it, then mark it as resolved.",
+        "not-conflicted" => "The file is no longer in conflict.",
         "outside-workdir" => "Go outside the depot.",
+        "git-dir" => "Nothing can be written inside the .git folder.",
+        "symlink" => "The path goes through a symbolic link.",
+        "blocked" => "A file or folder is in the way.",
         _ => "Invalid path.",
     };
     AppError::invalid_argument_reason("paths", reason, message).with_detail("paths", json!(paths))
@@ -276,7 +344,7 @@ fn looks_non_utf8(view: &IndexView, workdir: &Path, path: &str) -> bool {
 }
 
 /// Guards of the six path commands: submodule, no UTF-8 and, if `refuse_conflicts`, conflict.
-fn check_paths(
+pub(crate) fn check_paths(
     view: &IndexView,
     workdir: &Path,
     paths: &[String],
@@ -571,6 +639,81 @@ async fn rename_sources(
         .collect())
 }
 
+// ── resolve
+
+/// Resolves conflicted `paths` with one side: its version of the file is checked out and staged, or, when that side
+/// deleted the file, the file is removed (`git rm`). Every path must still be conflicted in the index, which also
+/// confines the command to merges, rebases, cherry-picks, reverts and stash applications. The current content of the
+/// files (conflict markers, a resolution in progress) is saved first, like a discard.
+async fn resolve_paths_locked(
+    repo: &Arc<RepoHandle>,
+    paths: Vec<String>,
+    side: ConflictSide,
+) -> AppResult<StatusSnapshot> {
+    if paths.is_empty() {
+        return crate::read::status::status_snapshot(repo).await;
+    }
+    let view = load_index_view(repo).await?;
+    check_paths(&view, &repo.workdir, &paths, false)?;
+    let mut seen = BTreeSet::new();
+    let paths: Vec<String> = paths
+        .into_iter()
+        .filter(|p| seen.insert(p.clone()))
+        .collect();
+    let not_conflicted: Vec<String> = paths
+        .iter()
+        .filter(|p| !view.is_conflicted(p))
+        .cloned()
+        .collect();
+    if !not_conflicted.is_empty() {
+        return Err(invalid_paths("not-conflicted", not_conflicted));
+    }
+    // `git checkout --ours|--theirs` refuses the whole batch if one path lacks that side.
+    let (keep, delete): (Vec<String>, Vec<String>) = paths
+        .iter()
+        .cloned()
+        .partition(|p| view.has_stage(p, side.stage()));
+
+    backup_files(repo, &paths, DiscardSource::Resolve).await?;
+
+    let opts = |paths: &[String]| RunOpts {
+        stdin: Some(nul_paths(paths)),
+        command: Some("resolve_paths"),
+        ..Default::default()
+    };
+    if !keep.is_empty() {
+        run(
+            repo,
+            &[
+                "checkout",
+                side.flag(),
+                "--pathspec-from-file=-",
+                "--pathspec-file-nul",
+            ],
+            opts(&keep),
+        )
+        .await
+        .map_err(path_not_found)?;
+        run(
+            repo,
+            &["add", "--pathspec-from-file=-", "--pathspec-file-nul"],
+            opts(&keep),
+        )
+        .await
+        .map_err(path_not_found)?;
+    }
+    if !delete.is_empty() {
+        run(
+            repo,
+            &["rm", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"],
+            opts(&delete),
+        )
+        .await
+        .map_err(path_not_found)?;
+    }
+    crate::read::status::status_snapshot(repo).await
+}
+
 // ── discard
 
 /// Files targeted by a display: followed (restored from the index) and not tracked (removeed).
@@ -627,10 +770,10 @@ async fn discard_paths_locked(
         .chain(plan.untracked.iter())
         .cloned()
         .collect();
-    backup_files(repo, &to_save).await?;
+    backup_files(repo, &to_save, DiscardSource::Discard).await?;
 
     // 2. Tracks: repository from index. 3. Not followed: `git clean -f -q`, never -d nor -x.
-    // No undo input for a display: only `hash-object -w` ci-dessus backup catches it up.
+    // A discard has no undo entry: the backup above, listed by `discard_list`, is how it is taken back.
     if !plan.tracked.is_empty() {
         let opts = RunOpts {
             stdin: Some(nul_paths(&plan.tracked)),
@@ -711,60 +854,144 @@ pub(crate) fn c_quote_if_needed(path: &str) -> String {
     out
 }
 
-/// Writes the current content of the files in the worktree as blobs (`git hash-object -w
-/// --stdin-paths`), recoverable with `git fsck --lost-found`. A symbolic link is saved by the text of
-/// The caller does not change anything.
-async fn backup_files(repo: &Arc<RepoHandle>, paths: &[String]) -> AppResult<()> {
+/// A worktree file saved by [`backup_files`].
+struct Saved {
+    path: String,
+    kind: DiscardKind,
+    size: u64,
+}
+
+/// Writes the current content of the files in the worktree as blobs (`git hash-object -w --no-filters
+/// --stdin-paths`) and records them in the trash (`crate::trash`), so that they can be found by name; `git fsck
+/// --lost-found` finds them too. The bytes are stored as they are on disk, without the clean filters (end-of-line
+/// conversion, LFS), so that a restore writes back exactly what was discarded. A symbolic link is saved as the text of
+/// its target. The caller changes nothing: if this fails, nothing was discarded.
+pub(crate) async fn backup_files(
+    repo: &Arc<RepoHandle>,
+    paths: &[String],
+    source: DiscardSource,
+) -> AppResult<()> {
     let workdir = repo.workdir.clone();
     let owned: Vec<String> = paths.to_vec();
     let (files, links) = tokio::task::spawn_blocking(move || {
         let mut files = Vec::new();
         let mut links = Vec::new();
         for p in owned {
-            match std::fs::symlink_metadata(workdir.join(&p)) {
-                Ok(m) if m.file_type().is_symlink() => {
-                    if let Ok(target) = std::fs::read_link(workdir.join(&p)) {
-                        links.push(target.to_string_lossy().into_owned());
-                    }
+            let Ok(m) = std::fs::symlink_metadata(workdir.join(&p)) else {
+                continue;
+            };
+            if m.file_type().is_symlink() {
+                if let Ok(target) = std::fs::read_link(workdir.join(&p)) {
+                    let target = target.to_string_lossy().into_owned();
+                    let saved = Saved {
+                        path: p,
+                        kind: DiscardKind::Symlink,
+                        size: target.len() as u64,
+                    };
+                    links.push((saved, target));
                 }
-                Ok(m) if m.is_file() => files.push(p),
-                _ => {}
+            } else if m.is_file() {
+                let kind = if is_executable(&m) {
+                    DiscardKind::Executable
+                } else {
+                    DiscardKind::File
+                };
+                files.push(Saved {
+                    path: p,
+                    kind,
+                    size: m.len(),
+                });
             }
         }
         (files, links)
     })
     .await?;
 
+    // Each caller changes nothing when this fails; the message says what that caller was about to do.
+    let message = match source {
+        DiscardSource::Discard | DiscardSource::DiscardHunk => {
+            "The backup before cancellation failed: no changes were cancelled."
+        }
+        DiscardSource::Resolve => "The backup before resolving failed: no file was changed.",
+        DiscardSource::Restore => "The backup before restoring failed: no file was restored.",
+    };
     let fail = |e: AppError| {
         let mut e = e;
-        e.message = "The backup before cancellation failed: no changes were cancelled.".to_string();
+        e.message = message.to_string();
         e
     };
+    let mut oids: Vec<String> = Vec::new();
     if !files.is_empty() {
         let stdin: String = files
             .iter()
-            .map(|p| format!("{}\n", c_quote_if_needed(p)))
+            .map(|f| format!("{}\n", c_quote_if_needed(&f.path)))
             .collect();
         let opts = RunOpts {
             stdin: Some(stdin.into_bytes()),
             command: Some("discard_backup"),
             ..Default::default()
         };
-        run(repo, &["hash-object", "-w", "--stdin-paths"], opts)
-            .await
-            .map_err(fail)?;
+        let out = run(
+            repo,
+            &["hash-object", "-w", "--no-filters", "--stdin-paths"],
+            opts,
+        )
+        .await
+        .map_err(fail)?;
+        oids.extend(out.stdout_str().lines().map(|l| l.trim().to_string()));
     }
-    for target in links {
+    let mut link_oids: Vec<String> = Vec::new();
+    for (_, target) in &links {
         let opts = RunOpts {
-            stdin: Some(target.into_bytes()),
+            stdin: Some(target.clone().into_bytes()),
             command: Some("discard_backup"),
             ..Default::default()
         };
-        run(repo, &["hash-object", "-w", "--stdin"], opts)
+        let out = run(repo, &["hash-object", "-w", "--stdin"], opts)
             .await
             .map_err(fail)?;
+        link_oids.push(out.stdout_str().trim().to_string());
     }
+
+    // One oid per path, in order; anything else means the output was not understood: keep the blobs, skip the journal.
+    if oids.len() != files.len() || link_oids.len() != links.len() {
+        tracing::warn!("discard backup: unexpected hash-object output, trash not updated");
+        return Ok(());
+    }
+    let time = crate::trash::now_secs();
+    let entry = |saved: Saved, oid: String| DiscardedFile {
+        id: crate::trash::new_id(),
+        path: saved.path,
+        oid,
+        kind: saved.kind,
+        size: saved.size,
+        time,
+        source,
+    };
+    let entries: Vec<DiscardedFile> = files
+        .into_iter()
+        .zip(oids)
+        .map(|(f, oid)| entry(f, oid))
+        .chain(
+            links
+                .into_iter()
+                .zip(link_oids)
+                .map(|((f, _), oid)| entry(f, oid)),
+        )
+        .collect();
+    crate::trash::record(repo, entries);
     Ok(())
+}
+
+#[cfg(unix)]
+fn is_executable(m: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    m.permissions().mode() & 0o111 != 0
+}
+
+#[cfg(not(unix))]
+fn is_executable(_: &std::fs::Metadata) -> bool {
+    false
 }
 
 // ── Hunks
@@ -782,6 +1009,7 @@ async fn hunk_locked(
     op: HunkOp,
 ) -> AppResult<StatusSnapshot> {
     let path = args.path;
+    let context = crate::read::diff::context_lines(args.context_lines)?;
     let view = load_index_view(repo).await?;
     check_paths(&view, &repo.workdir, std::slice::from_ref(&path), true)?;
 
@@ -789,7 +1017,7 @@ async fn hunk_locked(
         HunkOp::Stage | HunkOp::Discard => DiffSource::Unstaged,
         HunkOp::Unstage => DiffSource::Staged,
     };
-    let diff = crate::read::diff::diff_for(repo, &path, &source, false).await?;
+    let diff = crate::read::diff::diff_with_context(repo, &path, &source, false, context).await?;
     if diff.hash != args.diff_hash {
         return Err(AppError::stale("diff"));
     }
@@ -810,9 +1038,15 @@ async fn hunk_locked(
             "File too big: load the diff first.",
         ));
     }
-    let hunk_index = args.hunk_index as usize;
-    let kind = patch_kind(repo, &view, &diff, &path, op).await?;
-    let patch = hunk_patch(&diff, hunk_index, kind)?;
+    // The patch is built from a one-hunk diff of its own (the whole hunk or the picked lines), so that the kind of
+    // file (whole file added or removed) is judged on what the patch really does.
+    let dir = match op {
+        HunkOp::Stage => Direction::Forward,
+        HunkOp::Unstage | HunkOp::Discard => Direction::Reverse,
+    };
+    let source = patch::narrow_hunk(&diff, args.hunk_index as usize, args.lines.as_deref(), dir)?;
+    let kind = patch_kind(repo, &view, &source, &path, op).await?;
+    let patch = hunk_patch(&source, 0, kind)?;
     let command = match op {
         HunkOp::Stage => "stage_hunk",
         HunkOp::Unstage => "unstage_hunk",
@@ -889,7 +1123,12 @@ async fn hunk_locked(
         }
         HunkOp::Discard => {
             // Same backup as `discard_paths`: if it fails, nothing is changed.
-            backup_files(repo, std::slice::from_ref(&path)).await?;
+            backup_files(
+                repo,
+                std::slice::from_ref(&path),
+                DiscardSource::DiscardHunk,
+            )
+            .await?;
             run(
                 repo,
                 &[

@@ -1,12 +1,14 @@
 <script lang="ts">
   // List of files of a commit or two commits (03 "Right hand panel") : `commit-details-file-item` (`data-path`,
   // `data-change`), "... truncated list" beyond 2,000 files. One click opens the diff file in the central area.
+  // Right click, Shift+F10 or the Menu key opens the file's menu (`commit-file`) when the parent names the commit the list belongs to.
   import { t, tp } from '$i18n/index';
+  import { contextMenu } from '$lib/actions/context-menu';
   import type { FileChange } from '$lib/ipc/types';
 
   let {
-    files, truncated = false, onopen, selectedPath = null,
-  }: { files: FileChange[]; truncated?: boolean; onopen: (file: FileChange) => void; selectedPath?: string | null } = $props();
+    files, truncated = false, onopen, selectedPath = null, menuOid = null,
+  }: { files: FileChange[]; truncated?: boolean; onopen: (file: FileChange) => void; selectedPath?: string | null; menuOid?: string | null } = $props();
 
   const LETTER: Record<string, string> = { added: 'A', modified: 'M', deleted: 'D', renamed: 'R', copied: 'C', typechange: 'T', untracked: 'U' };
 
@@ -34,6 +36,7 @@
           data-change={f.change}
           title={t('graph.details.openDiff', { path: f.path })}
           onclick={() => onopen(f)}
+          use:contextMenu={() => (menuOid ? { menu: 'commit-file', oid: menuOid, file: f } : null)}
         >
           <span class="letter" data-change={f.change} title={t(`graph.change.${f.change}`)}>{LETTER[f.change] ?? '?'}</span>
           <span class="name truncate">

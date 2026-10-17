@@ -1,15 +1,15 @@
 //! Generic IPC command splitter: `invoke(state, "stage_paths", json)`.
 //!
 //! Serves at the HTTP (`gitmini-bridge`) and contract tests. `src-tauri` displays the same
-//! 65 commands via `#[tauri::command]`. The list [`COMMANDS`] is that of
+//! 75 commands via `#[tauri::command]`. The list [`COMMANDS`] is that of
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
-/// The 65 orders in the contract.
-pub const COMMANDS: [&str; 65] = [
+/// The 75 orders in the contract.
+pub const COMMANDS: [&str; 75] = [
     "app_info",
     "repo_open",
     "repo_close",
@@ -23,6 +23,8 @@ pub const COMMANDS: [&str; 65] = [
     "commit_details",
     "status_get",
     "diff_file",
+    "file_log",
+    "file_blame",
     "refs_list",
     "reflog_list",
     "branch_compare",
@@ -34,6 +36,9 @@ pub const COMMANDS: [&str; 65] = [
     "stage_paths",
     "unstage_paths",
     "discard_paths",
+    "discard_list",
+    "discard_restore",
+    "resolve_paths",
     "stage_hunk",
     "unstage_hunk",
     "discard_hunk",
@@ -43,6 +48,11 @@ pub const COMMANDS: [&str; 65] = [
     "branch_checkout",
     "branch_rename",
     "branch_delete",
+    "branch_reset",
+    "tag_create",
+    "tag_delete",
+    "tag_push",
+    "merge_preview",
     "merge_branch",
     "merge_continue",
     "merge_abort",
@@ -109,6 +119,8 @@ pub async fn invoke(state: &AppState, command: &str, args: Value) -> AppResult<V
         "commit_details" => ser(crate::read::diff::commit_details(state, de(args)?).await?),
         "status_get" => ser(crate::read::status::status_get(state, de(args)?).await?),
         "diff_file" => ser(crate::read::diff::diff_file(state, de(args)?).await?),
+        "file_log" => ser(crate::read::history::file_log(state, de(args)?).await?),
+        "file_blame" => ser(crate::read::history::file_blame(state, de(args)?).await?),
         "refs_list" => ser(crate::read::refs::refs_list(state, de(args)?).await?),
         "reflog_list" => ser(crate::read::refs::reflog_list(state, de(args)?).await?),
         "branch_compare" => ser(crate::read::refs::branch_compare(state, de(args)?).await?),
@@ -122,6 +134,9 @@ pub async fn invoke(state: &AppState, command: &str, args: Value) -> AppResult<V
         "stage_paths" => ser(crate::write::index::stage_paths(state, de(args)?).await?),
         "unstage_paths" => ser(crate::write::index::unstage_paths(state, de(args)?).await?),
         "discard_paths" => ser(crate::write::index::discard_paths(state, de(args)?).await?),
+        "discard_list" => ser(crate::trash::discard_list(state, de(args)?).await?),
+        "discard_restore" => ser(crate::write::restore::discard_restore(state, de(args)?).await?),
+        "resolve_paths" => ser(crate::write::index::resolve_paths(state, de(args)?).await?),
         "stage_hunk" => ser(crate::write::index::stage_hunk(state, de(args)?).await?),
         "unstage_hunk" => ser(crate::write::index::unstage_hunk(state, de(args)?).await?),
         "discard_hunk" => ser(crate::write::index::discard_hunk(state, de(args)?).await?),
@@ -133,6 +148,11 @@ pub async fn invoke(state: &AppState, command: &str, args: Value) -> AppResult<V
         "branch_checkout" => ser(crate::write::branch::branch_checkout(state, de(args)?).await?),
         "branch_rename" => ser(crate::write::branch::branch_rename(state, de(args)?).await?),
         "branch_delete" => ser(crate::write::branch::branch_delete(state, de(args)?).await?),
+        "branch_reset" => ser(crate::write::reset::branch_reset(state, de(args)?).await?),
+        "tag_create" => ser(crate::write::tag::tag_create(state, de(args)?).await?),
+        "tag_delete" => ser(crate::write::tag::tag_delete(state, de(args)?).await?),
+        "tag_push" => ser(crate::write::tag::tag_push(state, de(args)?).await?),
+        "merge_preview" => ser(crate::write::merge::merge_preview(state, de(args)?).await?),
         "merge_branch" => ser(crate::write::merge::merge_branch(state, de(args)?).await?),
         "merge_continue" => ser(crate::write::merge::merge_continue(state, de(args)?).await?),
         "merge_abort" => ser(crate::write::merge::merge_abort(state, de(args)?).await?),
@@ -181,10 +201,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sixty_four_unique_commands() {
+    fn seventy_five_unique_commands() {
         let mut v = COMMANDS.to_vec();
         v.sort_unstable();
         v.dedup();
-        assert_eq!(v.len(), 65);
+        assert_eq!(v.len(), 75);
     }
 }

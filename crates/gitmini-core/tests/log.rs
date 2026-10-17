@@ -414,6 +414,41 @@ fn graph_03_search_prefixes_override_fields() {
     );
 }
 
+/// The palette (`#`) lists what `log_search` finds with a subject for each. The search only returns `oid` and `row`, so
+/// the subject of a commit the graph has not loaded is read back with a one-row `log_page` at that `row`: that page
+/// must be exactly the matched commit, and it carries the summary and the refs the palette shows.
+#[test]
+fn graph_03_search_match_reads_back_as_a_single_row() {
+    let repo = synthetic(&GenSpec {
+        commits: 3_000,
+        branches: 30,
+        merges: 150,
+        ..GenSpec::default()
+    });
+    let o = open_complete(&repo.path);
+    let res = search(&o, "detailed topic", None, Some(15));
+    assert_eq!(res.matches.len(), 15);
+    assert!(res.truncated, "there are more than 15 such commits");
+    let all = all_rows(&o.repo, 500);
+    for m in &res.matches {
+        let page = fetch_page(&o.repo, None, Some(m.row), Some(1));
+        assert_eq!(page.start, m.row, "the page starts at the matched row");
+        assert_eq!(page.rows.len(), 1, "one row, not a page");
+        let row = &page.rows[0];
+        assert_eq!(row.oid, m.oid);
+        assert!(
+            row.summary.contains("detailed topic"),
+            "subject of {}: {:?}",
+            m.oid,
+            row.summary
+        );
+        assert_eq!(
+            row.refs, all[m.row as usize].refs,
+            "same refs as in the full listing"
+        );
+    }
+}
+
 /// GRAPH-03 / B15 — `limit`: the course stops and `truncated` is true only if results remain.
 #[test]
 fn graph_03_search_limit_and_truncated() {

@@ -120,6 +120,18 @@ impl GitInfo {
     pub fn program(&self) -> PathBuf {
         self.path.clone().unwrap_or_else(|| PathBuf::from("git"))
     }
+
+    /// The detected git is at least `(major, minor)`. `false` when the version is unknown.
+    pub fn at_least(&self, min: (u32, u32)) -> bool {
+        let Some(version) = &self.version else {
+            return false;
+        };
+        let mut nums = version.split('.').map(|p| p.parse::<u32>());
+        match (nums.next(), nums.next()) {
+            (Some(Ok(major)), Some(Ok(minor))) => (major, minor) >= min,
+            _ => false,
+        }
+    }
 }
 
 /// `git version 2.54.0 (Apple Git-157)` / `git version 2.45.1.windows.1` → (2, 54, 0).

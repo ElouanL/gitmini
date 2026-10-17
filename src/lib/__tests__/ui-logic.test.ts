@@ -126,7 +126,7 @@ describe('registre d’actions', () => {
 
   it("list of all present 03", () => {
     // pull / push (git.pull, git.pullFfOnly, git.pullRebase, git.push) are provided by the remote domain: see app.test.ts
-    for (const id of ['repo.open', 'repo.clone', 'git.fetch', 'branch.create', 'stash.save', 'stash.pop', 'undo.last', 'view.reflog', 'github.login', 'github.logout', 'settings.open', 'theme.toggle']) {
+    for (const id of ['repo.open', 'repo.clone', 'git.fetch', 'branch.create', 'stash.save', 'stash.pop', 'undo.last', 'view.reflog', 'sidebar.filter', 'github.login', 'github.logout', 'settings.open', 'theme.toggle']) {
       expect(getAction(id), id).toBeDefined();
     }
   });
@@ -141,6 +141,7 @@ describe('palette', () => {
     expect(all.map((e) => e.id)).not.toContain('palette.open');
     expect(filterCommands(all, 'FETCH').map((e) => e.id)).toEqual(['git.fetch']);
     expect(filterCommands(all, "settings").map((e) => e.id)).toEqual(['settings.open']);
+    expect(filterCommands(all, 'filter branches').map((e) => e.id)).toEqual(['sidebar.filter']);
     expect(filterCommands(all, 'zzz')).toEqual([]);
     refs.applyStashes([]);
     expect(availableCommands().map((e) => e.id)).not.toContain('stash.pop'); // Pop without stash: not listed
@@ -153,14 +154,15 @@ describe('palette', () => {
     expect(ids).toContain('theme.toggle');
     expect(ids).not.toContain('git.fetch');
     expect(ids).not.toContain('undo.last');
+    expect(ids).not.toContain('sidebar.filter'); // nothing to filter without a repository
   });
 });
 
 describe('context menus (03)', () => {
-  it("input identifiers follow the closed list of 01 §5.7; no reset-*", () => {
-    expect(MENU_ITEM_IDS).toHaveLength(30);
-    expect(MENU_ITEM_IDS.some((i) => i.startsWith('reset'))).toBe(false);
-    expect(MENU_IDS).toEqual(['commit', 'branch', 'remote-branch', 'remote', 'tag', 'stash', 'wip', 'wt-file']);
+  it("input identifiers follow the closed list of 01 §5.7; a single reset entry", () => {
+    expect(MENU_ITEM_IDS).toHaveLength(37);
+    expect(MENU_ITEM_IDS.filter((i) => i.startsWith('reset'))).toEqual(['reset']);
+    expect(MENU_IDS).toEqual(['commit', 'branch', 'remote-branch', 'remote', 'tag', 'stash', 'wip', 'wt-file', 'commit-file']);
     for (const m of MENU_IDS) for (const id of menuItemIds(m)) expect(MENU_ITEM_IDS).toContain(id);
   });
 

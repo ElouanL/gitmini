@@ -37,6 +37,7 @@ describe("ui.ts: selectors and shortcuts (pure parts)", () => {
     assert.equal(cdpKeyEvent('Mod+k'), null);
     assert.equal(cdpKeyEvent('Mod+Enter'), null);
     assert.equal(cdpKeyEvent('3'), null, "without modifier, normal strike is suitable");
+    assert.deepEqual(cdpKeyEvent('/'), { key: '/', code: 'Slash', windowsVirtualKeyCode: 191, modifiers: 0 }, 'a bare slash is typed as Shift+Slash by chromedriver on some layouts');
     assert.equal(cdpKeyEvent('Escape'), null);
   });
 

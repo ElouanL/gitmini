@@ -662,6 +662,10 @@ pub enum UndoKind {
     Pull,
     BranchDelete,
     StashDrop,
+    ResetSoft,
+    ResetMixed,
+    ResetKeep,
+    TagDelete,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type, PartialEq, Eq)]

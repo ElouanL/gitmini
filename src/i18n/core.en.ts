@@ -161,6 +161,7 @@ export default {
   'sidebar.tags': 'Tags',
   'sidebar.stashes': 'Stashes',
   'sidebar.createBranch': 'Create a branch',
+  'sidebar.createTag': 'Create a tag',
   'sidebar.addRemote': 'Add Remote',
   'sidebar.saveStash': "Stash changes...",
   'sidebar.ahead': "{n} commit(s) ahead",
@@ -199,6 +200,7 @@ export default {
   'menu.item.checkout': 'Checkout',
   'menu.item.checkout-detached': "Checkout (Detached HEAD)",
   'menu.item.create-branch': 'Create a branch...',
+  'menu.item.create-tag': 'Create a tag...',
   'menu.item.cherry-pick': 'Cherry-pick',
   'menu.item.revert': 'Revert',
   'menu.item.rebase-onto': 'Rebase on...',
@@ -225,12 +227,6 @@ export default {
   'menu.item.stash-paths': "Putting these files aside...",
   'menu.item.open-external': 'Open in Editor',
   'menu.item.discard-all': "Discard all changes",
-
-  // ── Palette
-  'palette.label': "Order Palette",
-  'palette.placeholder': 'Type a command...',
-  'palette.empty': "No commands",
-  'palette.hint': "↑ю to navigate · Input to run · Escape to close",
 
   // - - - Actions (palette and info-bubble labels)
   'action.noRepo': 'No repository open',
@@ -297,6 +293,7 @@ export default {
   'undo.reason.exists': "The state to be restored already exists.",
   'undo.reason.exists.branch': "The {branch} branch already exists.",
   'undo.reason.exists.stash': 'This stash is already present.',
+  'undo.reason.exists.tag': "The {tag} tag already exists.",
   'undo.reason.object-missing': 'The original state no longer exists in the repository.',
 
   // - - - Adjustments

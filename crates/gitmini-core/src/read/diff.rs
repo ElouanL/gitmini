@@ -1,6 +1,6 @@
 //! `diff_file`, `commit_details` (, ).
 //!
-//! * `build_hunks` (pur): histogram of imara-diff + git slip heuristic, 3 context lines, hunks and lines
+//! * `build_hunks` (pur): histogram of imara-diff + git slip heuristic, 3 context lines by default (`contextLines`), hunks and lines
 //!   in contract format (`FileDiff`), marker `noeol`.
 //! * `hunk_to_patch` (pur): patch of** one** hunk for `git apply` (used by `stage_hunk` & co, which never receive any
 //!   patch text of the front).
@@ -26,8 +26,11 @@ use crate::types::{
     FileChange, FileDiff, Hunk, Oid, RepoId, Signature, StashPart, SubmoduleDiff, TooLarge,
 };
 
-/// Context lines around a hunk (05: "3 context lines").
+/// Context lines around a hunk when the request names none (05: "3 context lines", the default of `git diff`).
 pub const CONTEXT_LINES: usize = 3;
+/// Largest `contextLines` accepted. The smallest is 1: a hunk without context cannot be applied back (`git apply`
+/// anchors an unanchored change at the end of the file).
+pub const MAX_CONTEXT_LINES: u32 = 100;
 /// Beyond, `tooLarge` (except `force`): 1 Mio or 20,000 lines on one side (05, ).
 pub const TOO_LARGE_BYTES: u64 = 1024 * 1024;
 pub const TOO_LARGE_LINES: u64 = 20_000;
@@ -38,7 +41,7 @@ pub const MAX_COMMIT_FILES: usize = 2000;
 /// Bytes examined for binary content (byte NUL).
 pub const BINARY_PROBE: usize = 8000;
 
-const MODE_COMMIT: u32 = 0o160000;
+pub(crate) const MODE_COMMIT: u32 = 0o160000;
 const NOEOL_TEXT: &str = "\\ No newline at end of file";
 
 #[derive(Debug, Clone, Deserialize, Type)]
@@ -48,6 +51,9 @@ pub struct DiffFileArgs {
     pub path: String,
     pub source: DiffSource,
     pub force: Option<bool>,
+    /// Unchanged lines kept around each change, 1 to `MAX_CONTEXT_LINES` (absent: 3). `stage_hunk` & co. must be given
+    /// the value the displayed diff was read with: the hunks, and so their indexes and hash, depend on it.
+    pub context_lines: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize, Type)]
@@ -60,7 +66,28 @@ pub struct CommitDetailsArgs {
 
 pub async fn diff_file(state: &AppState, args: DiffFileArgs) -> AppResult<FileDiff> {
     let repo = state.repo(args.repo_id)?;
-    diff_for(&repo, &args.path, &args.source, args.force.unwrap_or(false)).await
+    let context = context_lines(args.context_lines)?;
+    diff_with_context(
+        &repo,
+        &args.path,
+        &args.source,
+        args.force.unwrap_or(false),
+        context,
+    )
+    .await
+}
+
+/// The `contextLines` of a request: absent is the default, otherwise 1 to `MAX_CONTEXT_LINES`.
+pub fn context_lines(requested: Option<u32>) -> AppResult<usize> {
+    match requested {
+        None => Ok(CONTEXT_LINES),
+        Some(n) if (1..=MAX_CONTEXT_LINES).contains(&n) => Ok(n as usize),
+        Some(_) => Err(AppError::invalid_argument_reason(
+            "contextLines",
+            "out-of-range",
+            format!("Context lines: a number from 1 to {MAX_CONTEXT_LINES} is expected."),
+        )),
+    }
 }
 
 pub async fn commit_details(state: &AppState, args: CommitDetailsArgs) -> AppResult<CommitDetails> {
@@ -75,20 +102,32 @@ pub async fn commit_details(state: &AppState, args: CommitDetailsArgs) -> AppRes
     Ok((*details).clone())
 }
 
-/// Diff from a file (used by `diff_file` and `stage_hunk` & co, which build the backend side patch).
-/// diffs `unstaged` / `staged` / `conflict` are always recalculated; those of immutable sources (commit, beach,
-/// stash) go through the LRU `cache.rs`.
+/// Diff from a file with the default context (3 lines).
 pub async fn diff_for(
     repo: &Arc<RepoHandle>,
     path: &str,
     source: &DiffSource,
     force: bool,
 ) -> AppResult<FileDiff> {
+    diff_with_context(repo, path, source, force, CONTEXT_LINES).await
+}
+
+/// Diff from a file with `context` unchanged lines around each change (used by `diff_file` and `stage_hunk` & co,
+/// which build the backend side patch). diffs `unstaged` / `staged` / `conflict` are always recalculated; those of
+/// immutable sources (commit, beach, stash) go through the LRU `cache.rs`, one entry per context size.
+pub async fn diff_with_context(
+    repo: &Arc<RepoHandle>,
+    path: &str,
+    source: &DiffSource,
+    force: bool,
+    context: usize,
+) -> AppResult<FileDiff> {
     repo.ensure_present()?;
     let repo = repo.clone();
     let path = path.to_string();
     let source = source.clone();
-    tokio::task::spawn_blocking(move || diff_blocking(&repo, &path, &source, force)).await?
+    tokio::task::spawn_blocking(move || diff_blocking(&repo, &path, &source, force, context))
+        .await?
 }
 
 //
@@ -515,6 +554,34 @@ pub fn find_commit<'r>(repo: &'r gix::Repository, id: gix::ObjectId) -> AppResul
     repo.find_commit(id).map_err(|_| commit_not_found(id))
 }
 
+/// The commits at the border of a shallow repository (`<common_dir>/shallow`); empty for any other.
+pub(crate) fn shallow_border(repo: &gix::Repository) -> std::collections::HashSet<gix::ObjectId> {
+    repo.shallow_commits()
+        .ok()
+        .flatten()
+        .map(|c| c.iter().copied().collect())
+        .unwrap_or_default()
+}
+
+/// Parents of `commit` as the history sees them: none for a commit at the border of a shallow repository, whose parents'
+/// objects are not there (git reads it as a root, and so does the graph).
+pub(crate) fn parent_ids_of(
+    repo: &gix::Repository,
+    commit: &gix::Commit<'_>,
+) -> Vec<gix::ObjectId> {
+    let id = commit.id;
+    let border = repo
+        .shallow_commits()
+        .ok()
+        .flatten()
+        .is_some_and(|c| c.iter().any(|b| *b == id));
+    if border {
+        Vec::new()
+    } else {
+        commit.parent_ids().map(|p| p.detach()).collect()
+    }
+}
+
 pub fn commit_tree(repo: &gix::Repository, commit: gix::ObjectId) -> AppResult<gix::ObjectId> {
     let c = find_commit(repo, commit)?;
     Ok(c.tree_id().map_err(gix_err)?.detach())
@@ -652,13 +719,16 @@ fn diff_blocking(
     path: &str,
     source: &DiffSource,
     force: bool,
+    context: usize,
 ) -> AppResult<FileDiff> {
     let _span = tracing::info_span!("diff").entered();
-    let cache_key = immutable_key(source).map(|s| diff_key(&s, path, force));
-    if let Some(key) = &cache_key
-        && let Some(hit) = h.cache.lock().unwrap().get_diff(key)
-    {
-        return Ok((*hit).clone());
+    let cache_key = immutable_key(source).map(|s| diff_key(&s, path, force, context));
+    if let Some(key) = &cache_key {
+        let mut cache = h.cache.lock().unwrap();
+        cache.sync_shallow(&h.common_dir);
+        if let Some(hit) = cache.get_diff(key) {
+            return Ok((*hit).clone());
+        }
     }
     let repo = if cache_key.is_some() {
         h.thread_repo()
@@ -667,7 +737,7 @@ fn diff_blocking(
     };
     let mut repo = repo;
     repo.object_cache_size_if_unset(16 * 1024 * 1024);
-    let diff = compute_diff(h, &repo, path, source, force)?;
+    let diff = compute_diff(h, &repo, path, source, force, context)?;
     if let Some(key) = cache_key {
         h.cache
             .lock()
@@ -750,7 +820,7 @@ fn resolve_sides(
         DiffSource::Commit { oid, parent } => {
             let id = resolve_commit_oid(repo, oid)?;
             let commit = find_commit(repo, id)?;
-            let parents: Vec<gix::ObjectId> = commit.parent_ids().map(|p| p.detach()).collect();
+            let parents = parent_ids_of(repo, &commit);
             let n = parent.unwrap_or(1) as usize;
             if n == 0 || (n > parents.len() && !(parents.is_empty() && n == 1)) {
                 return Err(AppError::invalid_argument_reason(
@@ -893,6 +963,7 @@ fn compute_diff(
     path: &str,
     source: &DiffSource,
     force: bool,
+    context: usize,
 ) -> AppResult<FileDiff> {
     let (r, bpath) = resolve_sides(h, repo, path, source)?;
     let Resolved {
@@ -1044,7 +1115,7 @@ fn compute_diff(
     if plain {
         base.hunks = build_plain_hunk(new_bytes);
     } else {
-        let (hunks, stats) = build_hunks(old_bytes, new_bytes, CONTEXT_LINES);
+        let (hunks, stats) = build_hunks(old_bytes, new_bytes, context);
         base.hunks = hunks;
         base.stats = stats;
     }
@@ -1142,7 +1213,7 @@ pub enum Renames {
     Configured,
 }
 
-fn raw_tree_changes(
+pub(crate) fn raw_tree_changes(
     repo: &gix::Repository,
     old: Option<gix::ObjectId>,
     new: Option<gix::ObjectId>,
@@ -1164,12 +1235,12 @@ fn raw_tree_changes(
         .map_err(gix_err)
 }
 
-fn mode_class(mode: u32) -> u32 {
+pub(crate) fn mode_class(mode: u32) -> u32 {
     mode & 0o170000
 }
 
 /// `(binaire, taille)` of a blob and, if both sides are text, additions / deletions.
-fn blob_stats(
+pub(crate) fn blob_stats(
     repo: &gix::Repository,
     old: Option<gix::ObjectId>,
     new: Option<gix::ObjectId>,
@@ -1337,7 +1408,7 @@ pub fn tree_changes(
 // commit_details
 //
 
-fn signature_of(sig: gix::actor::SignatureRef<'_>) -> Signature {
+pub(crate) fn signature_of(sig: gix::actor::SignatureRef<'_>) -> Signature {
     let time = sig.time().unwrap_or_default();
     Signature {
         name: sig.name.to_str_lossy().into_owned(),
@@ -1355,14 +1426,18 @@ pub fn commit_details_blocking(
 ) -> AppResult<Arc<CommitDetails>> {
     let _span = tracing::info_span!("commit_details").entered();
     let key = commit_key(oid, against);
-    if let Some(hit) = h.cache.lock().unwrap().commits.get(&key).cloned() {
-        return Ok(hit);
+    {
+        let mut cache = h.cache.lock().unwrap();
+        cache.sync_shallow(&h.common_dir);
+        if let Some(hit) = cache.commits.get(&key).cloned() {
+            return Ok(hit);
+        }
     }
     let mut repo = h.thread_repo();
     repo.object_cache_size_if_unset(16 * 1024 * 1024);
     let id = resolve_commit_oid(&repo, oid)?;
     let commit = find_commit(&repo, id)?;
-    let parents: Vec<gix::ObjectId> = commit.parent_ids().map(|p| p.detach()).collect();
+    let parents = parent_ids_of(&repo, &commit);
     let tree = commit.tree_id().map_err(gix_err)?.detach();
     let old_tree = match against {
         Some(a) => Some(commit_tree(&repo, resolve_commit_oid(&repo, a)?)?),

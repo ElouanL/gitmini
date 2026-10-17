@@ -751,6 +751,7 @@ async fn gh_02_fetch_with_token_sends_the_credential_and_other_host_gets_nothing
             op_id: op_id(),
             remote: None,
             prune: true,
+            background: None,
         },
     )
     .await

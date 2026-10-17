@@ -5,6 +5,7 @@
 mod read_support;
 
 use gitmini_core::read::diff::{CommitDetailsArgs, DiffFileArgs, commit_details, diff_file};
+use gitmini_core::read::history::{FileBlameArgs, FileLogArgs, file_blame, file_log};
 use gitmini_core::read::log::{LogPageArgs, LogSearchArgs, log_page, log_search};
 use gitmini_core::read::opstate::read_opstate;
 use gitmini_core::read::refs::{
@@ -12,6 +13,7 @@ use gitmini_core::read::refs::{
     remote_list, stash_list, stash_show,
 };
 use gitmini_core::read::status::{RepoArgs, all_unstaged_paths, status_get, status_snapshot};
+use gitmini_core::trash::{DiscardListArgs, discard_list};
 use gitmini_core::types::{ConflictView, DiffSource, StashPart};
 use gitmini_core::undo::{UndoPeekArgs, undo_peek};
 use gitmini_core::write::runner::spawn_count_total;
@@ -195,7 +197,8 @@ async fn sec_01_no_read_command_spawns_git() {
                     repo_id: id,
                     path: path.into(),
                     source,
-                    force: None
+                    force: None,
+                    context_lines: None,
                 }
             )
             .await
@@ -288,6 +291,45 @@ async fn sec_01_no_read_command_spawns_git() {
             .await
             .unwrap()
     );
+    no_spawn!(
+        "discard_list",
+        discard_list(state, DiscardListArgs { repo_id: id })
+            .await
+            .unwrap()
+    );
+    // file history and blame: gix only, renames and all
+    let log = no_spawn!(
+        "file_log",
+        file_log(
+            state,
+            FileLogArgs {
+                repo_id: id,
+                path: "a.txt".into(),
+                rev: None,
+                follow: None,
+                limit: None,
+                cursor: None
+            }
+        )
+        .await
+        .unwrap()
+    );
+    assert_eq!(log.entries.len(), 1);
+    let blame = no_spawn!(
+        "file_blame",
+        file_blame(
+            state,
+            FileBlameArgs {
+                repo_id: id,
+                path: "a.txt".into(),
+                rev: None,
+                force: None
+            }
+        )
+        .await
+        .unwrap()
+    );
+    assert_eq!(blame.lines, ["1", "2", "3"]);
 }
 
 /// The only subprocess allowed for playback: the user's `filter.<nom>.clean` driver, launched by gix
@@ -330,6 +372,7 @@ async fn sec_01_user_clean_filter_is_the_only_allowed_subprocess() {
             path: "f.dat".into(),
             source: DiffSource::Unstaged,
             force: None,
+            context_lines: None,
         },
     )
     .await

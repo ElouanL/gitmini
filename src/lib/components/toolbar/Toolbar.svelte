@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte';
   import { captureStores } from '$lib/stores/context';
   const { reportError, graph, op, repo, status, undo, ui } = captureStores();
   // Toolbar (44 px, 03): repository, current branch, cancel/reflog, fetch/pull/push, branch, stash, search, palette, GitHub,
@@ -16,6 +17,7 @@
   import Icon from '../ui/Icon.svelte';
   import type { IconName } from '../ui/icons';
   import MenuList, { type MenuListItem } from '../menu/MenuList.svelte';
+  import { filterTerms, folderKey, folderPaths, matchesTerms, sectionKey } from '../sidebar/ref-tree';
 
   const head = $derived(repo.head);
   const hasRepo = $derived(repo.isOpen);
@@ -93,7 +95,21 @@
     }
   }
 
-  function selectCurrentBranch(): void {
+  /** Shows the current branch in the sidebar (open section and folders, a filter that hides it cleared) and focuses it. */
+  async function selectCurrentBranch(): Promise<void> {
+    const name = head && !head.detached && !head.unborn ? head.branch : null;
+    if (name) {
+      const terms = filterTerms(ui.sidebarFilter);
+      if (terms.length > 0 && !matchesTerms(name, terms)) ui.setSidebarFilter('');
+      // Open or closed is the stored state, or while filtering what was closed since the last keystroke.
+      ui.sidebarOpen.local = true;
+      ui.sidebarFilterClosed[sectionKey('local')] = false;
+      for (const path of folderPaths(name)) {
+        ui.sidebarFoldersOpen[folderKey('local', path)] = true;
+        ui.sidebarFilterClosed[folderKey('local', path)] = false;
+      }
+      await tick();
+    }
     const el = document.querySelector<HTMLElement>('[data-testid="sidebar-branch-item"][data-current="true"]');
     el?.focus();
     el?.scrollIntoView?.({ block: 'nearest' });
@@ -133,7 +149,7 @@
   </div>
 
   <!-- Branche courante -->
-  <button type="button" class="tb branch-current" data-testid="toolbar-current-branch" disabled={!hasRepo} title={t('toolbar.currentBranch')} onclick={selectCurrentBranch}>
+  <button type="button" class="tb branch-current" data-testid="toolbar-current-branch" disabled={!hasRepo} title={t('toolbar.currentBranch')} onclick={() => void selectCurrentBranch()}>
     <Icon name="branch" />
     <span class="lbl-always truncate">{branchLabel}</span>
   </button>

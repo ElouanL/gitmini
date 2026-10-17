@@ -122,6 +122,7 @@ html[data-gr-drag-blocked] [data-testid='sidebar-remote-branch-item'] { cursor: 
   position: fixed; z-index: var(--z-menu, 1000); display: flex; flex-direction: column; min-width: 240px; max-width: 360px; padding: 4px;
   border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-elev); box-shadow: var(--shadow);
 }
+.gr-drop-list { display: flex; flex-direction: column; }
 .gr-drop-menu button {
   display: block; padding: 6px 10px; border: 0; border-radius: var(--radius-sm); background: transparent; text-align: left; color: var(--fg);
 }

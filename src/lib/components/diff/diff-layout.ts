@@ -3,6 +3,7 @@
 // Pure, tested functions.
 import type { DiffLine, FileDiff, Hunk } from '$lib/ipc/types';
 import { buildTops, DIFF_VIRTUALIZE_THRESHOLD } from '../wt/virtual';
+import { findBlocks, markBlock, type BlockMarks, type Range } from './intraline';
 
 export const LINE_HEIGHT = 20;
 export const HEADER_HEIGHT = 26;
@@ -19,6 +20,8 @@ export interface HunkRow {
 export interface LineRow {
   type: 'line';
   hunkIndex: number;
+  /** Index of the line in its hunk's `lines`: what `lines` of `stage_hunk` & co. refers to. */
+  lineIndex: number;
   kind: DiffLine['kind'];
   oldNo: number | null;
   newNo: number | null;
@@ -56,11 +59,12 @@ export function buildRows(hunks: readonly Hunk[], opts: { markers?: boolean } = 
   const rows: DiffRow[] = [];
   hunks.forEach((h, hunkIndex) => {
     rows.push({ type: 'hunk', hunkIndex, header: h.header });
-    for (const l of h.lines) {
+    h.lines.forEach((l, lineIndex) => {
       const d = displayLine(l.text);
       rows.push({
         type: 'line',
         hunkIndex,
+        lineIndex,
         kind: l.kind,
         oldNo: l.oldNo,
         newNo: l.newNo,
@@ -69,7 +73,7 @@ export function buildRows(hunks: readonly Hunk[], opts: { markers?: boolean } = 
         crlf: l.kind === 'noeol' ? false : d.crlf,
         marker: opts.markers === true && l.kind !== 'noeol' && isConflictMarker(d.text),
       });
-    }
+    });
   });
   return rows;
 }
@@ -95,6 +99,43 @@ export interface DiffLayout {
   virtual: boolean;
   /** Rank of each Hunk's header line. */
   hunkRows: number[];
+  /**
+   * Changed character ranges of row `index` (a removed line and its added counterpart), for intra-line highlighting;
+   * `null` for any other row. Worked out per block of changes the first time one of its rows is asked for, so a
+   * virtualized diff only pays for the rows that get drawn.
+   */
+  marks(index: number): readonly Range[] | null;
+}
+
+/** `DiffLayout.marks` over `rows`. */
+function markerOf(rows: readonly DiffRow[]): (index: number) => readonly Range[] | null {
+  const blocks = findBlocks(rows.map((r) => (r.type === 'hunk' ? 'hunk' : r.kind)));
+  if (blocks.length === 0) return () => null;
+  const blockOf = new Map<number, number>();
+  blocks.forEach((b, k) => {
+    for (const i of [...b.dels, ...b.adds]) blockOf.set(i, k);
+  });
+  const marks = new Map<number, readonly Range[]>();
+  const done = new Set<number>();
+  const text = (i: number): string => (rows[i] as LineRow).text;
+  return (index) => {
+    const k = blockOf.get(index);
+    if (k === undefined) return null;
+    if (!done.has(k)) {
+      done.add(k);
+      const { dels, adds } = blocks[k]!;
+      const found = markBlock(dels.map(text), adds.map(text));
+      const keep = (rowsOf: readonly number[], ranges: BlockMarks['old']): void => {
+        rowsOf.forEach((row, i) => {
+          const r = ranges[i];
+          if (r) marks.set(row, r);
+        });
+      };
+      keep(dels, found.old);
+      keep(adds, found.new);
+    }
+    return marks.get(index) ?? null;
+  };
 }
 
 export function layoutDiff(diff: Pick<FileDiff, 'hunks'>, opts: { markers?: boolean } = {}): DiffLayout {
@@ -104,7 +145,7 @@ export function layoutDiff(diff: Pick<FileDiff, 'hunks'>, opts: { markers?: bool
   rows.forEach((r, i) => {
     if (r.type === 'hunk') hunkRows.push(i);
   });
-  return { rows, tops, total, maxCols: maxColumns(rows), virtual: rows.length >= DIFF_VIRTUALIZE_THRESHOLD, hunkRows };
+  return { rows, tops, total, maxCols: maxColumns(rows), virtual: rows.length >= DIFF_VIRTUALIZE_THRESHOLD, hunkRows, marks: markerOf(rows) };
 }
 
 /** First line number of `<<<<<<<` marker (for `open_external { line }`), if the diff is the `markers` view. */

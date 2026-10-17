@@ -1807,7 +1807,7 @@ fn read_meta(
 }
 
 /// First unempty line of the message, truncated to 200 characters.
-fn summarize(message: &[u8]) -> String {
+pub(crate) fn summarize(message: &[u8]) -> String {
     let text = String::from_utf8_lossy(message);
     let line = text.trim_start().lines().next().unwrap_or("").trim_end();
     if line.chars().count() > SUMMARY_MAX_CHARS {

@@ -5,11 +5,15 @@ pub mod commit;
 pub mod errors;
 pub mod index;
 pub mod merge;
+mod patch;
 pub mod pick;
 pub mod rebase;
 pub mod remote;
+pub mod reset;
+pub mod restore;
 pub mod runner;
 pub mod stash;
+pub mod tag;
 pub mod todo;
 pub mod undo;
 

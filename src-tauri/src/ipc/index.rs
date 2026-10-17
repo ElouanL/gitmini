@@ -1,8 +1,9 @@
-//! Index [W] : `stage_paths`, `unstage_paths`, `discard_paths`, `stage_hunk`, `unstage_hunk`, `discard_hunk`
+//! Index [W] : `stage_paths`, `unstage_paths`, `discard_paths`, `resolve_paths`, `stage_hunk`, `unstage_hunk`,
+//! `discard_hunk`
 //! All return the new working tree state.
 use gitmini_core::AppError;
 use gitmini_core::types::StatusSnapshot;
-use gitmini_core::write::index::{HunkArgs, PathsArgs};
+use gitmini_core::write::index::{HunkArgs, PathsArgs, ResolveArgs};
 
 use super::{Args, Core, call};
 
@@ -38,6 +39,18 @@ pub async fn discard_paths(
     call(
         "discard_paths",
         gitmini_core::write::index::discard_paths(&state, args.0),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn resolve_paths(
+    state: Core<'_>,
+    args: Args<ResolveArgs>,
+) -> Result<StatusSnapshot, AppError> {
+    call(
+        "resolve_paths",
+        gitmini_core::write::index::resolve_paths(&state, args.0),
     )
     .await
 }

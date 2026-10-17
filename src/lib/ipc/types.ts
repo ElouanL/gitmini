@@ -25,6 +25,30 @@ export type AuthorRef = {
 	email: string,
 };
 
+export type BlameCommit = {
+	oid: string,
+	summary: string,
+	author: Signature,
+	/**
+	 *  Whether it has no parent to look further into: the lines come from the beginning of the history, or from before
+	 *  the border of a shallow repository.
+	 */
+	root: boolean,
+};
+
+/**  A run of consecutive lines that one commit introduced. */
+export type BlameHunk = {
+	/**  First line (1-based) in the file at `rev`. */
+	start: number,
+	lines: number,
+	/**  Index into `commits` of the blame. */
+	commit: number,
+	/**  First line (1-based) in the commit's own version of the file. */
+	origStart: number,
+	/**  The file's name in that commit, when it was not the current one. */
+	origPath: string | null,
+};
+
 export type BranchCompare = {
 	branchOid: string,
 	targetOid: string,
@@ -96,7 +120,57 @@ export type DiffStats = {
 	removed: number,
 };
 
+/**  What the stored blob is, which decides how it is written back. */
+export type DiscardKind = 
+/**  Regular file. */
+"file" | 
+/**  Regular file with an execute bit. */
+"executable" | 
+/**  Symbolic link; the blob holds the link target. */
+"symlink";
+
+/**  The operation that threw the content away. */
+export type DiscardSource = 
+/**  `discard_paths`: a file discarded as a whole. */
+"discard" | 
+/**  `discard_hunk`: a hunk or some lines; the blob is the whole file as it was before. */
+"discard-hunk" | 
+/**  `resolve_paths`: a conflicted file replaced by one side (conflict markers or a resolution in progress). */
+"resolve" | 
+/**  `discard_restore`: the file a restore overwrote. */
+"restore";
+
+/**  One file saved before it was thrown away. */
+export type DiscardedFile = {
+	/**  Identifies the entry for `discard_restore`. */
+	id: string,
+	/**  Path relative to the worktree root. */
+	path: string,
+	/**  The blob holding the content. */
+	oid: string,
+	kind: DiscardKind,
+	/**  Size of the content in bytes. */
+	size: number,
+	/**  When it was discarded (epoch seconds). */
+	time: number,
+	source: DiscardSource,
+};
+
 export type ErrorCode = "CONFLICT" | "UNRESOLVED_CONFLICTS" | "DIRTY_WORKTREE" | "UNTRACKED_WOULD_BE_OVERWRITTEN" | "INDEX_CONFLICT" | "AUTH_REQUIRED" | "REJECTED_NON_FF" | "NETWORK" | "GIT_FAILED" | "IDENTITY_MISSING" | "NOT_FOUND" | "NOT_A_REPO" | "UNSUPPORTED_REPO_FORMAT" | "ALREADY_EXISTS" | "NOT_MERGED" | "BUSY" | "CANCELLED" | "INVALID_ARGUMENT" | "STALE" | "DETACHED_HEAD" | "UNSUPPORTED_MERGES" | "UNDO_UNAVAILABLE" | "GIT_MISSING" | "GIT_TOO_OLD";
+
+export type FileBlame = {
+	/**  The commit the file was read from. */
+	rev: string,
+	path: string,
+	binary: boolean,
+	/**  Set when the file is beyond the thresholds and `force` was not given (or beyond the hard limit): no lines. */
+	tooLarge: TooLarge | null,
+	/**  The file's lines at `rev`, without their line terminators. */
+	lines: string[],
+	/**  In file order, covering every line. */
+	hunks: BlameHunk[],
+	commits: BlameCommit[],
+};
 
 export type FileChange = {
 	path: string,
@@ -123,6 +197,36 @@ export type FileDiff = {
 	hash: string,
 	submodule: SubmoduleDiff | null,
 	lfsPointer: boolean | null,
+};
+
+/**  One commit that changed the file. */
+export type FileLogEntry = {
+	oid: string,
+	parents: string[],
+	summary: string,
+	author: Signature,
+	/**
+	 *  What the commit did to the file, against `parent`: `path` is its name in this commit (before the change for a
+	 *  deletion), `old_path` its name before when the commit renamed it.
+	 */
+	file: FileChange,
+	/**
+	 *  The parent (1-based) `file` was computed against, the one that held the file if the first does not; absent for a
+	 *  root commit. It is the `parent` of a `commit` diff source.
+	 */
+	parent: number | null,
+};
+
+export type FileLogPage = {
+	/**  The commit the walk started from; absent when HEAD has no commit yet. */
+	start: string | null,
+	/**  Newest first. */
+	entries: FileLogEntry[],
+	/**
+	 *  Present when the history may go on: pass it as `cursor` for the next page. A page can be short, or even empty,
+	 *  and still carry one (the scan budget ran out, or the remaining commits did not change the file).
+	 */
+	nextCursor: string | null,
 };
 
 export type FileStatus = {
@@ -245,6 +349,52 @@ export type LogSearchResult = {
 	matches: LogMatch[],
 	truncated: boolean,
 };
+
+export type MergeConflict = {
+	path: string,
+	kind: MergeConflictKind,
+};
+
+/**  How a file conflicts, from the `CONFLICT (…)` message of git. */
+export type MergeConflictKind = 
+/**  Both sides changed the same lines. */
+"content" | 
+/**  Both sides added the file with different contents. */
+"add-add" | 
+/**  One side modified the file, the other deleted it. */
+"modify-delete" | 
+/**  One side renamed the file, the other deleted it. */
+"rename-delete" | 
+/**  A rename on one side collides with another rename or file. */
+"rename" | 
+/**  A file on one side and a directory on the other. */
+"file-directory" | "submodule" | "other";
+
+export type MergePreview = {
+	kind: MergePreviewKind,
+	/**  The commits the answer is about: HEAD and the resolved target. */
+	head: string,
+	target: string,
+	/**  Conflicted files in path order, the first 200 at most. */
+	conflicts: MergeConflict[],
+	/**  How many files conflict in all, which can exceed the list. */
+	conflictTotal: number,
+};
+
+/**  What merging the target into HEAD would do. */
+export type MergePreviewKind = 
+/**  The target is already in HEAD: nothing to merge. */
+"up-to-date" | 
+/**  HEAD is an ancestor of the target: the branch only moves forward, nothing can conflict. */
+"fast-forward" | 
+/**  A merge commit is needed and the contents combine without conflict. */
+"clean" | 
+/**  A merge commit is needed and some files would be left in conflict. */
+"conflicts" | 
+/**  The histories share no commit: git refuses to merge them. */
+"unrelated" | 
+/**  The conflicts cannot be computed: `git merge-tree --write-tree` needs git 2.38. */
+"unsupported";
 
 export type OpKind = "rebase" | "merge" | "cherry-pick" | "revert" | "am";
 
@@ -456,7 +606,7 @@ export type UndoEntry = {
 	time: number,
 };
 
-export type UndoKind = "commit" | "amend" | "merge" | "rebase" | "cherry-pick" | "revert" | "pull" | "branch-delete" | "stash-drop";
+export type UndoKind = "commit" | "amend" | "merge" | "rebase" | "cherry-pick" | "revert" | "pull" | "branch-delete" | "stash-drop" | "reset-soft" | "reset-mixed" | "reset-keep" | "tag-delete";
 
 export type UndoStatus = {
 	entry: UndoEntry | null,
