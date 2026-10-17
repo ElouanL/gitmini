@@ -45,6 +45,11 @@ pub const REPO_ENV_VARS: [&str; 5] = [
     "GIT_OBJECT_DIRECTORY",
 ];
 
+/// `CREATE_NO_WINDOW`: the release build has no console (`windows_subsystem = "windows"`), so every
+/// console child (git, `git --version`, `code.cmd`...) would otherwise open its own terminal window.
+#[cfg(windows)]
+pub const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 /// Removes from the process environment `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR` and
 /// `GIT_OBJECT_DIRECTORY`. To be called first in `main`, **before** creating any thread
 /// (the process environment is not protected from competing access).
@@ -514,12 +519,14 @@ pub struct SystemLauncher;
 
 impl Launcher for SystemLauncher {
     fn launch(&self, spec: &LaunchSpec) -> std::io::Result<()> {
-        let mut child = std::process::Command::new(&spec.program)
-            .args(&spec.args)
+        let mut cmd = std::process::Command::new(&spec.program);
+        cmd.args(&spec.args)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()?;
+            .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        std::os::windows::process::CommandExt::creation_flags(&mut cmd, CREATE_NO_WINDOW);
+        let mut child = cmd.spawn()?;
         std::thread::spawn(move || {
             let _ = child.wait();
         });

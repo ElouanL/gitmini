@@ -57,11 +57,13 @@ impl GitInfo {
     }
 
     pub fn detect_at(path: PathBuf) -> GitInfo {
-        let out = std::process::Command::new(&path)
-            .arg("--version")
+        let mut cmd = std::process::Command::new(&path);
+        cmd.arg("--version")
             .env("LC_ALL", "C")
-            .stdin(std::process::Stdio::null())
-            .output();
+            .stdin(std::process::Stdio::null());
+        #[cfg(windows)]
+        std::os::windows::process::CommandExt::creation_flags(&mut cmd, crate::repo::CREATE_NO_WINDOW);
+        let out = cmd.output();
         let Ok(out) = out else {
             return GitInfo {
                 path: None,

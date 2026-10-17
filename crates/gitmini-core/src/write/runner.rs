@@ -396,6 +396,8 @@ async fn execute(
     cmd.kill_on_drop(true);
     #[cfg(unix)]
     cmd.process_group(0);
+    #[cfg(windows)]
+    cmd.creation_flags(crate::repo::CREATE_NO_WINDOW);
 
     SPAWN_COUNT.fetch_add(1, Ordering::SeqCst);
     let spawn_started = Instant::now();
