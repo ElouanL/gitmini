@@ -956,12 +956,23 @@ struct Saved {
 /// --stdin-paths`) and records them in the trash (`crate::trash`), so that they can be found by name; `git fsck
 /// --lost-found` finds them too. The bytes are stored as they are on disk, without the clean filters (end-of-line
 /// conversion, LFS), so that a restore writes back exactly what was discarded. A symbolic link is saved as the text of
-/// its target. The caller changes nothing: if this fails, nothing was discarded.
+/// its target. The caller changes nothing: if this fails, nothing was discarded. Returns how many files the trash now
+/// lists (0 when the output of git was not understood: the blobs exist, the journal was not written).
 pub(crate) async fn backup_files(
     repo: &Arc<RepoHandle>,
     paths: &[String],
     source: DiscardSource,
-) -> AppResult<()> {
+) -> AppResult<usize> {
+    let entries = save_files(repo, paths, source).await?;
+    Ok(crate::trash::record(repo, entries))
+}
+
+/// [`backup_files`] without the journal: writes the blobs and returns the entries for the caller to record.
+pub(crate) async fn save_files(
+    repo: &Arc<RepoHandle>,
+    paths: &[String],
+    source: DiscardSource,
+) -> AppResult<Vec<DiscardedFile>> {
     let workdir = repo.workdir.clone();
     let owned: Vec<String> = paths.to_vec();
     let (files, links) = tokio::task::spawn_blocking(move || {
@@ -998,19 +1009,7 @@ pub(crate) async fn backup_files(
     })
     .await?;
 
-    // Each caller changes nothing when this fails; the message says what that caller was about to do.
-    let message = match source {
-        DiscardSource::Discard | DiscardSource::DiscardHunk => {
-            "The backup before cancellation failed: no changes were cancelled."
-        }
-        DiscardSource::Resolve => "The backup before resolving failed: no file was changed.",
-        DiscardSource::Restore => "The backup before restoring failed: no file was restored.",
-    };
-    let fail = |e: AppError| {
-        let mut e = e;
-        e.message = message.to_string();
-        e
-    };
+    let fail = backup_failure(source);
     let mut oids: Vec<String> = Vec::new();
     if !files.is_empty() {
         let stdin: String = files
@@ -1047,7 +1046,7 @@ pub(crate) async fn backup_files(
     // One oid per path, in order; anything else means the output was not understood: keep the blobs, skip the journal.
     if oids.len() != files.len() || link_oids.len() != links.len() {
         tracing::warn!("discard backup: unexpected hash-object output, trash not updated");
-        return Ok(());
+        return Ok(Vec::new());
     }
     let time = crate::trash::now_secs();
     let entry = |saved: Saved, oid: String| DiscardedFile {
@@ -1070,8 +1069,132 @@ pub(crate) async fn backup_files(
                 .map(|((f, _), oid)| entry(f, oid)),
         )
         .collect();
-    crate::trash::record(repo, entries);
-    Ok(())
+    Ok(entries)
+}
+
+/// The error of a failed backup. Each caller changes nothing when it fails; the message says what that caller was about
+/// to do.
+fn backup_failure(source: DiscardSource) -> impl Fn(AppError) -> AppError + Copy {
+    let message = match source {
+        DiscardSource::Discard | DiscardSource::DiscardHunk => {
+            "The backup before cancellation failed: no changes were cancelled."
+        }
+        DiscardSource::Resolve => "The backup before resolving failed: no file was changed.",
+        DiscardSource::Restore => "The backup before restoring failed: no file was restored.",
+        DiscardSource::Skip => "The backup before skipping failed: nothing was skipped.",
+    };
+    move |mut e: AppError| {
+        e.message = message.to_string();
+        e
+    }
+}
+
+/// A staged version that only the index holds (the worktree has something else, or nothing).
+pub(crate) struct IndexBlob {
+    pub path: String,
+    pub oid: gix::ObjectId,
+    pub kind: DiscardKind,
+}
+
+/// Saves index blobs for the trash, as [`save_files`] does for worktree files, and returns the entries for the caller
+/// to record, each with the index blob it saved. The trash restores raw bytes, so a file is saved as git would check
+/// it out (`checkout-index --temp`: smudge and eol filters, git-lfs included), the same form [`save_files`] reads from
+/// the disk; a symbolic link's blob is its target and needs no filter. Writing the object again also freshens it, so
+/// that it gets the whole grace period before `gc` prunes it.
+pub(crate) async fn save_index_blobs(
+    repo: &Arc<RepoHandle>,
+    blobs: Vec<IndexBlob>,
+    source: DiscardSource,
+) -> AppResult<Vec<(DiscardedFile, gix::ObjectId)>> {
+    if blobs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let fail = backup_failure(source);
+    let time = crate::trash::now_secs();
+    let mut entries: Vec<(DiscardedFile, gix::ObjectId)> = Vec::with_capacity(blobs.len());
+    for blob in blobs {
+        let (oid, size) = if blob.kind == DiscardKind::Symlink {
+            save_symlink_blob(repo, blob.oid).await.map_err(fail)?
+        } else {
+            save_checked_out_blob(repo, &blob.path)
+                .await
+                .map_err(fail)?
+        };
+        if gix::ObjectId::from_hex(oid.as_bytes()).is_err() {
+            tracing::warn!(
+                "discard backup: unexpected hash-object output for {}",
+                blob.path
+            );
+            continue;
+        }
+        entries.push((
+            DiscardedFile {
+                id: crate::trash::new_id(),
+                path: blob.path,
+                oid,
+                kind: blob.kind,
+                size,
+                time,
+                source,
+            },
+            blob.oid,
+        ));
+    }
+    Ok(entries)
+}
+
+/// The link target, written again as it is.
+async fn save_symlink_blob(repo: &Arc<RepoHandle>, oid: gix::ObjectId) -> AppResult<(String, u64)> {
+    let data = {
+        let repo = repo.clone();
+        tokio::task::spawn_blocking(move || {
+            repo.thread_repo()
+                .find_blob(oid)
+                .map(|b| b.detach().data)
+                .map_err(gix_err)
+        })
+        .await??
+    };
+    let size = data.len() as u64;
+    let opts = RunOpts {
+        stdin: Some(data),
+        command: Some("discard_backup"),
+        ..Default::default()
+    };
+    let out = run(repo, &["hash-object", "-w", "--stdin"], opts).await?;
+    Ok((out.stdout_str().trim().to_string(), size))
+}
+
+/// The index version of `path` as the worktree would get it: git checks it out to a temporary file at the top of the
+/// worktree, which is hashed without filters (as [`save_files`] does) and removed.
+async fn save_checked_out_blob(repo: &Arc<RepoHandle>, path: &str) -> AppResult<(String, u64)> {
+    let opts = || RunOpts {
+        command: Some("discard_backup"),
+        ..Default::default()
+    };
+    let out = run(repo, &["checkout-index", "--temp", "--", path], opts()).await?;
+    let stdout = out.stdout_str();
+    let temp = stdout.split('\t').next().unwrap_or_default().trim();
+    if temp.is_empty() || temp.contains('/') {
+        return Err(AppError::new(
+            ErrorCode::GitFailed,
+            "git checkout-index --temp gave no temporary file",
+        ));
+    }
+    let temp_path = repo.workdir.join(temp);
+    let hashed = async {
+        let size = std::fs::metadata(&temp_path)?.len();
+        let out = run(
+            repo,
+            &["hash-object", "-w", "--no-filters", "--", temp],
+            opts(),
+        )
+        .await?;
+        Ok::<_, AppError>((out.stdout_str().trim().to_string(), size))
+    }
+    .await;
+    let _ = std::fs::remove_file(&temp_path);
+    hashed
 }
 
 #[cfg(unix)]

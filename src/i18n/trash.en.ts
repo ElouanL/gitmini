@@ -11,7 +11,8 @@ export default {
   'trash.loading': 'Loading...',
   'trash.error': 'Could not read the discarded files.',
   'trash.empty': 'Nothing discarded yet.',
-  'trash.emptyHint': 'Files you discard, or replace while resolving a conflict, are kept here so you can bring them back.',
+  'trash.emptyHint':
+    'Files you discard, replace while resolving a conflict, or lose by skipping a commit are kept here so you can bring them back.',
   'trash.retention': 'Contents are kept as Git objects. Git may clean them up after about two weeks.',
 
   'trash.restore': 'Restore',
@@ -22,6 +23,7 @@ export default {
   'trash.source.discard-hunk': 'Changes discarded',
   'trash.source.resolve': 'Replaced while resolving',
   'trash.source.restore': 'Replaced by a restore',
+  'trash.source.skip': 'Reset by a skip',
   'trash.kind.executable': 'executable',
   'trash.kind.symlink': 'link',
 
@@ -38,5 +40,7 @@ export default {
   'trash.toast.files.other': 'Discarded {n} files.',
   'trash.toast.all': 'Discarded all changes.',
   'trash.toast.hunk': 'Discarded changes in {path}.',
+  'trash.toast.skip.one': 'Saved {n} file before skipping.',
+  'trash.toast.skip.other': 'Saved {n} files before skipping.',
   'trash.toast.recover': 'Recover',
 } satisfies Record<string, string>;

@@ -152,6 +152,8 @@ pub struct GitDirFiles {
     pub head_name: Option<String>,
     pub onto: Option<String>,
     pub autostash: bool,
+    /// `rebase-merge/amend`: git stopped after committing (an `edit` stop), not before.
+    pub amend: bool,
     // rebase-apply/
     pub apply_next: Option<String>,
     pub apply_last: Option<String>,
@@ -198,6 +200,7 @@ impl GitDirFiles {
             f.head_name = read_file(&dir.join("head-name"));
             f.onto = read_file(&dir.join("onto"));
             f.autostash = dir.join("autostash").exists();
+            f.amend = dir.join("amend").exists();
             f.apply_next = read_file(&dir.join("next"));
             f.apply_last = read_file(&dir.join("last"));
             f.apply_original_commit = read_file(&dir.join("original-commit"));
@@ -255,6 +258,9 @@ pub struct PhaseInput {
     pub has_applying_head: bool,
     /// The index differs from the tree of HEAD (ignored if `has_applying_head` is false).
     pub index_differs_from_head: bool,
+    /// Rebase stopped by `edit`: the commit is already made (`rebase-merge/amend`), so an index equal to HEAD does
+    /// not mean it became empty.
+    pub edit_stop: bool,
 }
 
 /// `phase` Rule / `stopReason` of
@@ -266,8 +272,12 @@ pub fn classify_phase(i: PhaseInput) -> (OpPhase, Option<StopReason>) {
         return (OpPhase::Conflict, None);
     }
     if i.has_applying_head && i.kind != OpKind::Am {
+        // At an `edit` stop git also writes `REBASE_HEAD`, with an index equal to HEAD: `blocked`, so that Continue is
+        // offered (Skip there keeps the commit and only throws the user's edits away).
         return if i.index_differs_from_head {
             (OpPhase::Conflict, None)
+        } else if i.edit_stop && i.kind == OpKind::Rebase {
+            (OpPhase::Stopped, Some(StopReason::Blocked))
         } else {
             (OpPhase::Stopped, Some(StopReason::Empty))
         };
@@ -437,6 +447,7 @@ fn build_state(
         has_conflicts,
         has_applying_head,
         index_differs_from_head,
+        edit_stop: f.amend,
     });
 
     RepoOpState {
@@ -775,6 +786,7 @@ mod tests {
             has_conflicts: conflicts,
             has_applying_head: head,
             index_differs_from_head: differs,
+            edit_stop: false,
         })
     }
 
@@ -820,8 +832,23 @@ mod tests {
             has_conflicts: false,
             has_applying_head: false,
             index_differs_from_head: false,
+            edit_stop: false,
         });
         assert_eq!(stale, (OpPhase::Stopped, Some(StopReason::Stale)));
+        // `edit` stop (`REBASE_HEAD` and `rebase-merge/amend`, index == HEAD): blocked, so Continue is offered; with
+        // staged changes it is still `conflict` (Continue enabled)
+        let edit = |differs: bool| {
+            classify_phase(PhaseInput {
+                kind: OpKind::Rebase,
+                stale: false,
+                has_conflicts: false,
+                has_applying_head: true,
+                index_differs_from_head: differs,
+                edit_stop: true,
+            })
+        };
+        assert_eq!(edit(false), (OpPhase::Stopped, Some(StopReason::Blocked)));
+        assert_eq!(edit(true), (OpPhase::Conflict, None));
         // am: never `empty`
         assert_eq!(
             phase(OpKind::Am, false, true, false),

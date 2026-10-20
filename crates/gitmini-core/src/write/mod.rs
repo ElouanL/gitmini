@@ -14,6 +14,7 @@ pub mod remote;
 pub mod reset;
 pub mod restore;
 pub mod runner;
+mod skip_guard;
 pub mod stash;
 pub mod tag;
 pub mod todo;

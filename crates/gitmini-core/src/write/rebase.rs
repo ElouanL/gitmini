@@ -26,6 +26,7 @@ use crate::types::{
 use crate::undo::{self, UndoOp};
 use crate::write::identity::ensure_identity;
 use crate::write::runner::{self, ProgressFn, ProgressUpdate, RunOpts, sequence_editor_cp};
+use crate::write::skip_guard::{SkipMode, backup_before_skip, with_backed_up};
 use crate::write::{finish_state_rule, todo};
 
 /// Context of a rebase launched by gitmini (target name, temporary folder `$TMP/gitmini-<opId>/`).
@@ -266,15 +267,20 @@ async fn step_command(
             .declares(&declared_kinds(false)),
     )?;
     let res = step_locked(&repo, &mut g, &args.op_id, flag).await;
-    conclude(&repo, g, res)
+    let backed_up = res.as_ref().map_or(0, |n| *n);
+    conclude(&repo, g, res.map(|_| ())).map(|r| WriteResult {
+        backed_up: (backed_up > 0).then_some(backed_up),
+        ..r
+    })
 }
 
+/// Returns how many files a Skip saved to the trash (0 for Continue).
 async fn step_locked(
     repo: &Arc<RepoHandle>,
     g: &mut WriteGuard,
     op_id: &str,
     flag: &str,
-) -> AppResult<()> {
+) -> AppResult<u32> {
     let st = rebase_state(repo)?;
     if flag == "--continue" && !st.conflicted_paths.is_empty() {
         let paths = st.conflicted_paths.clone();
@@ -294,6 +300,13 @@ async fn step_locked(
         let repo = repo.clone();
         tokio::task::spawn_blocking(move || ensure_identity(&repo, true)).await??;
     }
+    // Skip resets the index and the worktree: what cannot be rebuilt goes to the trash first (if that fails, the
+    // rebase stays paused and nothing changed).
+    let backup = if flag == "--skip" {
+        Some(backup_before_skip(repo, SkipMode::Hard).await?)
+    } else {
+        None
+    };
     if st.autostash {
         g.declare(&[ChangeKindEv::Stash]);
     }
@@ -313,8 +326,14 @@ async fn step_locked(
     };
     // Cancelled: no abort, the rebase remains stopped with its resolutions (`finish_state_rule` letters CANCELLED pass).
     match runner::run(repo, &["rebase", flag], opts).await {
-        Ok(_) => Ok(()),
-        Err(e) => Err(finish_state_rule(repo, e)),
+        Ok(_) => Ok(backup.map_or(0, |b| b.listed())),
+        Err(e) => {
+            let backed_up = match backup {
+                Some(b) => b.settle_failure(repo).await,
+                None => 0,
+            };
+            Err(with_backed_up(finish_state_rule(repo, e), backed_up))
+        }
     }
 }
 
@@ -447,6 +466,7 @@ fn conclude(repo: &Arc<RepoHandle>, g: WriteGuard, res: AppResult<()>) -> AppRes
 fn write_result(repo: &RepoHandle) -> WriteResult {
     WriteResult {
         head: crate::repo::head_info(&repo.thread_repo()),
+        backed_up: None,
     }
 }
 

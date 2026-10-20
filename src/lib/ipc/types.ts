@@ -148,7 +148,9 @@ export type DiscardSource =
 /**  `resolve_paths`: a conflicted file replaced by one side (conflict markers or a resolution in progress). */
 "resolve" | 
 /**  `discard_restore`: the file a restore overwrote. */
-"restore";
+"restore" | 
+/**  `rebase_skip` / `sequencer_skip`: uncommitted content that skipping the stopped commit throws away. */
+"skip";
 
 /**  One file saved before it was thrown away. */
 export type DiscardedFile = {
@@ -637,4 +639,9 @@ export type UndoStatus = {
 
 export type WriteResult = {
 	head: HeadInfo,
+	/**
+	 *  `rebase_skip` / `sequencer_skip`: how many files the skip saved to the trash before throwing them away (`null`
+	 *  when none, and for every other command).
+	 */
+	backedUp?: number | null,
 };

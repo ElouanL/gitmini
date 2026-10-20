@@ -21,6 +21,7 @@ use crate::write::errors::map_failure;
 use crate::write::finish_state_rule;
 use crate::write::identity::{ensure_identity, identity_error};
 use crate::write::runner::{self, RunOpts};
+use crate::write::skip_guard::{SkipMode, backup_before_skip, with_backed_up};
 
 /// Oid ceiling per operation (guards the command line in 32 Kio on Windows).
 pub const MAX_OIDS: usize = 500;
@@ -214,6 +215,7 @@ async fn start_locked(
 fn write_result(repo: &RepoHandle) -> WriteResult {
     WriteResult {
         head: crate::repo::head_info(&repo.thread_repo()),
+        backed_up: None,
     }
 }
 
@@ -721,6 +723,7 @@ async fn sequencer_locked(repo: &Arc<RepoHandle>, op: SeqOp) -> AppResult<WriteR
     };
     let stale = state.stop_reason == Some(StopReason::Stale);
     let bad_stop_reason = |msg: &str| Err(AppError::invalid_argument("stopReason", msg));
+    let mut backed_up = 0;
 
     match op {
         SeqOp::Continue => {
@@ -770,14 +773,26 @@ async fn sequencer_locked(repo: &Arc<RepoHandle>, op: SeqOp) -> AppResult<WriteR
                 return bad_stop_reason("The condition is incomplete: give up to clean it.");
             }
             check_identity(repo, verb).await?;
-            run_sequencer(repo, verb, "--skip", "sequencer_skip").await?;
+            // `reset --merge` throws away the conflicted files and the staged changes: saved first, or refused
+            // (`DIRTY_WORKTREE`) for a path git would not reset.
+            let backup = backup_before_skip(repo, SkipMode::Merge).await?;
+            match run_sequencer(repo, verb, "--skip", "sequencer_skip").await {
+                Ok(()) => backed_up = backup.listed(),
+                Err(e) => {
+                    let n = backup.settle_failure(repo).await;
+                    return Err(with_backed_up(e, n));
+                }
+            }
         }
         SeqOp::Abort => {
             let flag = if stale { "--quit" } else { "--abort" };
             abort_sequencer(repo, verb, flag).await?;
         }
     }
-    Ok(write_result(repo))
+    Ok(WriteResult {
+        backed_up: (backed_up > 0).then_some(backed_up),
+        ..write_result(repo)
+    })
 }
 
 /// Continue and Skip create commits (the following for Skip): no identity, no git.

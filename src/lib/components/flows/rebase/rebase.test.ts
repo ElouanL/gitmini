@@ -3,16 +3,17 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/sve
 import userEvent from '@testing-library/user-event';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { whenIdle } from '$lib/activity';
-import { abortConfirmMessage } from './banner-actions';
+import { abortConfirmMessage, skipNeedsConfirm } from './banner-actions';
 import { actionDisabledReason, getAction, runAction } from '$lib/actions/registry';
 import DialogHost from '$lib/components/dialogs-base/DialogHost.svelte';
 import '$lib/components/dialogs-base/register';
 import { openDialog, preloadDialog } from '$lib/dialogs/registry';
-import type { BranchCompare, TodoPreview, TodoPreviewItem } from '$lib/ipc/types';
+import type { BranchCompare, FileStatus, TodoPreview, TodoPreviewItem } from '$lib/ipc/types';
 import { resolveMenu } from '$lib/menus/registry';
 import { graph } from '$lib/stores/graph.svelte';
 import { op } from '$lib/stores/op.svelte';
 import { repo } from '$lib/stores/repo.svelte';
+import { status } from '$lib/stores/status.svelte';
 import { toast } from '$lib/stores/toast.svelte';
 import { ui } from '$lib/stores/ui.svelte';
 import { makeBranch, makeConflictState, makeRefs, makeStashes, makeStatus, makeUndo, oid as fxOid } from '$lib/test/fixtures';
@@ -899,5 +900,140 @@ describe('squash', () => {
     await userEvent.click(tid('squash-confirm-btn'));
     await waitFor(() => expect(op.state?.kind).toBe('rebase'));
     expect(toast.items).toHaveLength(0);
+  });
+});
+
+// - - - Skip: backup announced, confirmation only where Skip would reset work without a conflict to skip
+describe("op.skip: Recover toast and op-skip confirmation", () => {
+  const SKIP_TOAST = (n: number) => (n === 1 ? 'Saved 1 file before skipping.' : `Saved ${n} files before skipping.`);
+  const skipToast = (n: number) => toast.items.find((t) => t.message === SKIP_TOAST(n));
+  const stopped = (over: Partial<ReturnType<typeof makeConflictState>> = {}) =>
+    makeConflictState({ phase: 'stopped', stopReason: 'blocked', conflictedPaths: [], ...over });
+
+  it("rebase_skip answers backedUp: Recover toast (opens the trash), next to the end-of-rebase undo toast", async () => {
+    await openTestRepo({
+      rebase_skip: () => ({ ...HEAD_FEATURE, backedUp: 2 }),
+      undo_peek: () => {
+        const u = makeUndo(true);
+        return { ...u, entry: { ...u.entry!, kind: 'rebase' as const } };
+      },
+    });
+    op.setState(makeConflictState());
+    await runAction('op.skip');
+    await whenIdle();
+    const saved = skipToast(2);
+    expect(saved?.actions.map((a) => a.testid)).toEqual(['toast-recover-btn']);
+    await waitFor(() => expect(toast.items.some((t) => t.kind === 'undo')).toBe(true));
+    expect(toast.items).toContain(saved);
+    await saved!.actions[0]!.run();
+    expect(ui.drawer).toBe('discard-trash-panel');
+  });
+
+  it("no backedUp (nothing saved): no Recover toast", async () => {
+    await openTestRepo({ rebase_skip: () => ({ ...HEAD_FEATURE, backedUp: null }) });
+    op.setState(makeConflictState());
+    await runAction('op.skip');
+    await whenIdle();
+    expect(toast.items.some((t) => t.message.includes('before skipping'))).toBe(false);
+  });
+
+  it("a new stop (CONFLICT) or a cancellation carries details.backedUp: the Recover toast still shows", async () => {
+    await openTestRepo({
+      rebase_skip: () => {
+        throw { code: 'CONFLICT', message: 'The operation stopped', details: { state: stopped(), backedUp: 1 } };
+      },
+    });
+    op.setState(makeConflictState());
+    await runAction('op.skip');
+    await whenIdle();
+    expect(skipToast(1)).toBeDefined();
+
+    toast.clear();
+    await openTestRepo({
+      rebase_skip: () => {
+        throw { code: 'CANCELLED', message: 'cancelled', details: { opId: 'x', backedUp: 3 } };
+      },
+    });
+    op.setState(makeConflictState());
+    await runAction('op.skip');
+    await whenIdle();
+    expect(skipToast(3)).toBeDefined();
+    expect(toast.items.some((t) => t.message === "Stopping step: the rebase stays on pause.")).toBe(true);
+  });
+
+  it("cherry-pick: backedUp on success; DIRTY_WORKTREE names the path and announces nothing", async () => {
+    const pickState = makeConflictState({ kind: 'cherry-pick', step: 1, total: 1, headName: null, onto: null, ontoLabel: null });
+    const fake = await openTestRepo({ sequencer_skip: () => ({ head: { branch: 'main', oid: oid('e'), detached: false, unborn: false }, backedUp: 1 }) });
+    op.setState(pickState);
+    await runAction('op.skip');
+    await whenIdle();
+    expect(fake.callsOf('sequencer_skip')).toHaveLength(1);
+    expect(skipToast(1)).toBeDefined();
+
+    toast.clear();
+    await openTestRepo({
+      sequencer_skip: () => {
+        throw { code: 'DIRTY_WORKTREE', message: 'These files have staged and unstaged changes: stage or discard them before skipping.', details: { paths: ['c.txt'] } };
+      },
+    });
+    op.setState(pickState);
+    await runAction('op.skip');
+    await whenIdle();
+    expect(toast.items.at(-1)?.message).toContain('c.txt');
+    expect(toast.items.some((t) => t.actions.some((a) => a.testid === 'toast-recover-btn'))).toBe(false);
+  });
+
+  it("rebase stopped without conflict and tracked changes: confirm-dialog[data-action=op-skip]; Cancel sends nothing", async () => {
+    const fake = await openTestRepo({ rebase_skip: () => HEAD_FEATURE });
+    render(DialogHost);
+    status.apply(makeStatus());
+    op.setState(stopped());
+    const running = runAction('op.skip');
+    const dlg = await screen.findByTestId('confirm-dialog');
+    expect(dlg).toHaveAttribute('data-action', 'op-skip');
+    expect(dlg).toHaveAttribute('data-danger', 'true');
+    expect(dlg).toHaveTextContent('use Continue');
+    await userEvent.click(tid('confirm-dialog-cancel-btn'));
+    await running;
+    expect(fake.callsOf('rebase_skip')).toHaveLength(0);
+
+    const again = runAction('op.skip');
+    await screen.findByTestId('confirm-dialog');
+    await userEvent.click(tid('confirm-dialog-confirm-btn'));
+    await again;
+    await whenIdle();
+    expect(fake.callsOf('rebase_skip')).toHaveLength(1);
+  });
+
+  it("no confirmation at a conflict stop, nor at a stop whose tracked files are clean", async () => {
+    const fake = await openTestRepo({ rebase_skip: () => HEAD_FEATURE });
+    render(DialogHost);
+    status.apply(makeStatus());
+    op.setState(makeConflictState());
+    await runAction('op.skip');
+    await whenIdle();
+    expect(maybe('confirm-dialog')).toBeNull();
+
+    status.apply(makeStatus({ files: makeStatus().files.filter((f) => f.unstaged === 'untracked') }));
+    op.setState(stopped({ stopReason: 'empty' }));
+    await runAction('op.skip');
+    await whenIdle();
+    expect(maybe('confirm-dialog')).toBeNull();
+    expect(fake.callsOf('rebase_skip')).toHaveLength(2);
+  });
+
+  it("skipNeedsConfirm: rebase stop without conflicted paths, with a tracked change (staged, unstaged or conflicted; not untracked nor submodule)", () => {
+    const [staged, unstaged, untracked] = makeStatus().files as [FileStatus, FileStatus, FileStatus];
+    const st = stopped();
+    expect(skipNeedsConfirm(st, [staged])).toBe(true);
+    expect(skipNeedsConfirm(st, [unstaged])).toBe(true);
+    expect(skipNeedsConfirm(st, [untracked])).toBe(false);
+    expect(skipNeedsConfirm(st, [{ ...unstaged, submodule: true }])).toBe(false);
+    expect(skipNeedsConfirm(st, [])).toBe(false);
+    expect(skipNeedsConfirm(makeConflictState(), [staged])).toBe(false);
+    // `edit` stop with a staged amendment: git reports `conflict`, but nothing is in conflict.
+    expect(skipNeedsConfirm(makeConflictState({ conflictedPaths: [] }), [staged])).toBe(true);
+    expect(skipNeedsConfirm(makeConflictState({ phase: 'running', conflictedPaths: [] }), [staged])).toBe(false);
+    expect(skipNeedsConfirm(stopped({ kind: 'cherry-pick' }), [staged])).toBe(false);
   });
 });

@@ -37,10 +37,12 @@ export function restoreMessage(result: Pick<DiscardRestoreResult, 'restored' | '
 export type DiscardAnnouncement =
   | { kind: 'files'; count: number }
   | { kind: 'all' }
-  | { kind: 'hunk'; path: string };
+  | { kind: 'hunk'; path: string }
+  | { kind: 'skip'; count: number };
 
 export function announcementText(a: DiscardAnnouncement): string {
   if (a.kind === 'all') return t('trash.toast.all');
   if (a.kind === 'hunk') return t('trash.toast.hunk', { path: a.path });
+  if (a.kind === 'skip') return tp('trash.toast.skip', a.count);
   return tp('trash.toast.files', a.count);
 }
