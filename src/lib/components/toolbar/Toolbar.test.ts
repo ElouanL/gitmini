@@ -58,6 +58,7 @@ describe('toolbar ahead/behind: last fetch', () => {
 
   it('greys the meters and says the counts may be out of date after an hour without automatic fetch', async () => {
     await setup();
+    app.load({ 'fetch.auto': 0 });
     fetchStateFor(activeSession.current).markFetched(T);
     fetchClock.now = T + 60 * MINUTE;
     await whenIdle();

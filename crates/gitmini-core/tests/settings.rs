@@ -56,7 +56,7 @@ async fn defaults_without_a_file() {
         "updates.auto": true,
         "network.proxy.mode": "system",
         "network.proxy.url": null,
-        "fetch.auto": 0,
+        "fetch.auto": 2,
         "diff.contextLines": 3,
         "palette.recent": [],
         "layout": { "left": 240, "right": 360, "leftCollapsed": false, "rightCollapsed": false }
@@ -500,15 +500,15 @@ async fn network_proxy_is_validated_and_applied_to_the_shared_state() {
 }
 
 #[tokio::test]
-async fn fetch_auto_is_validated_persisted_and_off_by_default() {
+async fn fetch_auto_is_validated_persisted_and_two_minutes_by_default() {
     init();
     let (_tmp, root) = tempdir();
     let config = root.join("config");
     let app = app(&config);
     let s = &app.state;
-    assert_eq!(settings_get(s).await.unwrap()["fetch.auto"], 0);
+    assert_eq!(settings_get(s).await.unwrap()["fetch.auto"], 2);
 
-    for minutes in [5, 15, 30, 0] {
+    for minutes in [5, 15, 30, 2, 0] {
         settings_set(s, set("fetch.auto", json!(minutes)))
             .await
             .unwrap();

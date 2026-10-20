@@ -1,14 +1,13 @@
-// Auto-fetch: while the window is visible and idle, fetch the open repository every `fetch.auto` minutes and
-// offer a "Pull" toast when the current branch's upstream moved. One timer for every tab, like the updater, and it
-// stays out of the way: `quiet` errors (no toast, no sign-in dialog), a backend that forbids credential prompts
-// (`background: true`) and a back-off after failures (`auto-fetch-logic.ts`).
+// Auto-fetch: while the window is visible, fetch the open repository every `fetch.auto` minutes and offer a "Pull" toast
+// when the current branch's upstream moved; a fetch that fell due while the window was hidden runs as soon as it is back.
+// One timer for every tab, like the updater. Besides a hidden window it waits only for what a fetch would collide with
+// (another write, an operation in progress); the backend forbids credential prompts
+// (`background: true`), and a failure is told once per streak with a toast instead of a sign-in dialog.
 //
 // It reuses the foreground fetch (`remote_fetch` through `runWrite`): the toolbar shows "Fetch" while it runs, other
 // writes are disabled for that time and the cancel button works. Only the active tab is fetched, the first time
 // `FIRST_FETCH_DELAY` after it was first in view (at once if the setting was just switched on), then every interval.
-import { isIdle } from '../activity';
 import { actionContext, actionDisabledReason, getAction } from '../actions/registry';
-import { dialogStack } from '../dialogs/stack.svelte';
 import { reportError } from '../errors/report';
 import { commands } from '../ipc/commands';
 import { lifecycle } from '../lifecycle.svelte';
@@ -17,7 +16,6 @@ import { t, tp } from '../../i18n/index';
 import { app } from './app.svelte';
 import { captureStores } from './context';
 import { fetchClock, fetchStateFor } from './fetch-state.svelte';
-import { github } from './github.svelte';
 import { repo } from './repo.svelte';
 import { activeSession, type Session } from './session.svelte';
 import { toast } from './toast.svelte';
@@ -25,11 +23,12 @@ import {
   FetchSchedule, fetchIntervalMs, pullableNews, upstreamView, type ScheduleEntry, type UpstreamView,
 } from './auto-fetch-logic';
 
-/** How often the schedule is looked at. The fetch itself starts at the first tick after it is due and the app is quiet. */
+/** How often the schedule is looked at. The fetch itself starts at the first tick after it is due and no write is running. */
 export const TICK_MS = 5000;
 /** The toast waits longer than an ordinary one: it asks for a decision. */
 export const PULL_TOAST_MS = 15_000;
 export const PULL_ACTION_TESTID = 'toast-pull-btn';
+export const FETCH_RETRY_TESTID = 'toast-autofetch-retry-btn';
 
 export interface AutoFetchState {
   /** Interval in ms; `null` = off. */
@@ -41,25 +40,13 @@ export interface AutoFetchState {
   entries: (ScheduleEntry & { dueAt: number | null })[];
 }
 
-/**
- * What a failed fetch depended on besides the interval: the proxy (an unreachable host may be reachable through another) and the GitHub
- * sign-in (a refused token may have been replaced). When it changes, the back-off earned so far no longer says anything.
- */
-function networkContext(): string {
-  return JSON.stringify([
-    app.get('network.proxy.mode'),
-    app.get('network.proxy.url') ?? null,
-    github.loggedIn ? (github.login ?? '') : null,
-  ]);
-}
-
 class AutoFetch {
   readonly #schedule = new FetchSchedule();
   readonly #toasts = new Map<number, number>();
+  /** Failure toast of the current streak, by repository: a success takes it back. */
+  readonly #failureToasts = new Map<number, number>();
   #timer: ReturnType<typeof setInterval> | null = null;
   #fetching: number | null = null;
-  #interval: number | null | undefined;
-  #network: string | undefined;
   /** Added to `Date.now()`; only the e2e bridge moves it, to cross an interval without waiting for it. */
   #skew = 0;
 
@@ -79,9 +66,8 @@ class AutoFetch {
     window.removeEventListener('focus', this.#wake);
     this.#schedule.clear();
     this.#toasts.clear();
+    this.#failureToasts.clear();
     this.#fetching = null;
-    this.#interval = undefined;
-    this.#network = undefined;
     this.#skew = 0;
     fetchClock.now = Date.now();
   }
@@ -100,6 +86,9 @@ class AutoFetch {
 
   /** A fetch of `repoId` succeeded, ours or the user's: schedule it, and let the toolbar show when. */
   #fetched(owner: Session, repoId: number, now: number): void {
+    const failure = this.#failureToasts.get(repoId);
+    if (failure !== undefined) toast.dismiss(failure);
+    this.#failureToasts.delete(repoId);
     this.#schedule.succeeded(repoId, now);
     fetchStateFor(owner).markFetched(now);
   }
@@ -109,14 +98,6 @@ class AutoFetch {
     const now = this.now();
     fetchClock.now = now;
     const interval = fetchIntervalMs(app.get('fetch.auto'));
-    const network = networkContext();
-    if (interval !== this.#interval || network !== this.#network) {
-      // A new interval, the feature switched off and on, another proxy or another GitHub sign-in: past failures (bad credentials,
-      // no network) no longer count.
-      this.#schedule.forgiveAll();
-      this.#interval = interval;
-      this.#network = network;
-    }
     const owner = activeSession.current;
     const repoId = owner.repoId;
     if (repoId === null) return;
@@ -150,16 +131,17 @@ class AutoFetch {
       if (repoId === keep || repo.tabs.some((tab) => tab.repoId === repoId)) continue;
       this.#schedule.forget(repoId);
       this.#toasts.delete(repoId);
+      this.#failureToasts.delete(repoId);
     }
   }
 
-  /** The app is quiet enough that a fetch will not get in the way: no pending work, dialog, menu, or operation. */
+  /** Someone may look at the result, and nothing a fetch would collide with: no other write, no merge, rebase... in progress. */
   #canFetch(owner: Session): boolean {
     if (!app.ready || app.gitError || repo.opening || repo.restoring || lifecycle.updating) return false;
-    if (document.visibilityState !== 'visible' || dialogStack.top || !isIdle()) return false;
+    if (document.visibilityState !== 'visible') return false;
     if (owner.closed || owner.missing) return false;
-    const { op, refs, ui } = captureStores(owner);
-    if (op.busy || op.state !== null || ui.paletteOpen || ui.contextMenu || ui.popover) return false;
+    const { op, refs } = captureStores(owner);
+    if (op.busy || op.state !== null) return false;
     return refs.remotes.length > 0;
   }
 
@@ -177,7 +159,9 @@ class AutoFetch {
       if (!result.ok) {
         // BUSY: someone else got the lock first, try again at the next tick. A cancel is not a failure either.
         if (result.error.code === 'CANCELLED') this.#schedule.postponed(repoId, now);
-        else if (result.error.code !== 'BUSY') this.#schedule.failed(repoId, now, result.error.code);
+        else if (result.error.code !== 'BUSY' && this.#schedule.failed(repoId, now, result.error.code) === 1) {
+          this.#reportFailure(owner, repoId, result.error.message);
+        }
         return;
       }
       this.#fetched(owner, repoId, now);
@@ -190,6 +174,22 @@ class AutoFetch {
     }
   }
 
+  /**
+   * First failure of a streak: say so once, with the error and a manual Fetch (which opens the sign-in dialog if needed).
+   * The toast stays until it is closed or a fetch of that repository succeeds.
+   */
+  #reportFailure(owner: Session, repoId: number, message: string): void {
+    const id = toast.error(message, {
+      title: repo.tabs.length > 1 ? t('autoFetch.failed.titleRepo', { repo: owner.info?.name ?? '' }) : t('autoFetch.failed.title'),
+      actions: [{
+        testid: FETCH_RETRY_TESTID,
+        label: t('op.fetch'),
+        run: () => { toast.dismiss(id); return runAction('git.fetch', owner); },
+      }],
+    });
+    this.#failureToasts.set(repoId, id);
+  }
+
   #announce(owner: Session, repoId: number, news: UpstreamView): void {
     const previous = this.#toasts.get(repoId);
     if (previous !== undefined) toast.dismiss(previous);
@@ -199,16 +199,16 @@ class AutoFetch {
       actions: [{
         testid: PULL_ACTION_TESTID,
         label: t('autoFetch.toast.pull'),
-        run: () => { toast.dismiss(id); return pull(owner); },
+        run: () => { toast.dismiss(id); return runAction('git.pull', owner); },
       }],
     });
     this.#toasts.set(repoId, id);
   }
 }
 
-/** The toolbar's Pull, for the tab the toast was about even if another one is active by now. */
-async function pull(owner: Session): Promise<void> {
-  const def = getAction('git.pull');
+/** The toolbar's Pull or Fetch, for the tab the toast was about even if another one is active by now. */
+async function runAction(actionId: 'git.pull' | 'git.fetch', owner: Session): Promise<void> {
+  const def = getAction(actionId);
   if (!def || owner.closed) return;
   const ctx = actionContext(undefined, owner);
   const reason = actionDisabledReason(def, ctx);
@@ -219,7 +219,7 @@ async function pull(owner: Session): Promise<void> {
   try {
     await def.run(ctx);
   } catch (e) {
-    reportError(e, { command: 'git.pull', repoId: ctx.repoId });
+    reportError(e, { command: actionId, repoId: ctx.repoId });
   }
 }
 

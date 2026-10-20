@@ -1,8 +1,8 @@
 // AF-04 — Auto-fetch with several tabs. Fixture: with-remote, two tabs on clones of the same origin (af-04.with-remote.setup.ts).
 // Only the tab in view is fetched, on its own schedule; the toast names its repository; and "Pull" pulls the repository the toast
-// is about even when another tab has been selected in the meantime. Extra coverage of the AF-01 feature (one tab in the WebdriverIO spec).
+// is about even when another tab has been selected in the meantime; a failure toast names its repository too. Extra coverage of the AF-01 feature (one tab in the WebdriverIO spec).
 import { expect, revParse, test } from '../support';
-import { MINUTE, advanceClock, autoFetchState, chooseInterval, fetchAllCount, fetchSettled, pullToast } from '../helpers/rsv-af-support';
+import { MINUTE, advanceClock, autoFetchFailedToast, autoFetchState, chooseInterval, fetchAllCount, fetchSettled, pullToast } from '../helpers/rsv-af-support';
 import { setup } from './af-04.with-remote.setup';
 
 test.use({ scenario: { fixture: 'with-remote', setup } });
@@ -55,5 +55,13 @@ test.describe('AF-04 — Auto-fetch with several tabs', () => {
     await app.waitGone('toast-pull-btn');
     await app.idle();
     await expect.poll(() => revParse(second, 'main')).toBe(originTip);
+
+    // 4. A failure is told the same way: the toast names the repository it is about.
+    repo.gitIn(second, 'remote', 'set-url', 'origin', 'http://127.0.0.1:1/unreachable.git');
+    await advanceClock(app, 5 * MINUTE + 1000);
+    await fetchSettled(app, repo, base + 3);
+    await expect(autoFetchFailedToast(app)).toHaveCount(1);
+    await expect(autoFetchFailedToast(app)).toContainText('second: automatic fetch failed');
+    expect(await app.isShown('auth-required-dialog')).toBe(false);
   });
 });

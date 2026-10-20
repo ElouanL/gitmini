@@ -47,7 +47,7 @@ pub fn defaults() -> Settings {
     m.insert("workspace.tabs".into(), Value::Null);
     m.insert("network.proxy.mode".into(), json!("system"));
     m.insert("network.proxy.url".into(), Value::Null);
-    m.insert("fetch.auto".into(), json!(0));
+    m.insert("fetch.auto".into(), json!(2));
     m.insert("diff.contextLines".into(), json!(DIFF_CONTEXT_DEFAULT));
     m.insert("palette.recent".into(), json!([]));
     m
@@ -72,7 +72,7 @@ fn expect_enum(key: &str, value: &Value, allowed: &[&str]) -> AppResult<Value> {
 }
 
 /// Minutes between two background fetches (`fetch.auto`), `0` = never. The frontend offers exactly these.
-pub const FETCH_AUTO_MINUTES: &[u64] = &[0, 5, 15, 30];
+pub const FETCH_AUTO_MINUTES: &[u64] = &[0, 2, 5, 15, 30];
 
 fn expect_fetch_auto(key: &str, value: &Value) -> AppResult<Value> {
     match value.as_u64() {

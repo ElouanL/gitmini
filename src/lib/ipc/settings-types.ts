@@ -5,8 +5,8 @@ export type ThemeSetting = 'system' | 'light' | 'dark';
 export type PullModeSetting = 'ff-only' | 'rebase';
 export type ProxyModeSetting = 'system' | 'none' | 'manual';
 /** Minutes between two background fetches of the open repository; `0` = never. Same list as the backend (`FETCH_AUTO_MINUTES`). */
-export type FetchAutoSetting = 0 | 5 | 15 | 30;
-export const FETCH_AUTO_CHOICES: readonly FetchAutoSetting[] = [0, 5, 15, 30];
+export type FetchAutoSetting = 0 | 2 | 5 | 15 | 30;
+export const FETCH_AUTO_CHOICES: readonly FetchAutoSetting[] = [0, 2, 5, 15, 30];
 /** Unchanged lines shown around each change of a diff. Same list as the backend (`DIFF_CONTEXT_CHOICES`). */
 export type DiffContextSetting = 1 | 3 | 5 | 10 | 25;
 export const DIFF_CONTEXT_CHOICES: readonly DiffContextSetting[] = [1, 3, 5, 10, 25];
@@ -79,7 +79,7 @@ export const DEFAULT_SETTINGS: KnownSettings = {
   'graph.dimUnreachable': true,
   'network.proxy.mode': 'system',
   'network.proxy.url': null,
-  'fetch.auto': 0,
+  'fetch.auto': 2,
   'diff.contextLines': DIFF_CONTEXT_DEFAULT,
   'palette.recent': [],
   layout: DEFAULT_LAYOUT,

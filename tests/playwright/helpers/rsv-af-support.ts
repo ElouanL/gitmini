@@ -4,7 +4,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
-import { expect, gitDir, tid, type App, type Repo } from '../support';
+import { expect, gitDir, tid, writeSettings, type App, type Repo } from '../support';
 
 //
 // Backend log: the subprocess git of the application (`git spawn argv=[...] code=...`, RUST_LOG=debug in the bridge)
@@ -124,6 +124,19 @@ export async function chooseInterval(app: App, minutes: number): Promise<void> {
   await app.idle();
   await expect.poll(() => app.readSettings()['fetch.auto'], { message: `fetch.auto = ${minutes} should be written to settings.json` }).toBe(minutes);
 }
+
+/**
+ * The harness starts every scenario with `fetch.auto` = 0 (support/fixtures.ts): removes the key from settings.json and restarts,
+ * so that the application runs with its own default (every 2 minutes), as on a first launch.
+ */
+export async function useDefaultInterval(app: App): Promise<void> {
+  const { 'fetch.auto': _seeded, ...rest } = app.readSettings();
+  writeSettings(app.settingsPath, rest);
+  await app.restart();
+}
+
+/** The error toast of a failed background fetch (title "Automatic fetch failed", or "<repo>: automatic fetch failed" with several tabs). */
+export const autoFetchFailedToast = (app: App) => app.toast('error').filter({ has: app.byTid('toast-autofetch-retry-btn') });
 
 /** Waits for the fetch started by the clock to be over: its git subprocess ended and the application is no longer fetching. */
 export async function fetchSettled(app: App, repo: Repo, count: number): Promise<void> {

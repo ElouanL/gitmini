@@ -19,12 +19,12 @@ beforeEach(() => {
 });
 afterEach(() => { resetAll(); });
 
-it('is off by default and lists the choices in order, each with a readable label', () => {
+it('is every 2 minutes by default and lists the choices in order, each with a readable label', () => {
   render(SettingsDialog, { close: vi.fn() });
   const select = screen.getByTestId<HTMLSelectElement>('settings-fetch-auto-select');
-  expect(select.value).toBe('0');
+  expect(select.value).toBe('2');
   expect([...select.options].map((o) => [o.value, o.textContent])).toEqual([
-    ['0', 'Never'], ['5', 'Every 5 minutes'], ['15', 'Every 15 minutes'], ['30', 'Every 30 minutes'],
+    ['0', 'Never'], ['2', 'Every 2 minutes'], ['5', 'Every 5 minutes'], ['15', 'Every 15 minutes'], ['30', 'Every 30 minutes'],
   ]);
   expect(screen.getByLabelText('Fetch automatically')).toBe(select);
   expect(select).toHaveAccessibleDescription(/never asks for a password/);
@@ -66,5 +66,5 @@ it('goes back to the previous value when the backend refuses the new one', async
   render(SettingsDialog, { close: vi.fn() });
   await userEvent.selectOptions(screen.getByTestId('settings-fetch-auto-select'), '30');
   await whenIdle();
-  expect(app.get('fetch.auto')).toBe(0);
+  expect(app.get('fetch.auto')).toBe(2);
 });

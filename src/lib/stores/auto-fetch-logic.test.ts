@@ -2,37 +2,16 @@ import { describe, expect, it } from 'vitest';
 import type { RefsSnapshot } from '../ipc/types';
 import { makeBranch, makeRefs, oid } from '../test/fixtures';
 import {
-  AUTH_BACKOFF_BASE, AUTH_BACKOFF_CAP, FAILURE_CAP, FIRST_FETCH_DELAY, FetchSchedule, MINUTE, backoffDelay, fetchIntervalMs,
-  pullableNews, upstreamView,
+  FIRST_FETCH_DELAY, FetchSchedule, MINUTE, fetchIntervalMs, pullableNews, upstreamView,
 } from './auto-fetch-logic';
 
 describe('fetchIntervalMs', () => {
-  it('maps the three choices to milliseconds and everything else to off', () => {
+  it('maps the four choices to milliseconds and everything else to off', () => {
+    expect(fetchIntervalMs(2)).toBe(2 * MINUTE);
     expect(fetchIntervalMs(5)).toBe(5 * MINUTE);
     expect(fetchIntervalMs(15)).toBe(15 * MINUTE);
     expect(fetchIntervalMs(30)).toBe(30 * MINUTE);
     for (const off of [0, 1, 10, -5, 5.5, '5', null, undefined, true, NaN]) expect(fetchIntervalMs(off)).toBeNull();
-  });
-});
-
-describe('backoffDelay', () => {
-  it('keeps the interval until something fails, and for a first failure', () => {
-    expect(backoffDelay(5 * MINUTE, 0)).toBe(5 * MINUTE);
-    expect(backoffDelay(5 * MINUTE, 1, 'NETWORK')).toBe(5 * MINUTE);
-  });
-
-  it('doubles after each further failure up to an hour, never below the interval', () => {
-    const delays = [1, 2, 3, 4, 5, 6].map((n) => backoffDelay(5 * MINUTE, n, 'NETWORK') / MINUTE);
-    expect(delays).toEqual([5, 10, 20, 40, 60, 60]);
-    expect(backoffDelay(30 * MINUTE, 2, 'GIT_FAILED')).toBe(FAILURE_CAP);
-    expect(backoffDelay(30 * MINUTE, 50, null)).toBe(FAILURE_CAP);
-  });
-
-  it('waits at least an hour after a refused authentication, doubling up to six hours', () => {
-    const delays = [1, 2, 3, 4, 5, 20].map((n) => backoffDelay(5 * MINUTE, n, 'AUTH_REQUIRED') / MINUTE);
-    expect(delays).toEqual([60, 120, 240, 360, 360, 360]);
-    expect(backoffDelay(5 * MINUTE, 1, 'AUTH_REQUIRED')).toBe(AUTH_BACKOFF_BASE);
-    expect(backoffDelay(5 * MINUTE, 99, 'AUTH_REQUIRED')).toBe(AUTH_BACKOFF_CAP);
   });
 });
 
@@ -59,19 +38,16 @@ describe('FetchSchedule', () => {
     expect(s.dueAt(2, 5 * MINUTE)).toBe(T0 + 5 * MINUTE);
   });
 
-  it('backs off after failures and forgives them on a success or when told to', () => {
+  it('retries one interval after a failure, whatever it was, and counts the streak until a success', () => {
     const s = new FetchSchedule();
     s.track(1, T0);
-    s.failed(1, T0 + 1000, 'NETWORK');
-    s.failed(1, T0 + 2000, 'NETWORK');
-    expect(s.dueAt(1, 5 * MINUTE)).toBe(T0 + 2000 + 10 * MINUTE);
-    s.forgiveAll();
+    expect(s.failed(1, T0 + 1000, 'NETWORK')).toBe(1);
+    expect(s.dueAt(1, 5 * MINUTE)).toBe(T0 + 1000 + 5 * MINUTE);
+    expect(s.failed(1, T0 + 2000, 'AUTH_REQUIRED')).toBe(2);
     expect(s.dueAt(1, 5 * MINUTE)).toBe(T0 + 2000 + 5 * MINUTE);
-    s.failed(1, T0 + 3000, 'AUTH_REQUIRED');
-    expect(s.dueAt(1, 5 * MINUTE)).toBe(T0 + 3000 + 60 * MINUTE);
     s.succeeded(1, T0 + 4000);
     expect(s.entries()[0]).toMatchObject({ repoId: 1, failures: 0, code: null });
-    s.failed(3, T0, 'NETWORK');
+    expect(s.failed(3, T0, 'NETWORK')).toBe(1);
     expect(s.entries().find((e) => e.repoId === 3)).toMatchObject({ failures: 1, code: 'NETWORK' });
   });
 
