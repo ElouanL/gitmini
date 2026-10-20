@@ -184,6 +184,19 @@ describe('mock transport: discarded files', () => {
     expect(after.files.map((f) => f.path)).toEqual(['README.md']);
     expect(paths(await c<DiscardedFile[]>('discard_list')).sort()).toEqual(['notes.txt', 'src/App.svelte']);
   });
+
+  it('"Stage tracked" leaves untracked files; "Stage all" and "Unstage all" move every writable file', async () => {
+    const t = createMockTransport();
+    const c = <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => t.invoke(command, { repoId: 1, ...args }) as Promise<T>;
+    const unstagedOf = (s: StatusSnapshot) => s.files.filter((f) => f.unstaged).map((f) => f.path).sort();
+    const before = await c<StatusSnapshot>('status_get');
+    const untracked = before.files.filter((f) => f.unstaged === 'untracked').map((f) => f.path).sort();
+    expect(untracked.length).toBeGreaterThan(0);
+    expect(unstagedOf(await c<StatusSnapshot>('stage_all', { scope: 'tracked' }))).toEqual(untracked);
+    expect(unstagedOf(await c<StatusSnapshot>('stage_all', { scope: 'all' }))).toEqual([]);
+    const after = await c<StatusSnapshot>('unstage_paths', { paths: 'all' });
+    expect(after.files.filter((f) => f.staged)).toEqual([]);
+  });
 });
 
 describe('mock transport: conflict scenario', () => {

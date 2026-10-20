@@ -150,6 +150,29 @@ export function createMockTransport(): Transport {
     return status;
   };
 
+  // Bulk staging ("Stage tracked" / "Stage all") and "Unstage all": conflicts, submodules and non-UTF-8 paths are left alone.
+  const bulkWritable = (f: FileStatus): boolean => !f.conflict && f.submodule !== true && f.nonUtf8 !== true;
+  const stageEverything = (scope: unknown) => {
+    const hit = (f: FileStatus): boolean => bulkWritable(f) && !!f.unstaged && (scope !== 'tracked' || f.unstaged !== 'untracked');
+    status = {
+      ...status,
+      files: status.files.map((f) =>
+        hit(f) ? { ...f, staged: f.unstaged === 'untracked' || f.staged === 'added' ? ('added' as const) : f.unstaged, unstaged: null } : f),
+    };
+    emit('repo:changed', { repoId: 1, kinds: ['index'] });
+    return status;
+  };
+  const unstageEverything = () => {
+    const hit = (f: FileStatus): boolean => bulkWritable(f) && !!f.staged;
+    status = {
+      ...status,
+      files: status.files.map((f) =>
+        hit(f) ? { ...f, oldPath: null, staged: null, unstaged: f.staged === 'added' || f.staged === 'renamed' ? ('untracked' as const) : (f.unstaged ?? f.staged) } : f),
+    };
+    emit('repo:changed', { repoId: 1, kinds: ['index'] });
+    return status;
+  };
+
   const repoInfo = (path: string): RepoInfo =>
     makeRepoInfo({
       id: repoIds.get(path) ?? (() => { const id = repoIds.size + 1; repoIds.set(path, id); return id; })(),
@@ -274,9 +297,13 @@ export function createMockTransport(): Transport {
     stage_hunk: (a) => hunkOp('stage', a),
     unstage_hunk: (a) => hunkOp('unstage', a),
     discard_hunk: (a) => hunkOp('discard', a),
-    // "Mark as resolved" stages a conflicted file as it is; staging the other files is not simulated.
-    stage_paths: (a) => (Array.isArray(a.paths) && a.paths.some((p) => status.files.some((f) => f.path === p && f.conflict)) ? settle(a.paths as string[], () => false) : status),
-    unstage_paths: () => status,
+    // "Mark as resolved" stages a conflicted file as it is; staging other files one by one is not simulated.
+    stage_paths: (a) =>
+      a.paths === 'all'
+        ? stageEverything('all')
+        : Array.isArray(a.paths) && a.paths.some((p) => status.files.some((f) => f.path === p && f.conflict)) ? settle(a.paths as string[], () => false) : status,
+    stage_all: (a) => stageEverything(a.scope),
+    unstage_paths: (a) => (a.paths === 'all' ? unstageEverything() : status),
     // A discard keeps what it throws away (see `discard_list`); a file that is only staged has nothing to discard.
     discard_paths: (a) => {
       const all = a.paths === 'all';

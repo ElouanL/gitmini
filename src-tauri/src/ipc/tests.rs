@@ -1,4 +1,4 @@
-//! Consistency of the contract IPC (, §5.4 §10): the orders recorded are exactly the 78 of the contract,
+//! Consistency of the contract IPC (, §5.4 §10): the orders recorded are exactly the 79 of the contract,
 //! `commands.txt` and `capabilities/default.json` take them back in the same way, the security of the WebView is that of
 //! of , and the commands actually pass through the ACL and the deserialization flat arguments.
 use std::collections::BTreeSet;
@@ -27,8 +27,8 @@ fn registered() -> BTreeSet<String> {
 }
 
 #[test]
-fn registered_commands_are_exactly_the_78_of_the_contract() {
-    assert_eq!(COMMAND_NAMES.len(), 78, "01 §5.3 : 78 commandes");
+fn registered_commands_are_exactly_the_79_of_the_contract() {
+    assert_eq!(COMMAND_NAMES.len(), 79, "01 §5.3 : 79 commandes");
     assert_eq!(registered().len(), COMMAND_NAMES.len(), "no duplicate");
     let contract = contract_commands();
     let all: BTreeSet<String> = ALL_COMMAND_NAMES

@@ -128,7 +128,7 @@ pub(crate) async fn call<T>(
 /// tests) and the manager `invoke_handler`.
 macro_rules! registry {
     ($($module:ident => [$($cmd:ident),+ $(,)?]),+ $(,)?; desktop $desktop:ident => [$($extra:ident),+ $(,)?]) => {
-        /// Common controls at the office and the HTTP bridge (: 78).
+        /// Common controls at the office and the HTTP bridge (: 79).
         pub const COMMAND_NAMES: &[&str] = &[$($(stringify!($cmd)),+),+];
         pub const DESKTOP_COMMAND_NAMES: &[&str] = &[$(stringify!($extra)),+];
         pub const ALL_COMMAND_NAMES: &[&str] = &[$($(stringify!($cmd)),+),+, $(stringify!($extra)),+];
@@ -147,7 +147,7 @@ registry! {
     log => [log_page, log_search],
     diff => [commit_details, diff_file, file_log, file_blame],
     status => [status_get],
-    index => [stage_paths, unstage_paths, discard_paths, resolve_paths, stage_hunk, unstage_hunk, discard_hunk],
+    index => [stage_paths, stage_all, unstage_paths, discard_paths, resolve_paths, stage_hunk, unstage_hunk, discard_hunk],
     commit => [commit_create, config_set_identity],
     branch => [refs_list, reflog_list, branch_compare, branch_create, branch_checkout, branch_rename, branch_delete, branch_reset],
     tag => [tag_create, tag_delete, tag_push],

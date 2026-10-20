@@ -1,9 +1,9 @@
-//! Index [W] : `stage_paths`, `unstage_paths`, `discard_paths`, `resolve_paths`, `stage_hunk`, `unstage_hunk`,
+//! Index [W] : `stage_paths`, `stage_all`, `unstage_paths`, `discard_paths`, `resolve_paths`, `stage_hunk`, `unstage_hunk`,
 //! `discard_hunk`
 //! All return the new working tree state.
 use gitmini_core::AppError;
 use gitmini_core::types::StatusSnapshot;
-use gitmini_core::write::index::{HunkArgs, PathsArgs, ResolveArgs};
+use gitmini_core::write::index::{HunkArgs, PathsArgs, ResolveArgs, StageAllArgs};
 
 use super::{Args, Core, call};
 
@@ -15,6 +15,18 @@ pub async fn stage_paths(
     call(
         "stage_paths",
         gitmini_core::write::index::stage_paths(&state, args.0),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn stage_all(
+    state: Core<'_>,
+    args: Args<StageAllArgs>,
+) -> Result<StatusSnapshot, AppError> {
+    call(
+        "stage_all",
+        gitmini_core::write::index::stage_all(&state, args.0),
     )
     .await
 }

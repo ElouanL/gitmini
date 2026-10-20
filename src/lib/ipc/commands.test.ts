@@ -1,4 +1,4 @@
-// Contract of the 78 commands: one wrapper per order, exact name, arguments transmitted as is.
+// Contract of the 79 commands: one wrapper per order, exact name, arguments transmitted as is.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -15,10 +15,10 @@ function rustCommandList(): string[] {
 }
 
 describe('commands.ts', () => {
-  it("exactly displays the 78 backend commands", () => {
+  it("exactly displays the 79 backend commands", () => {
     const names = Object.values(COMMAND_NAMES).sort();
-    expect(names).toHaveLength(78);
-    expect(new Set(names).size).toBe(78);
+    expect(names).toHaveLength(79);
+    expect(new Set(names).size).toBe(79);
     expect(names).toEqual([...rustCommandList()].sort());
   });
 
@@ -41,6 +41,8 @@ describe('commands.ts', () => {
     expect(fake.calls[fake.calls.length - 1]).toEqual({ command: 'app_info', args: {} });
     await commands.stagePaths({ repoId: 3, paths: 'all' });
     expect(fake.calls[fake.calls.length - 1]).toEqual({ command: 'stage_paths', args: { repoId: 3, paths: 'all' } });
+    await commands.stageAll({ repoId: 3, scope: 'tracked' });
+    expect(fake.calls[fake.calls.length - 1]).toEqual({ command: 'stage_all', args: { repoId: 3, scope: 'tracked' } });
     await commands.resolvePaths({ repoId: 3, paths: ['a.txt'], side: 'theirs' });
     expect(fake.calls[fake.calls.length - 1]).toEqual({ command: 'resolve_paths', args: { repoId: 3, paths: ['a.txt'], side: 'theirs' } });
     // Discarded files: listed, then restored by id.

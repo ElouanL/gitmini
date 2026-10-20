@@ -92,6 +92,11 @@ export function stageable(files: readonly FileStatus[]): FileStatus[] {
   return files.filter((f) => f.unstaged !== null && f.unstaged !== undefined && isWritable(f));
 }
 
+/** Files that a "Stage tracked" touches (`git add -u`): those of "Stage all" without the untracked ones. */
+export function stageableTracked(files: readonly FileStatus[]): FileStatus[] {
+  return stageable(files).filter((f) => f.unstaged !== 'untracked');
+}
+
 export function unstageable(files: readonly FileStatus[]): FileStatus[] {
   return files.filter((f) => f.staged !== null && f.staged !== undefined && isWritable(f));
 }

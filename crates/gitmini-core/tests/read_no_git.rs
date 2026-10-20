@@ -137,7 +137,7 @@ async fn sec_01_no_read_command_spawns_git() {
     no_spawn!("status_snapshot", status_snapshot(&o.repo).await.unwrap());
     no_spawn!(
         "all_unstaged_paths",
-        all_unstaged_paths(&o.repo).await.unwrap()
+        all_unstaged_paths(&o.repo, true).await.unwrap()
     );
     assert!(no_spawn!("read_opstate", read_opstate(&o.repo)).is_some());
 

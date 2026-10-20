@@ -1,4 +1,4 @@
-//! Index : `stage_paths`, `unstage_paths`, `discard_paths`, `stage_hunk`, `unstage_hunk`, `discard_hunk`
+//! Index : `stage_paths`, `stage_all`, `unstage_paths`, `discard_paths`, `stage_hunk`, `unstage_hunk`, `discard_hunk`
 //! (a hunk, or only some of its lines). Ownership of
 //!
 //! All commands take the writing lock, check their preconditions with gix (submodule,
@@ -16,9 +16,9 @@ use serde::Deserialize;
 use serde_json::json;
 use specta::Type;
 
-use super::PathsOrAll;
 use super::patch::{self, Direction};
 use super::runner::{RunOpts, run};
+use super::{AllMarker, PathsOrAll};
 use crate::error::{AppError, AppResult, ErrorCode, gix_err};
 use crate::events::ChangeKindEv;
 use crate::state::{AppState, RepoHandle, WriteSpec};
@@ -30,6 +30,22 @@ use crate::types::{ChangeKind, DiffSource, FileDiff, StatusSnapshot};
 pub struct PathsArgs {
     pub repo_id: crate::types::RepoId,
     pub paths: PathsOrAll,
+}
+
+/// What `stage_all` stages: `all` is `git add -A` (untracked files included), `tracked` is `git add -u` (changes to
+/// tracked files only, deletions included). Neither touches a conflict, a submodule or a non-UTF-8 path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum StageScope {
+    All,
+    Tracked,
+}
+
+#[derive(Debug, Clone, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct StageAllArgs {
+    pub repo_id: crate::types::RepoId,
+    pub scope: StageScope,
 }
 
 /// Side of a conflict that `resolve_paths` keeps, with git's own meaning: `ours` is stage 2 (HEAD when the operation
@@ -93,6 +109,19 @@ pub async fn stage_paths(state: &AppState, args: PathsArgs) -> AppResult<StatusS
     let repo = state.repo(args.repo_id)?;
     let g = repo.begin_write(WriteSpec::new("stage", "Stage").declares(&[ChangeKindEv::Index]))?;
     let res = stage_paths_locked(&repo, args.paths).await;
+    g.finish();
+    res
+}
+
+/// "Stage all" or "stage tracked", without the 10,000-entry status ceiling. `stage_paths "all"` is scope `all`.
+pub async fn stage_all(state: &AppState, args: StageAllArgs) -> AppResult<StatusSnapshot> {
+    let repo = state.repo(args.repo_id)?;
+    let label = match args.scope {
+        StageScope::All => "Stage",
+        StageScope::Tracked => "Stage tracked changes",
+    };
+    let g = repo.begin_write(WriteSpec::new("stage", label).declares(&[ChangeKindEv::Index]))?;
+    let res = stage_all_locked(&repo, args.scope).await;
     g.finish();
     res
 }
@@ -383,7 +412,8 @@ where
 }
 
 /// `.` followed by literal exclusions: "all" except submodules, conflicts or non-UTF-8 paths.
-/// Pathspec magics require `GIT_LITERAL_PATHSPECS=0` (forced by the appellant).
+/// Pathspec magics require `GIT_LITERAL_PATHSPECS=0` (forced by the appellant). An excluded conflict is protected
+/// from `reset`, NOT from `add`, which resolves an unmerged entry all the same (git 2.54): see `stage_all_locked`.
 fn all_but(excluded: &[BString]) -> Vec<u8> {
     let mut v = b".\0".to_vec();
     for e in excluded {
@@ -417,56 +447,127 @@ async fn stage_paths_locked(
     repo: &Arc<RepoHandle>,
     paths: PathsOrAll,
 ) -> AppResult<StatusSnapshot> {
-    let view = load_index_view(repo).await?;
-    match paths {
-        PathsOrAll::Paths(paths) => {
-            if !paths.is_empty() {
-                check_paths(&view, &repo.workdir, &paths, false)?;
-                let opts = RunOpts {
-                    stdin: Some(nul_paths(&paths)),
-                    command: Some("stage_paths"),
-                    ..Default::default()
-                };
-                run(
-                    repo,
-                    &["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
-                    opts,
-                )
-                .await
-                .map_err(path_not_found)?;
-            }
-        }
-        PathsOrAll::All(_) => {
-            // Submodules and non-UTF-8 paths are never staged by "all stage" (05).
-            let excluded = view.exclusions(false);
-            if excluded.is_empty() {
-                run(
-                    repo,
-                    &["add", "-A"],
-                    RunOpts {
-                        command: Some("stage_paths"),
-                        ..Default::default()
-                    },
-                )
-                .await?;
-            } else {
-                let opts = RunOpts {
-                    stdin: Some(all_but(&excluded)),
-                    env: pathspec_magic_env(),
-                    command: Some("stage_paths"),
-                    ..Default::default()
-                };
-                run(
-                    repo,
-                    &["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
-                    opts,
-                )
-                .await?;
-            }
-            unstage_new_non_utf8(repo, &view).await?;
-        }
+    let paths = match paths {
+        PathsOrAll::Paths(paths) => paths,
+        PathsOrAll::All(AllMarker::All) => return stage_all_locked(repo, StageScope::All).await,
+    };
+    // Explicit paths may name a conflict: staging it is how "mark as resolved" works.
+    if !paths.is_empty() {
+        let view = load_index_view(repo).await?;
+        check_paths(&view, &repo.workdir, &paths, false)?;
+        let opts = RunOpts {
+            stdin: Some(nul_paths(&paths)),
+            command: Some("stage_paths"),
+            ..Default::default()
+        };
+        run(
+            repo,
+            &["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
+            opts,
+        )
+        .await
+        .map_err(path_not_found)?;
     }
     crate::read::status::status_snapshot(repo).await
+}
+
+async fn stage_all_locked(repo: &Arc<RepoHandle>, scope: StageScope) -> AppResult<StatusSnapshot> {
+    let view = load_index_view(repo).await?;
+    let flag = match scope {
+        StageScope::All => "-A",
+        StageScope::Tracked => "-u",
+    };
+    let opts = |stdin: Option<Vec<u8>>, env: Vec<(String, String)>| RunOpts {
+        stdin,
+        env,
+        command: Some("stage_paths"),
+        ..Default::default()
+    };
+    if view.conflicted.is_empty() {
+        // Submodules and non-UTF-8 paths are never staged by "all stage" (05).
+        let excluded = view.exclusions(false);
+        if excluded.is_empty() {
+            // No pathspec: `add -u -- .` fails on an empty index, `add -u` alone does nothing there.
+            run(repo, &["add", flag], opts(None, Vec::new())).await?;
+        } else if scope == StageScope::All || !view.is_empty() {
+            run(
+                repo,
+                &["add", flag, "--pathspec-from-file=-", "--pathspec-file-nul"],
+                opts(Some(all_but(&excluded)), pathspec_magic_env()),
+            )
+            .await?;
+        }
+    } else {
+        // `git add` resolves an unmerged entry even when an `:(exclude)` pathspec names it: only an explicit list of
+        // the other paths keeps conflicts out (they are resolved one by one, with "mark as resolved"). The list is
+        // not capped and already leaves out conflicts, submodules and non-UTF-8 paths. `update-index` is linear in
+        // the number of paths (`add --pathspec-from-file` is not) and ignores a path that has disappeared since.
+        let list: Vec<String> =
+            crate::read::status::all_unstaged_paths(repo, scope == StageScope::All)
+                .await?
+                .into_iter()
+                .filter(|p| !view.in_submodule(p))
+                .filter_map(|p| nested_repo_entry(&repo.workdir, p))
+                .collect();
+        // `update-index` aborts on a path beyond a symbolic link: such a path can only be a tracked file gone from
+        // the disk, removed from the index without a look at the worktree.
+        let (beyond_link, list): (Vec<String>, Vec<String>) = list
+            .into_iter()
+            .partition(|p| beyond_symlink(&repo.workdir, p));
+        // Nothing to stage: no git at all. Keep this guard should the command change: with `add --pathspec-from-file`,
+        // an empty list means the whole tree, conflicts included.
+        if !list.is_empty() {
+            let args: &[&str] = match scope {
+                // `--replace`: a new file `d` replaces the deleted tracked files `d/*` (and the other way round).
+                StageScope::All => &[
+                    "update-index",
+                    "--add",
+                    "--remove",
+                    "--replace",
+                    "-z",
+                    "--stdin",
+                ],
+                // Without `--add`, nothing untracked can enter the index.
+                StageScope::Tracked => &["update-index", "--remove", "-z", "--stdin"],
+            };
+            run(repo, args, opts(Some(nul_paths(&list)), Vec::new())).await?;
+        }
+        if !beyond_link.is_empty() {
+            run(
+                repo,
+                &["update-index", "--force-remove", "-z", "--stdin"],
+                opts(Some(nul_paths(&beyond_link)), Vec::new()),
+            )
+            .await?;
+        }
+    }
+    if scope == StageScope::All {
+        unstage_new_non_utf8(repo, &view).await?;
+    }
+    crate::read::status::status_snapshot(repo).await
+}
+
+/// An untracked nested repository is listed as `dir/`, which `update-index` ignores ("Ignoring path dir/"). Without
+/// the slash it becomes a gitlink, as with `git add -A`; one without a commit checked out is left out, since
+/// `update-index` would abort the whole batch on it. Any other path is kept as it is.
+fn nested_repo_entry(workdir: &Path, path: String) -> Option<String> {
+    let Some(dir) = path.strip_suffix('/') else {
+        return Some(path);
+    };
+    let has_head = gix::open(workdir.join(dir)).is_ok_and(|r| r.head_id().is_ok());
+    has_head.then(|| dir.to_owned())
+}
+
+/// One of the parent folders of `path` (relative to `workdir`) is a symbolic link.
+fn beyond_symlink(workdir: &Path, path: &str) -> bool {
+    let mut parent = Path::new(path).parent();
+    while let Some(p) = parent.filter(|p| !p.as_os_str().is_empty()) {
+        if std::fs::symlink_metadata(workdir.join(p)).is_ok_and(|m| m.file_type().is_symlink()) {
+            return true;
+        }
+        parent = p.parent();
+    }
+    false
 }
 
 /// Non-UTF-8 *unfollowed* paths cannot be excluded from a `git add -A` (their bytes are not known)
@@ -562,8 +663,10 @@ async fn unstage_paths_locked(
                 }
             }
         }
-        PathsOrAll::All(_) => {
-            let excluded = view.exclusions(false);
+        PathsOrAll::All(AllMarker::All) => {
+            // Conflicts stay as they are (resolved one by one), and always a pathspec: a bare `git reset` would also
+            // drop MERGE_HEAD / CHERRY_PICK_HEAD / REVERT_HEAD, silently ending the operation in progress.
+            let excluded = view.exclusions(true);
             if unborn {
                 // Unborn HEAD: index emptys with `rm --cached` (failed on an empty index: nothing to do).
                 if !view.is_empty() {
@@ -581,16 +684,6 @@ async fn unstage_paths_locked(
                     )
                     .await?;
                 }
-            } else if excluded.is_empty() {
-                run(
-                    repo,
-                    &["reset", "-q"],
-                    RunOpts {
-                        command: Some("unstage_paths"),
-                        ..Default::default()
-                    },
-                )
-                .await?;
             } else {
                 run(
                     repo,
@@ -742,10 +835,10 @@ async fn discard_paths_locked(
                 }
             }
         }
-        PathsOrAll::All(_) => {
+        PathsOrAll::All(AllMarker::All) => {
             // "Cancell All" applies to **all** modified or untracked paths, without the
             // 10,000 status entries. `all_unstaged_paths` already excludes submodules, conflicts and non-UTF-8 paths.
-            for path in crate::read::status::all_unstaged_paths(repo).await? {
+            for path in crate::read::status::all_unstaged_paths(repo, true).await? {
                 if view.in_submodule(&path) {
                     continue;
                 }

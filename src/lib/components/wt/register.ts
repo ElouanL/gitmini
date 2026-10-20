@@ -19,8 +19,8 @@ import { resolveSideText } from '../diff/conflict';
 import { commitForm } from '../commit-form/form-state.svelte';
 import { hookOutputFor } from '../commit-form/hook-output';
 import { startCommitFormWiring } from '../commit-form/wiring.svelte';
-import { discardAll, resolveWithSide, stagePaths, unstagePaths } from './actions';
-import { discardable, offersSides, resolvable, stageable, unstageable } from './list-model';
+import { discardAll, resolveWithSide, stageAll, unstagePaths } from './actions';
+import { discardable, offersSides, resolvable, stageable, stageableTracked, unstageable } from './list-model';
 
 // Lazy loaders (initial JS budget, ) : each component is a separate chunk, downloaded at the first opening.
 // must only import registers, light modules and TYPES, never a component or a diff computing module.
@@ -31,6 +31,19 @@ registerDialog('identity-dialog', () => import('../identity/IdentityDialog.svelt
 // - - Contextual menus (: closed list) - -
 // Menu `wt-file`: `open-external` and `copy-path` come from the base, `stash-paths` from the domain stash (action `stash.save-paths`).
 registerMenuItems('wip', [
+  {
+    id: 'stage-tracked',
+    action: 'wt.stage-tracked',
+    order: 10,
+    visible: () => stageableTracked(status.files).length > 0 || status.snapshot?.truncated === true,
+  },
+  {
+    id: 'stage-all',
+    action: 'wt.stage-all',
+    label: () => t('wt.btn.stageAll.title'),
+    order: 11,
+    visible: () => stageable(status.files).length > 0,
+  },
   {
     id: 'discard-all',
     label: () => t('wt.menu.discardAll'),
@@ -83,13 +96,24 @@ registerAction(contextStep(-1));
 
 // - - Actions (excluding palette: the palette lists only the toolbar commands, 03) - -
 registerAction({
+  id: 'wt.stage-tracked',
+  label: () => t('wt.action.stageTracked'),
+  palette: false,
+  // Truncated status: tracked changes may lie beyond the listed entries.
+  enabled: () => stageableTracked(status.files).length > 0 || status.snapshot?.truncated === true,
+  disabledReason: (ctx) => ctx.op.blockReason('index'),
+  run: async (ctx) => {
+    await stageAll('tracked', ctx.session);
+  },
+});
+registerAction({
   id: 'wt.stage-all',
   label: () => t('wt.action.stageAll'),
   palette: false,
   enabled: () => stageable(status.files).length > 0,
   disabledReason: (ctx) => ctx.op.blockReason('index'),
-  run: async () => {
-    await stagePaths('all');
+  run: async (ctx) => {
+    await stageAll('all', ctx.session);
   },
 });
 registerAction({

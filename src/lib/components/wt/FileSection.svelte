@@ -1,6 +1,6 @@
 <script lang="ts">
   import { captureStores } from '$lib/stores/context';
-  const { op, ui, wt } = captureStores();
+  const { op, status, ui, wt } = captureStores();
   // A section of `wt-panel`: header (counter, "All..." buttons), virtualized file list from 500 entries,
   // Multiple selection (Maj / Mod + click), keyboard (↑ ▼ s u Delete Enter, 03 " Keyboard").
   import { tick, untrack } from 'svelte';
@@ -13,9 +13,9 @@
   import { toast } from '$lib/stores/toast.svelte';
   import { t, tp } from '$i18n/index';
   import { conflictSideLabel } from '../diff/conflict';
-  import { discardAll, discardFiles, isOpenDiff, openFileDiff, openInEditor, resolveConflict, resolveWithSide, stagePaths, unstagePaths } from './actions';
+  import { discardAll, discardFiles, isOpenDiff, openFileDiff, openInEditor, resolveConflict, resolveWithSide, stageAll, stagePaths, unstagePaths } from './actions';
   import FileRow from './FileRow.svelte';
-  import { isWritable, resolvable, stageable, unstageable, type ListSide } from './list-model';
+  import { discardable, isWritable, resolvable, stageable, stageableTracked, unstageable, type ListSide } from './list-model';
   import { measureHeight } from './measure';
   import RowIcon from './RowIcon.svelte';
   import { clickSelect, EMPTY_SELECTION, keyboardTargets, moveFocus, neighborAfterRemoval, prune, targetsFor } from './selection';
@@ -215,6 +215,10 @@
   }
 
   const stageAllCount = $derived(stageable(files).length);
+  const stageTrackedCount = $derived(stageableTracked(files).length);
+  const discardAllCount = $derived(discardable(files).length);
+  // Truncated status: tracked changes may lie beyond the listed entries (untracked files are dropped first).
+  const truncated = $derived(status.snapshot?.truncated === true);
   const unstageAllCount = $derived(unstageable(files).length);
   const activeId = $derived(focusIndex >= win.first && focusIndex < win.end ? `wt-${side}-${focusIndex}` : undefined);
 </script>
@@ -225,11 +229,14 @@
     <span class="count" aria-label={tp('wt.files', files.length)}>{files.length}</span>
     <span class="spacer"></span>
     {#if side === 'unstaged'}
-      <button type="button" class="hbtn danger" data-testid="wt-discard-all-btn" disabled={locked || stageAllCount === 0} title={t('wt.btn.discardAll')} onclick={() => void discardAll()}>
-        <RowIcon name="discard" size={12} />{t('wt.btn.discardAll')}
+      <button type="button" class="hbtn danger" data-testid="wt-discard-all-btn" disabled={locked || discardAllCount === 0} title={t('wt.btn.discardAll')} onclick={() => void discardAll()}>
+        <RowIcon name="discard" size={12} /><span class="label">{t('wt.btn.discardAll')}</span>
       </button>
-      <button type="button" class="hbtn" data-testid="wt-stage-all-btn" disabled={locked || stageAllCount === 0} title={t('wt.btn.stageAll')} onclick={() => void stagePaths('all')}>
-        <RowIcon name="stage" size={12} />{t('wt.btn.stageAll')}
+      <button type="button" class="hbtn" data-testid="wt-stage-tracked-btn" disabled={locked || (stageTrackedCount === 0 && !truncated)} title={t('wt.btn.stageTracked.title')} onclick={() => void stageAll('tracked')}>
+        <RowIcon name="stage" size={12} /><span class="label">{t('wt.btn.stageTracked')}</span>
+      </button>
+      <button type="button" class="hbtn" data-testid="wt-stage-all-btn" disabled={locked || stageAllCount === 0} title={t('wt.btn.stageAll.title')} onclick={() => void stageAll('all')}>
+        <RowIcon name="stage" size={12} /><span class="label">{t('wt.btn.stageAll')}</span>
       </button>
     {:else if side === 'staged'}
       <button type="button" class="hbtn" data-testid="wt-unstage-all-btn" disabled={locked || unstageAllCount === 0} title={t('wt.btn.unstageAll')} onclick={() => void unstagePaths('all')}>
@@ -295,6 +302,18 @@
     flex: 1 1 0;
     min-height: 88px;
     border-bottom: 1px solid var(--border);
+    container-type: inline-size;
+  }
+  /* Narrow panel: the Unstaged header buttons keep their icon (and title), "Discard all" first. */
+  @container (max-width: 390px) {
+    .hbtn.danger .label {
+      display: none;
+    }
+  }
+  @container (max-width: 330px) {
+    .hbtn .label {
+      display: none;
+    }
   }
   .section.conflict {
     flex: 0 1 auto;
