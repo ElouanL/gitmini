@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import type { DiscardedFile, RefsSnapshot, RepoOpState, UndoStatus, FileDiff, StatusSnapshot } from '../ipc/types';
+import type { CommitDetails, DiscardedFile, LogPage, RefsSnapshot, RepoOpState, TodoPreview, UndoStatus, FileDiff, StatusSnapshot } from '../ipc/types';
 import type { DiscardRestoreResult } from '../ipc/commands';
+import { oid } from '../test/fixtures';
 import { createMockTransport } from './transport';
 
 describe('mock transport: diffs and line staging', () => {
@@ -237,5 +238,30 @@ describe('mock transport: conflict scenario', () => {
     expect(out.files.some((f) => f.path === 'src/lexer.ts')).toBe(false);
     expect(conflicted(out)).toEqual([]);
     expect(opStates.at(-1)?.conflictedPaths).toEqual([]);
+  });
+});
+
+describe('mock transport: edit a commit message (reword)', () => {
+  const transport = createMockTransport();
+  const call = <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => transport.invoke(command, { repoId: 1, ...args }) as Promise<T>;
+  const summaryOf = async (o: string) => (await call<LogPage>('log_page', { cursor: null })).rows.find((r) => r.oid === o)?.summary;
+
+  it('a reword shows the new message in the graph, the details and the preview; the undo puts the old one back', async () => {
+    const target = oid(59);
+    const preview = await call<TodoPreview>('rebase_todo_preview', { upstream: oid(58) });
+    expect(preview.items.map((i) => i.oid)).toEqual([oid(59), oid(60)]);
+    const before = await summaryOf(target);
+    await call('rebase_interactive_start', {
+      opId: 'x', upstream: preview.base, expectedHead: preview.head, autostash: false,
+      todo: preview.items.map((i) => (i.oid === target ? { oid: i.oid, action: 'reword', message: 'New title\n\nNew body' } : { oid: i.oid, action: 'pick' })),
+    });
+    expect(await summaryOf(target)).toBe('New title');
+    expect((await call<CommitDetails>('commit_details', { oid: target })).message).toBe('New title\n\nNew body');
+    expect((await call<TodoPreview>('rebase_todo_preview', { upstream: oid(58) })).items[0]).toMatchObject({ summary: 'New title', message: 'New title\n\nNew body' });
+    const peek = await call<UndoStatus>('undo_peek');
+    expect(peek.entry).toMatchObject({ kind: 'rebase' });
+    await call('undo_last', { entryId: peek.entry!.id });
+    expect(await summaryOf(target)).toBe(before);
+    expect((await call<UndoStatus>('undo_peek')).entry?.kind).not.toBe('rebase');
   });
 });

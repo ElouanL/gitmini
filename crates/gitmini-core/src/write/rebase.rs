@@ -1015,11 +1015,15 @@ fn temp_dir_from_rebase_files(git_dir: &Path) -> Option<PathBuf> {
             continue;
         };
         for line in text.lines() {
-            // Tolerant on the cleaning mode: a rebase on pause can come from an earlier version (`strip`).
-            let Some(rest) = line.strip_prefix("exec git commit --amend --only --cleanup=") else {
+            // Tolerant on the format: a rebase on pause can come from an earlier version (`--cleanup=strip`, no
+            // `commit-msg` step before the commit).
+            let Some(cmd) = line.strip_prefix("exec ") else {
                 continue;
             };
-            let Some((_, quoted)) = rest.split_once(" -F ") else {
+            let Some(at) = cmd.find("git commit --amend --only ") else {
+                continue;
+            };
+            let Some((_, quoted)) = cmd[at..].split_once(" -F ") else {
                 continue;
             };
             let Some(tokens) = shlex::split(quoted) else {
@@ -1225,9 +1229,10 @@ mod tests {
         std::fs::create_dir(&rm).unwrap();
         let ours = temp_root().join("gitmini-unit-test-discover");
         let line = |d: &Path| {
+            let quoted = runner::sh_quote(&format!("{}/msg-1", d.display()));
             format!(
-                "exec git commit --amend --only --cleanup=whitespace -F {}\n",
-                runner::sh_quote(&format!("{}/msg-1", d.display()))
+                "exec h=\"$(git rev-parse --git-path hooks/commit-msg)\" && {{ test ! -x \"$h\" || \"$h\" {quoted}; }} \
+                 && git commit --amend --only --no-verify --cleanup=whitespace -F {quoted}\n"
             )
         };
         std::fs::write(
@@ -1254,7 +1259,7 @@ mod tests {
         .unwrap();
         assert_eq!(temp_dir_from_rebase_files(git_dir.path()), None);
 
-        // a todo written by an earlier version (`--cleanup=strip`) is also recognized
+        // a todo written by an earlier version (`--cleanup=strip`, no `commit-msg` step) is also recognized
         std::fs::write(
             rm.join("git-rebase-todo"),
             format!(
@@ -1335,9 +1340,9 @@ mod tests {
         let todo = std::fs::read_to_string(dir.join("todo")).unwrap();
         assert!(
             todo.starts_with(&format!(
-                "pick {}\nexec git commit --amend --only --cleanup=whitespace -F '",
+                "pick {}\nexec h=\"$(git rev-parse --git-path hooks/commit-msg)\" && {{ test ! -x \"$h\" || \"$h\" '",
                 "a".repeat(40)
-            )),
+            )) && todo.contains("git commit --amend --only --no-verify --cleanup=whitespace -F '"),
             "{todo}"
         );
         assert_eq!(

@@ -28,7 +28,7 @@ const maybe = (id: string) => screen.queryByTestId(id);
 
 // The dialogues are in lazy loading: they are downloaded once (the first dynamic import of a chunk is slow under vitest).
 beforeAll(async () => {
-  await Promise.all(['rebase-confirm-dialog', 'squash-dialog'].map((id) => preloadDialog(id)));
+  await Promise.all(['rebase-confirm-dialog', 'squash-dialog', 'reword-dialog'].map((id) => preloadDialog(id)));
 }, 30_000);
 
 beforeEach(() => {
@@ -1035,5 +1035,163 @@ describe("op.skip: Recover toast and op-skip confirmation", () => {
     expect(skipNeedsConfirm(makeConflictState({ conflictedPaths: [] }), [staged])).toBe(true);
     expect(skipNeedsConfirm(makeConflictState({ phase: 'running', conflictedPaths: [] }), [staged])).toBe(false);
     expect(skipNeedsConfirm(stopped({ kind: 'cherry-pick' }), [staged])).toBe(false);
+  });
+});
+
+// ── Edit the message of one commit (reword)
+
+describe('reword', () => {
+  // Test log_page: linear lines 60..1, HEAD = fxOid(60). Commit 59 reworded (upstream 58), 60 rewritten above it.
+  const rw = (n: number, message: string, pushed = false): TodoPreviewItem => ({
+    oid: fxOid(n), shortOid: fxOid(n).slice(0, 7), summary: message.split('\n')[0]!, message, author: 'Bot', pushed,
+  });
+  const rewordPreview = (): TodoPreview => ({ base: fxOid(58), head: fxOid(60), items: [rw(59, 'B: typo\n\nThe body.', true), rw(60, 'C: adds c')] });
+  const HEAD_MAIN = { head: { branch: 'main', oid: fxOid(60), detached: false, unborn: false } };
+  const menu = (oids: string[]) => resolveMenu({ menu: 'commit', oid: oids[0]!, oids });
+
+  async function openReword(extra: Record<string, () => unknown> = {}) {
+    const fake = await openTestRepo({ rebase_todo_preview: () => rewordPreview(), rebase_interactive_start: () => HEAD_MAIN, ...extra });
+    render(DialogHost);
+    void menu([fxOid(59)]).find((i) => i.id === 'reword')!.run();
+    await screen.findByTestId('reword-summary-input');
+    return fake;
+  }
+
+  it("menu entry: one commit of HEAD's history only, disabled while an operation blocks writes; palette action on the selection", async () => {
+    await openTestRepo();
+    const entry = menu([fxOid(59)]).find((i) => i.id === 'reword');
+    expect(entry?.label).toBe('Edit message...');
+    expect(entry?.disabled).toBeFalsy();
+    expect(menu([fxOid(59), fxOid(58)]).map((i) => i.id)).not.toContain('reword');
+    // Action (palette, details panel): the single selected commit; not applicable = disabled without a reason (not listed).
+    const action = getAction('commit.reword')!;
+    expect(action.palette).not.toBe(false);
+    expect(actionDisabledReason(action)).toBe('');
+    graph.selectCommit(fxOid(59));
+    expect(actionDisabledReason(action)).toBeNull();
+    graph.selectCommits([fxOid(59), fxOid(58)]);
+    expect(actionDisabledReason(action)).toBe('');
+    graph.selectCommit(fxOid(59));
+    op.setState(makeConflictState());
+    expect(menu([fxOid(59)]).find((i) => i.id === 'reword')?.disabled).toBe(true);
+    expect(actionDisabledReason(action)).toBeTruthy();
+  });
+
+  it("menu entry hidden in detached HEAD", async () => {
+    const r = makeRefs();
+    await openTestRepo({ refs_list: () => ({ ...r, head: { kind: 'detached', oid: fxOid(60) }, local: r.local.map((b) => ({ ...b, isHead: false })) }) });
+    expect(menu([fxOid(59)]).map((i) => i.id)).not.toContain('reword');
+  });
+
+  it("dialog: pre-filled summary and description, Save disabled while unchanged or empty, notes, exact payload, rewritten commit selected", async () => {
+    const fake = await openReword();
+    expect(fake.callsOf('rebase_todo_preview')[0]!.args).toEqual({ repoId: 1, upstream: fxOid(58) });
+    const summary = tid('reword-summary-input') as HTMLInputElement;
+    const body = tid('reword-description-input') as HTMLTextAreaElement;
+    expect(summary.value).toBe('B: typo');
+    expect(body.value).toBe('The body.');
+    await waitFor(() => expect(document.activeElement).toBe(summary));
+    expect(tid('reword-commit')).toHaveAttribute('data-oid', fxOid(59));
+    expect(tid('reword-rewrite-note')).toHaveTextContent('1 later commit will be rewritten as well.');
+    expect(tid('reword-pushed-warning')).toHaveTextContent('1 of the rewritten commits is already on a remote.');
+    expect(maybe('reword-autostash-checkbox')).toBeNull();
+    expect(tid('reword-confirm-btn')).toBeDisabled();
+    expect(tid('reword-confirm-btn')).toHaveAttribute('title', 'The message is unchanged.');
+
+    await fireEvent.input(summary, { target: { value: '   ' } });
+    expect(tid('reword-confirm-btn')).toBeDisabled();
+    await fireEvent.input(summary, { target: { value: 'B: fix the typo ' } });
+    await fireEvent.input(body, { target: { value: 'The body.\nSecond line.\n' } });
+    expect(tid('reword-confirm-btn')).toBeEnabled();
+    await userEvent.click(tid('reword-confirm-btn'));
+    await waitFor(() => expect(fake.callsOf('rebase_interactive_start')).toHaveLength(1));
+    const args = fake.callsOf('rebase_interactive_start')[0]!.args;
+    expect(args).toMatchObject({ repoId: 1, upstream: fxOid(58), expectedHead: fxOid(60), autostash: false });
+    expect(typeof args.opId).toBe('string');
+    expect(args.todo).toEqual([
+      { oid: fxOid(59), action: 'reword', message: 'B: fix the typo\n\nThe body.\nSecond line.' },
+      { oid: fxOid(60), action: 'pick' },
+    ]);
+    await whenIdle();
+    expect(maybe('reword-dialog')).toBeNull();
+    // The new oid of the commit: oldest of `upstream..HEAD` read again after the rebase.
+    expect(fake.callsOf('rebase_todo_preview')).toHaveLength(2);
+    expect(graph.singleCommitOid).toBe(fxOid(59));
+  });
+
+  it("dirty worktree: autostash checkbox checked by default and sent", async () => {
+    const fake = await openReword({ status_get: () => makeStatus() });
+    expect(tid('reword-autostash-checkbox')).toBeChecked();
+    await fireEvent.input(tid('reword-summary-input'), { target: { value: 'B: other' } });
+    await userEvent.click(tid('reword-confirm-btn'));
+    await waitFor(() => expect(fake.callsOf('rebase_interactive_start')).toHaveLength(1));
+    expect(fake.callsOf('rebase_interactive_start')[0]!.args).toMatchObject({ autostash: true });
+  });
+
+  it("UNSUPPORTED_MERGES from the preview: inline error, Save disabled", async () => {
+    await openTestRepo({
+      rebase_todo_preview: () => {
+        throw { code: 'UNSUPPORTED_MERGES', message: 'merges', details: { oids: [fxOid(59)] } };
+      },
+    });
+    render(DialogHost);
+    void openDialog('reword-dialog', { oid: fxOid(59) });
+    expect(await screen.findByTestId('reword-error')).toHaveTextContent('Range containing merges: not supported in v1.');
+    expect(tid('reword-confirm-btn')).toBeDisabled();
+  });
+
+  it("line not loaded, commit off the current branch: not-in-head reason", async () => {
+    await openTestRepo({
+      commit_details: (a) => ({ oid: a.oid, parents: [oid('a')], message: 'x' }),
+      rebase_todo_preview: () => ({ base: oid('a'), head: oid('e'), items: [item(1, 'D', { oid: oid('d') }), item(2, 'E', { oid: oid('e') })] }),
+    });
+    render(DialogHost);
+    void openDialog('reword-dialog', { oid: oid('b') });
+    expect(await screen.findByTestId('reword-error')).toHaveTextContent("This commit is not on the current branch's history.");
+    expect(tid('reword-confirm-btn')).toBeDisabled();
+  });
+
+  it("STALE: dedicated toast", async () => {
+    await openReword({
+      rebase_interactive_start: () => {
+        throw { code: 'STALE', message: 'expired', details: { what: 'todo' } };
+      },
+    });
+    await fireEvent.input(tid('reword-summary-input'), { target: { value: 'B: other' } });
+    await userEvent.click(tid('reword-confirm-btn'));
+    await whenIdle();
+    await waitFor(() => expect(toast.items.at(-1)?.message).toBe('The branch changed since the dialog opened: the message was not changed. Try again.'));
+  });
+
+  it("DIRTY_WORKTREE: the dialog reopens with the typed text, retry with autostash", async () => {
+    let n = 0;
+    const fake = await openReword({
+      rebase_interactive_start: () => {
+        if (n++ === 0) throw { code: 'DIRTY_WORKTREE', message: 'dirty', details: { paths: ['README.md'] } };
+        return HEAD_MAIN;
+      },
+    });
+    await fireEvent.input(tid('reword-summary-input'), { target: { value: 'Typed summary' } });
+    await fireEvent.input(tid('reword-description-input'), { target: { value: 'Typed body' } });
+    await userEvent.click(tid('reword-confirm-btn'));
+    await screen.findByTestId('reword-dirty');
+    await waitFor(() => expect((tid('reword-summary-input') as HTMLInputElement).value).toBe('Typed summary'));
+    expect((tid('reword-description-input') as HTMLTextAreaElement).value).toBe('Typed body');
+    await userEvent.click(tid('reword-confirm-btn'));
+    await waitFor(() => expect(fake.callsOf('rebase_interactive_start')).toHaveLength(2));
+    expect(fake.callsOf('rebase_interactive_start')[1]!.args).toMatchObject({ autostash: true });
+    expect((fake.callsOf('rebase_interactive_start')[1]!.args.todo as { message?: string }[])[0]!.message).toBe('Typed summary\n\nTyped body');
+  });
+
+  it("CONFLICT (e.g. commit-msg hook refusing the message): banner of the base, no toast", async () => {
+    await openReword({
+      rebase_interactive_start: () => {
+        throw { code: 'CONFLICT', message: 'blocked', details: { state: makeConflictState() } };
+      },
+    });
+    await fireEvent.input(tid('reword-summary-input'), { target: { value: 'B: other' } });
+    await userEvent.click(tid('reword-confirm-btn'));
+    await waitFor(() => expect(op.state?.kind).toBe('rebase'));
+    expect(toast.items).toHaveLength(0);
   });
 });

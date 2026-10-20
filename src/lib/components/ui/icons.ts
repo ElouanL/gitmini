@@ -27,6 +27,7 @@ export const ICONS = {
   copy: 'M9 9h11v11H9z M5 15V4h11',
   stop: 'M7 7h10v10H7z',
   commit: 'M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z M3 12h6 M15 12h6',
+  edit: 'M4 20h4L19 9l-4-4L4 16z M13.5 6.5l4 4',
   merge: 'M6 3v12 M9 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0z M21 18a3 3 0 1 1-6 0 3 3 0 0 1 6 0z M6 9a9 9 0 0 0 9 9',
 } as const;
 

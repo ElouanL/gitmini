@@ -12,13 +12,15 @@
 //   `fix/typo` merges cleanly, `topic` fast-forwards, `origin/main` is already merged.
 //   `src/App.svelte` (added as `src/Main.svelte`, then renamed) and `README.md` have a history and a blame: the "History" and "Blame"
 //   buttons of their diff, or a commit's file list (commits 12, 18, 24, 31, 37, 44, 48, 52), open them; "Follow renames" works.
+//   "Edit message..." on a commit of `main` (menu, or the button next to the commit title) rewords it: the graph and the details show
+//   the new message, and the undo toast puts the previous one back.
 //   The palette (Mod+K) lists branches (`@`), commits (`#`, searched by subject or sha) and repositories (`/`); the commands
 //   run last come first and are kept as the `palette.recent` setting.
 // Driver from console: `__mock.emit('repo:changed', { repoId: 1, kinds: ['refs'] })`, `__mock.state`,
 // `__mock.advanceAutoFetch(5 * 60_000)` (after choosing an interval in Settings: each background fetch finds one more upstream commit).
 import { dispatchEvent, type EventMap } from '../ipc/events';
 import type { EventName, Transport, Unlisten } from '../ipc/transport';
-import type { AppError, BranchCompare, ConflictKind, ConflictView, DiscardedFile, DiscardSource, FileStatus, MergePreview, RefsSnapshot, RepoInfo, RepoOpState, TagInfo, UndoStatus } from '../ipc/types';
+import type { AppError, BranchCompare, ConflictKind, ConflictView, DiscardedFile, DiscardSource, FileStatus, LogPage, MergePreview, RefsSnapshot, RepoInfo, RepoOpState, TagInfo, TodoItem, UndoStatus } from '../ipc/types';
 import {
   makeAppInfo, makeBranch, makeConflictState, makeLogPage, makeRecents, makeRefs, makeRemotes, makeRepoInfo, makeStashes, makeStatus, makeUndo, oid,
 } from '../test/fixtures';
@@ -55,6 +57,12 @@ function tagDeleteUndo(tag: TagInfo): UndoStatus {
       refName: tag.fullRef, before: tag.oid, after: null, upstreamRef: null, upstreamAtOp: null,
     },
   };
+}
+
+/** Undo status offering to put back the messages a reword replaced (kind `rebase`, as the interactive rebase records it). */
+function rewordUndo(): UndoStatus {
+  const base = makeUndo(true);
+  return { ...base, entry: { ...base.entry!, id: 'undo-reword', kind: 'rebase', label: 'Undo the rebase of main', effect: 'Put main back as it was before the rebase.', before: oid(60), after: oid(60) } };
 }
 
 /** One more commit on the current branch's upstream (`n`th), as a background fetch would bring in; `n = 0` clears what is behind. */
@@ -103,6 +111,11 @@ export function createMockTransport(): Transport {
   const history = createHistorySim();
   let news = 0;
   let deletedTag: TagInfo | null = null;
+  // Messages changed by "Edit message..." (oids do not change in the mock), and those to put back on undo (`null`: nothing to undo).
+  let reworded = new Map<string, string>();
+  let rewordedBefore: Map<string, string> | null = null;
+  const subjectOf = (o: string, fallback: string): string => reworded.get(o)?.split('\n')[0] ?? fallback;
+  const withRewords = (page: LogPage): LogPage => ({ ...page, rows: page.rows.map((r) => (reworded.has(r.oid) ? { ...r, summary: subjectOf(r.oid, r.summary) } : r)) });
   // Tags the mock remote has: `v0.2.0` is there under another commit (a push of it is refused until it is deleted there).
   const remoteTags = new Map<string, 'theirs' | 'ours'>([['v0.2.0', 'theirs']]);
   // The trash of discarded files, newest first. Contents are not simulated: a restore brings the file back as modified.
@@ -229,7 +242,7 @@ export function createMockTransport(): Transport {
     repo_activate: () => null,
     log_page: async (a) => {
       await sleep(40);
-      return makeLogPage(a.aroundOid ? 60 : 60, 60, 0, 60);
+      return withRewords(makeLogPage(a.aroundOid ? 60 : 60, 60, 0, 60));
     },
     // Same rule as the backend for plain text: a sha prefix (4 characters or more) or a piece of the subject.
     log_search: async (a) => {
@@ -262,12 +275,12 @@ export function createMockTransport(): Transport {
     },
     stash_list: () => stashes,
     status_get: () => (scenario === 'degraded' ? { ...status, watcherDegraded: true } : status),
-    undo_peek: () => (deletedTag ? tagDeleteUndo(deletedTag) : makeUndo(scenario !== 'empty')),
+    undo_peek: () => (deletedTag ? tagDeleteUndo(deletedTag) : rewordedBefore ? rewordUndo() : makeUndo(scenario !== 'empty')),
     commit_details: (a) => ({
       oid: String(a.oid), parents: [oid(Number.parseInt(String(a.oid).slice(-2), 16) - 1)], tree: oid(7777),
       author: { name: 'Alice Martin', email: 'alice@example.org', time: 1790000000, offsetMinutes: 120 },
       committer: { name: 'Alice Martin', email: 'alice@example.org', time: 1790000000, offsetMinutes: 120 },
-      message: 'feat: login form\n\nAdds the login form and its validation.', files: history.filesOf(String(a.oid)), truncated: false,
+      message: reworded.get(String(a.oid)) ?? 'feat: login form\n\nAdds the login form and its validation.', files: history.filesOf(String(a.oid)), truncated: false,
     }),
     file_log: async (a) => {
       await sleep(80);
@@ -385,6 +398,7 @@ export function createMockTransport(): Transport {
       const tag = refs.tags.find((t) => t.name === a.name);
       if (!tag) throw err('NOT_FOUND', `The tag "${String(a.name)}" no longer exists.`, { what: 'ref', name: a.name });
       deletedTag = tag;
+      rewordedBefore = null;
       refs = { ...refs, tags: refs.tags.filter((t) => t !== tag) };
       emit('repo:changed', { repoId: 1, kinds: ['refs'] });
       return { deletedOid: tag.oid, refs };
@@ -431,13 +445,21 @@ export function createMockTransport(): Transport {
       return {
         base: a.upstream ?? null, head: oid(60),
         items: rows.map((r) => ({
-          oid: r.oid, shortOid: r.oid.slice(0, 7), summary: r.summary, message: r.summary, author: 'Alice Martin',
+          oid: r.oid, shortOid: r.oid.slice(0, 7), summary: subjectOf(r.oid, r.summary), message: reworded.get(r.oid) ?? r.summary, author: 'Alice Martin',
           pushed: Number.parseInt(r.oid, 16) <= 58,
         })),
       };
     },
-    rebase_interactive_start: async () => {
+    // Only the `reword` lines are simulated (the history stays linear and keeps its oids).
+    rebase_interactive_start: async (a) => {
       await sleep(600);
+      const rewords = (a.todo as TodoItem[]).filter((i) => i.action === 'reword' && typeof i.message === 'string');
+      if (rewords.length > 0) {
+        rewordedBefore = new Map(reworded);
+        deletedTag = null;
+        reworded = new Map(reworded);
+        for (const i of rewords) reworded.set(i.oid, i.message!.trim());
+      }
       emit('repo:changed', { repoId: 1, kinds: ['head', 'refs'] });
       return { head: { branch: 'main', oid: oid(60), detached: false, unborn: false } };
     },
@@ -447,6 +469,12 @@ export function createMockTransport(): Transport {
       return { head: { branch: 'main', oid: oid(60), detached: false, unborn: false } };
     },
     undo_last: () => {
+      if (rewordedBefore) {
+        reworded = rewordedBefore;
+        rewordedBefore = null;
+        emit('repo:changed', { repoId: 1, kinds: ['head', 'refs'] });
+        return { head: { branch: 'main', oid: oid(60), detached: false, unborn: false } };
+      }
       if (deletedTag) {
         refs = { ...refs, tags: [deletedTag, ...refs.tags] };
         deletedTag = null;
