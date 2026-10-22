@@ -15,7 +15,6 @@ gitmini is open source software licensed under [GPL-3.0-only](../LICENSE). Its s
 Nothing else is signed with the SignPath Foundation certificate. In particular:
 
 - macOS builds use an ad hoc signature and are not notarized.
-- Linux packages are published with `SHA256SUMS` and are not Authenticode-signed.
 - Automatic updates are authenticated by a separate, project-owned Tauri (Minisign) key. That key is unrelated to the SignPath certificate. For Windows, the update signature is computed over the final installer **after** it has been signed by SignPath, so the installer users download and the one the updater verifies are the same file.
 
 Only binaries built from this repository are signed. No third-party or pre-built binaries are submitted. The SignPath artifact configuration ([`.signpath/artifact-configuration.xml`](../.signpath/artifact-configuration.xml)) accepts only an installer named for the release and enforces the product name `gitmini` and a product version equal to the release tag without its leading `v`.

@@ -89,7 +89,6 @@ jobs:
         include:
           - { id: macos-arm64, os: macos-14, args: "--target aarch64-apple-darwin", targets: aarch64-apple-darwin }
           - { id: macos-x64, os: macos-14, args: "--target x86_64-apple-darwin", targets: x86_64-apple-darwin }
-          - { id: linux, os: ubuntu-22.04, args: "", targets: "" }
           - { id: windows, os: windows-2022, args: "", targets: "" }
     env:
       HAS_UPDATER_KEY: "true"
@@ -98,9 +97,6 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.sha }}
           persist-credentials: false
-      - name: Linux build prerequisites
-        if: runner.os == 'Linux'
-        run: bash scripts/ci-install-linux-deps.sh release
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -147,7 +143,7 @@ jobs:
           releaseName: gitmini ${{ env.TAG }}
           releaseBody: |
             macOS: ad hoc signed `.dmg` installers for Apple Silicon and Intel, without notarization.
-            Windows: per-user `-setup.exe` installer (no administrator rights needed). Linux: `.AppImage` and `.deb`.
+            Windows: per-user `-setup.exe` installer (no administrator rights needed). Linux builds are paused for now.
             See `docs/code-signing-policy.md` for the signature status of the Windows installer.
             Automatic updates are signed with the gitmini updater key. Verify downloads with `SHA256SUMS`.
             See `docs/releases.md` for installation and verification instructions.
@@ -320,10 +316,9 @@ jobs:
         run: |
           mkdir dl
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dl \
-            --pattern '*.dmg' --pattern '*-setup.exe' --pattern '*.AppImage' --pattern '*.deb' \
+            --pattern '*.dmg' --pattern '*-setup.exe' \
             --pattern '*.app.tar.gz' --pattern '*.sig' --pattern 'latest.json'
           test "$(find dl -name '*-setup.exe' | wc -l)" -eq 1
-          test "$(find dl -name '*.deb' | wc -l)" -eq 1
       - name: Verify version, platform coverage, URLs and all updater signatures
         run: node scripts/updater-release.mjs verify dl
       - name: Generate and upload checksums

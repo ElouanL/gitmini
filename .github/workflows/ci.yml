@@ -214,126 +214,9 @@ jobs:
       - name: cargo check
         run: cargo +${{ steps.msrv.outputs.version }} check --workspace --all-targets --locked
 
-  e2e-linux-build:
-    name: e2e-linux-build
-    needs: fixtures
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15 # budget : 6 min
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - run: bash scripts/ci-install-linux-deps.sh build
-      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          shared-key: e2e-linux
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-      - run: pnpm install --frozen-lockfile
-      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
-        with:
-          tool: cargo-binstall
-      - name: "tauri-cli (pre-compiled binar, otherwise compilation)"
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: cargo binstall --no-confirm --locked tauri-cli --version '=${{ env.TAURI_CLI_VERSION }}'
-      - name: Cache de tauri-driver
-        id: driver-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: ~/.cargo/bin/tauri-driver
-          key: tauri-driver-${{ runner.os }}-v1
-      - name: tauri-driver
-        if: steps.driver-cache.outputs.cache-hit != 'true'
-        run: cargo install tauri-driver --locked
-      - name: Build e2e (debug, --features e2e)
-        run: cargo tauri build --debug --features e2e --no-bundle
-      - name: "Gathering binaries"
-        run: cp "$HOME/.cargo/bin/tauri-driver" target/debug/tauri-driver
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: gitmini-e2e-linux
-          path: |
-            target/debug/gitmini
-            target/debug/tauri-driver
-          if-no-files-found: error
-          retention-days: 1
-
-  e2e-linux:
-    name: e2e-linux (shard ${{ matrix.shard }}/4)
-    needs: e2e-linux-build
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20 # budget : 8 min par shard
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: [1, 2, 3, 4]
-    env:
-      # Xvfb has no GPU; avoid WebKit's accelerated renderer and its software GL startup.
-      WEBKIT_DISABLE_COMPOSITING_MODE: "1"
-      WEBKIT_DISABLE_DMABUF_RENDERER: "1"
-      GITMINI_BINARY: ${{ github.workspace }}/target/debug/gitmini
-      GITMINI_E2E_ARTIFACTS: ${{ github.workspace }}/tests/e2e/.artifacts
-      GITMINI_TEST_SEED: ${{ github.run_id }}
-      RUST_LOG: gitmini=debug
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - run: bash scripts/ci-install-linux-deps.sh e2e-runtime
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: tests/e2e/pnpm-lock.yaml
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: gitmini-e2e-linux
-          path: target/debug
-      - name: "Install binaries"
-        run: |
-          chmod +x target/debug/gitmini target/debug/tauri-driver
-          sudo install -m 0755 target/debug/tauri-driver /usr/local/bin/tauri-driver
-          WebKitWebDriver --version || true
-      - uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: target/fixtures
-          key: fixtures-${{ hashFiles('tests/fixtures/**') }}
-      - name: Fixtures
-        run: node tests/fixtures/build.mjs
-      - run: pnpm --dir tests/e2e install --frozen-lockfile
-      # Firewall AFTER all installations and downloads (, §12 "no network call").
-      - name: "Outgoing firewall (loopback only for testing)"
-        run: |
-          sudo bash scripts/firewall-linux.sh on
-          bash scripts/firewall-linux.sh verify
-      - name: E2E (shard ${{ matrix.shard }}/4)
-        env:
-          GITMINI_E2E_VIDEO: ${{ runner.temp }}/gitmini-video/shard-${{ matrix.shard }}.mp4
-        run: |
-          echo "GITMINI_TEST_SEED=$GITMINI_TEST_SEED"
-          bash scripts/ci-run-offline.sh \
-            xvfb-run -a -s "$XVFB_ARGS" \
-            bash scripts/ci-e2e-run.sh wdio.conf.ts --shard ${{ matrix.shard }}/4
-      # No Git or Gitmini process initiated by the tests must survive.
-      - name: "Ghost processes"
-        if: always()
-        run: node scripts/check-ghosts.mjs --binary "${{ env.GITMINI_BINARY }}"
-      - name: "Chess artifacts (screenshots, logs, archive of repository, mock, video)"
-        if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: e2e-linux-shard-${{ matrix.shard }}
-          path: |
-            tests/e2e/.artifacts
-            ${{ runner.temp }}/gitmini-video
-          if-no-files-found: ignore
-          include-hidden-files: true
-          retention-days: 14
+  # Linux builds are paused (no .deb/.AppImage is released), so the Linux e2e jobs are out of the PR checks. The
+  # nightly workflow still runs them. To restore: bring back `e2e-linux-build` and `e2e-linux` from git history and add
+  # `e2e-linux` back to the `needs` of the `ci` job.
 
   # -- perf: absolute budgets PERF-01 to PERF-05 blockers ()
   # Temporarily disabled: the budgets were never calibrated for the Linux runner (Xvfb, software rendering).
@@ -583,7 +466,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [fixtures, lint, rust, msrv, e2e-linux]
+    needs: [fixtures, lint, rust, msrv]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:

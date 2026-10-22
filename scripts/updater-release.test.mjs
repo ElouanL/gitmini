@@ -67,6 +67,8 @@ test('manifest validates every signed platform and rejects missing, mismatched o
     const manifest = { version: '0.1.0', platforms };
     const check = (m) => validateManifest(m, dir, '0.1.0', key.pubkey, 'test/gitmini', 'v0.1.0');
     check(manifest);
+    const { 'linux-x86_64': _linux, ...withoutLinux } = platforms;
+    check({ ...manifest, platforms: withoutLinux });
     assert.throws(() => check({ ...manifest, version: '0.2.0' }), /version/);
     assert.throws(() => check({ ...manifest, platforms: {} }), /Missing updater platform/);
     assert.throws(() => check({ ...manifest, platforms: { ...platforms, 'linux-x86_64': { ...platforms['linux-x86_64'], url: 'https://example.com/app.AppImage' } } }), /this release/);

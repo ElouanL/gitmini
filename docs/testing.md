@@ -59,4 +59,4 @@ It uses a Chrome that is already on the machine (`GITMINI_CHROME_BIN`, a system 
 
 ## Full checks and CI
 
-`just lint` checks formatting, generated types, IPC permissions, Git write boundaries, Clippy, frontend and harness types/lint, bundle size, test policy and Rust dependency licenses. CI also runs frontend tests, script tests and npm production-license checks, and installs the Playwright harness for its lint, type and unit checks (the Playwright end-to-end suite is local for now). Native Linux E2E tests and performance checks remain in the existing workflow; Windows and nightly coverage retain their existing schedules.
+`just lint` checks formatting, generated types, IPC permissions, Git write boundaries, Clippy, frontend and harness types/lint, bundle size, test policy and Rust dependency licenses. CI also runs frontend tests, script tests and npm production-license checks, and installs the Playwright harness for its lint, type and unit checks (the Playwright end-to-end suite is local for now). Native Linux E2E tests run only in the nightly workflow while Linux builds are paused; Windows E2E runs on every pull request.
