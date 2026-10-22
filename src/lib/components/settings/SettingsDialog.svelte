@@ -209,13 +209,23 @@
     </label>
     <p class="muted" data-testid="settings-update-status" role="status">{updates.message}</p>
     {#if updates.view.status.notes}<p class="notes" data-testid="settings-update-notes">{updates.view.status.notes}</p>{/if}
-    <button type="button" class="btn" data-testid="settings-update-check-btn"
-      disabled={!updates.view.status.enabled || ['checking', 'downloading', 'installing'].includes(updates.view.status.phase)}
-      onclick={() => void updates.check()}>{t('updates.check')}</button>
+    <div class="update-actions">
+      {#if updates.canUpdate}
+        <button type="button" class="btn btn-primary" data-testid="settings-update-install-btn"
+          onclick={() => void updates.update()}>{updates.view.status.phase === 'error' ? t('updates.retry') : t('updates.update')}</button>
+      {/if}
+      <button type="button" class="btn" data-testid="settings-update-check-btn"
+        disabled={!updates.view.status.enabled || ['checking', 'downloading', 'installing'].includes(updates.view.status.phase)}
+        onclick={() => void updates.check()}>{t('updates.check')}</button>
+    </div>
   </section>
 </DialogShell>
 
 <style>
+  .update-actions {
+    display: flex;
+    gap: 8px;
+  }
   .hint {
     font-size: 12px;
   }
