@@ -188,20 +188,21 @@ async fn rebase_skip_saves_staged_versions_that_only_the_index_holds() {
 }
 
 /// A filtered file (as git-lfs or eol conversion do): the index holds the clean form, the trash gives back what git
-/// would check out. `rev` reverses each line, so a clean blob restored as is would read backwards.
+/// would check out. The filter stores the text in upper case (`tr`, unlike `rev`, ships with Git for Windows), so a
+/// clean blob restored as is would read `STAGED`.
 #[tokio::test]
 async fn rebase_skip_saves_an_index_only_version_in_its_checked_out_form() {
     let fx = conflict_with_clean_changes();
     let o = fx.open().await;
     rebase_onto_main(&o).await;
-    fx.git(&["config", "filter.rev.clean", "rev"]);
-    fx.git(&["config", "filter.rev.smudge", "rev"]);
+    fx.git(&["config", "filter.up.clean", "tr a-z A-Z"]);
+    fx.git(&["config", "filter.up.smudge", "tr A-Z a-z"]);
     let info = fx.git_dir().join("info");
     std::fs::create_dir_all(&info).unwrap();
-    std::fs::write(info.join("attributes"), "f.txt filter=rev\n").unwrap();
+    std::fs::write(info.join("attributes"), "f.txt filter=up\n").unwrap();
     fx.write("f.txt", "staged\n");
     fx.git(&["add", "f.txt"]);
-    assert_eq!(fx.git(&["cat-file", "-p", ":f.txt"]), "degats");
+    assert_eq!(fx.git(&["cat-file", "-p", ":f.txt"]), "STAGED");
     std::fs::remove_file(fx.path.join("f.txt")).unwrap();
 
     rebase_skip(&o.state, op_args(&o))
