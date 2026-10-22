@@ -13,7 +13,7 @@
   <a href="https://github.com/ElouanL/gitmini/actions/workflows/ci.yml"><img src="https://github.com/ElouanL/gitmini/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
   <a href="https://github.com/ElouanL/gitmini/releases/latest"><img src="https://img.shields.io/github/v/release/ElouanL/gitmini" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--only-blue" alt="License: GPL-3.0-only"></a>
-  <img src="https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey" alt="Platforms: macOS, Windows, Linux">
+  <img src="https://img.shields.io/badge/platforms-macOS%20%7C%20Windows-lightgrey" alt="Platforms: macOS, Windows">
 </p>
 
 <p align="center">
@@ -87,9 +87,10 @@ Download an installer from this repository's [**Releases**](https://github.com/E
 | --- | --- |
 | macOS (Apple Silicon or Intel) | DMG |
 | Windows | `-setup.exe` (installs for the current user, no administrator rights) |
-| Linux | AppImage or DEB |
 
-Automatic updates use a separate cryptographic signature. They are supported by the macOS, Windows and Linux AppImage builds; DEB installations are updated manually or through a package manager.
+Linux builds are paused for now: v0.3.0 is the last release with an AppImage and a DEB, and it does not update automatically.
+
+Automatic updates use a separate cryptographic signature. They are supported by the macOS and Windows builds.
 
 <details>
 <summary><b>First launch: security prompts</b></summary>

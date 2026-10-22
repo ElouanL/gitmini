@@ -85,7 +85,8 @@ export function releaseVersion(directory = root) {
 export function validateManifest(manifest, directory, version, pubkey, repo, tag) {
   assert(typeof manifest.version === 'string' && manifest.version.replace(/^v/, '') === version, 'Manifest version differs from the built version');
   assert(manifest.platforms && typeof manifest.platforms === 'object', 'Missing updater platforms');
-  const required = ['darwin-aarch64', 'darwin-x86_64', 'windows-x86_64', 'linux-x86_64'];
+  // Linux builds are paused: a Linux entry is still checked when present, but no longer required.
+  const required = ['darwin-aarch64', 'darwin-x86_64', 'windows-x86_64'];
   for (const target of required) assert(manifest.platforms[target], `Missing updater platform: ${target}`);
   for (const [target, platform] of Object.entries(manifest.platforms)) {
     assert(typeof platform.url === 'string' && typeof platform.signature === 'string', `Incomplete platform: ${target}`);

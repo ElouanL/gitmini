@@ -8,7 +8,7 @@ The tag must point to a commit of `master` whose `ci` check succeeded: the `prep
 
 macOS uses an ad hoc signature (`bundle.macOS.signingIdentity = "-"`), without a paid Apple account or notarization. Test both Apple Silicon and Intel packages where available. The first launch needs explicit authorization in **System Settings → Privacy & Security**.
 
-The Windows installer is an NSIS `-setup.exe` configured with `installMode = "currentUser"`: it installs under `%LOCALAPPDATA%\Programs`, needs no administrator rights, and its updates do not need elevation either. It initially has no Authenticode signature. Linux packages include SHA256 checksums. Updater packages on every supported platform are signed with the same persistent Tauri key; this signature authenticates updates independently of operating-system code signing.
+The Windows installer is an NSIS `-setup.exe` configured with `installMode = "currentUser"`: it installs under `%LOCALAPPDATA%\Programs`, needs no administrator rights, and its updates do not need elevation either. It initially has no Authenticode signature. Updater packages on every supported platform are signed with the same persistent Tauri key; this signature authenticates updates independently of operating-system code signing.
 
 ## One-time updater setup
 
@@ -47,7 +47,7 @@ The release workflow requires the updater key and public-key configuration. Ordi
 
 ## Build and verify
 
-Push the existing version tag or dispatch the `release` workflow with its name. The workflow creates a **draft**, builds macOS ARM64/x64 DMGs and updater archives, Windows x64 NSIS installer, and Linux x64 AppImage/DEB. It verifies the platform matrix, package signatures, signed versions, asset URLs and SHA256 checksums. Failed jobs leave the release unpublished. When SignPath is configured, the `sign-windows` job also replaces the Windows installer with its Authenticode-signed version before the updater signatures are computed. The `sign-updater` job waits for the `release` environment approval: review the run (tag, commit, build logs) before approving it.
+Push the existing version tag or dispatch the `release` workflow with its name. The workflow creates a **draft**, builds macOS ARM64/x64 DMGs and updater archives and the Windows x64 NSIS installer (Linux builds are paused). It verifies the platform matrix, package signatures, signed versions, asset URLs and SHA256 checksums. Failed jobs leave the release unpublished. When SignPath is configured, the `sign-windows` job also replaces the Windows installer with its Authenticode-signed version before the updater signatures are computed. The `sign-updater` job waits for the `release` environment approval: review the run (tag, commit, build logs) before approving it.
 
 Run these smoke tests before publishing:
 
@@ -55,7 +55,7 @@ Run these smoke tests before publishing:
 - Install the macOS ad hoc build, authorize its first launch and open a disposable repository.
 - Exercise history, staging, commit, fetch and a second repository tab.
 - Test an update between two different versions signed with the same updater key through a controlled HTTPS test endpoint. Confirm installation/restart succeeds and repository data and saved settings remain intact.
-- Confirm a modified update package is rejected. Test available Windows and Linux packages too.
+- Confirm a modified update package is rejected. Test the Windows package too.
 - On Windows, install from a standard (non-administrator) account: there must be no UAC prompt, and an update between two versions must also run without one.
 
 The existing updater unit/integration tests cover malformed manifests, incorrect keys, altered packages, signed-version mismatches and unsafe restart states; they complement actual installation testing.
