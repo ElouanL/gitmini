@@ -125,9 +125,9 @@ test.describe('MOCK — ?mock=1 demo mode', () => {
     await mock.click('toolbar-settings-btn');
     const select = mock.byTid('settings-fetch-auto-select');
     await expect(select).toBeVisible();
-    await expect(select).toHaveValue('0');
-    await expect(select.locator('option')).toHaveText(['Never', 'Every 5 minutes', 'Every 15 minutes', 'Every 30 minutes']);
-    await expect(mock.page.locator('#settings-fetch-auto-hint')).toContainText('never asks for a password');
+    await expect(select).toHaveValue('2'); // on by default
+    await expect(select.locator('option')).toHaveText(['Never', 'Every 2 minutes', 'Every 5 minutes', 'Every 15 minutes', 'Every 30 minutes']);
+    await expect(mock.page.locator('#settings-fetch-auto-hint')).toContainText('never asks for a password: a failure is shown once');
     await select.selectOption('5');
     await mock.click('settings-close-btn');
     await expect(mock.byTid('settings-fetch-auto-select')).toHaveCount(0);
@@ -135,7 +135,7 @@ test.describe('MOCK — ?mock=1 demo mode', () => {
     await expect(mock.byTid('settings-fetch-auto-select')).toHaveValue('5'); // kept by the mock's settings
     await mock.click('settings-close-btn');
 
-    // Five minutes later (the mock's clock jumps), the window is idle: a background fetch finds a commit and the toast offers Pull.
+    // Five minutes later (the mock's clock jumps): a background fetch finds a commit and the toast offers Pull.
     await expect(mock.byTid('toolbar-ahead-behind')).toContainText('2');
     await mock.page.evaluate(() => (window as unknown as { __mock: { advanceAutoFetch(ms: number): void } }).__mock.advanceAutoFetch(5 * 60_000));
     const toast = toastSaying(mock, 'main is 3 commits behind origin/main.');

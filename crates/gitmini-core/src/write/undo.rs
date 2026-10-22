@@ -78,6 +78,7 @@ async fn undo_locked(
     Ok(WriteResult {
         head: tokio::task::spawn_blocking(move || crate::repo::head_info(&repo.thread_repo()))
             .await?,
+        backed_up: None,
     })
 }
 

@@ -22,6 +22,7 @@ stash_show
 remote_list
 undo_peek
 stage_paths
+stage_all
 unstage_paths
 discard_paths
 discard_list

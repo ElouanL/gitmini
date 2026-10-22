@@ -31,6 +31,7 @@ describe('entryMeta', () => {
     expect(entryMeta(entry({ source: 'discard-hunk' }), NOW)).toBe('Changes discarded · 1.5 KiB · 2 minutes ago');
     expect(entryMeta(entry({ source: 'resolve', kind: 'executable', size: 10 }), NOW)).toBe('Replaced while resolving · executable · 10 B · 2 minutes ago');
     expect(entryMeta(entry({ source: 'restore', kind: 'symlink', size: 5 }), NOW)).toBe('Replaced by a restore · link · 5 B · 2 minutes ago');
+    expect(entryMeta(entry({ source: 'skip' }), NOW)).toBe('Reset by a skip · 1.5 KiB · 2 minutes ago');
   });
 });
 
@@ -49,5 +50,7 @@ describe('announcementText', () => {
     expect(announcementText({ kind: 'files', count: 3 })).toBe('Discarded 3 files.');
     expect(announcementText({ kind: 'all' })).toBe('Discarded all changes.');
     expect(announcementText({ kind: 'hunk', path: 'src/a.ts' })).toBe('Discarded changes in src/a.ts.');
+    expect(announcementText({ kind: 'skip', count: 1 })).toBe('Saved 1 file before skipping.');
+    expect(announcementText({ kind: 'skip', count: 2 })).toBe('Saved 2 files before skipping.');
   });
 });

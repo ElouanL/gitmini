@@ -11,10 +11,13 @@ export default {
   'wt.conflicts.op': "Resolve conflicts in your editor, then mark each file as resolved. Or take one side from the right-click menu (o: ours, t: theirs).",
   'wt.empty.unstaged': 'No changes',
   'wt.empty.staged': "Nothing staged",
-  'wt.truncated': "More than 10,000 changes: only the first 10,000 are listed. \"Stage all\" still applies to all changes.",
+  'wt.truncated': "More than 10,000 changes: only the first 10,000 are listed. \"Stage tracked\" and \"Stage all\" still apply to all changes.",
   'wt.loading': 'Loading...',
 
+  'wt.btn.stageTracked': 'Stage tracked',
+  'wt.btn.stageTracked.title': 'Stage changes to tracked files, without untracked files',
   'wt.btn.stageAll': 'Stage all',
+  'wt.btn.stageAll.title': 'Stage all, including untracked files',
   'wt.btn.unstageAll': 'Unstage all',
   'wt.btn.discardAll': "Discard all",
   'wt.btn.stage': 'Stage',
@@ -48,6 +51,7 @@ export default {
   'wt.conflict.deleted-by-them': 'Deleted by them',
 
   'wt.op.stage': "Staging",
+  'wt.op.stageTracked': "Staging tracked changes",
   'wt.op.unstage': "Unstaging",
   'wt.op.resolve': 'Conflict resolution',
   'wt.op.discard': "Discard changes",
@@ -69,7 +73,10 @@ export default {
 
   'wt.menu.stashPaths': "Putting these files aside...",
   'wt.menu.discardAll': "Discard all changes",
+  'wt.action.stageTracked': "Stage tracked changes",
   'wt.action.stageAll': "Stage all",
+  'wt.stageAll.conflictsSkipped.one': "{n} conflicted file left untouched: mark it as resolved.",
+  'wt.stageAll.conflictsSkipped.other': "{n} conflicted files left untouched: mark each one as resolved.",
   'wt.action.unstageAll': "Unstage all",
   'wt.action.amend': 'Amend the last commit',
 

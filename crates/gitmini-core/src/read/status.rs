@@ -385,10 +385,12 @@ pub(crate) fn rename_rewrites() -> gix::diff::Rewrites {
 }
 
 /// Facts about the status (HEAD → index, index → worktree, not followed one by one). `untracked_cap`: number of not followed
-/// (`None` = all); Boolean is `true` if unfollowed ones have been discarded.
+/// (`None` = all); Boolean is `true` if unfollowed ones have been discarded. `with_untracked: false` does not even
+/// walk the worktree for unfollowed files.
 fn gather_events(
     repo: &gix::Repository,
     untracked_cap: Option<usize>,
+    with_untracked: bool,
 ) -> AppResult<(Vec<Ev>, bool)> {
     use gix::status::{Submodule, UntrackedFiles, tree_index::TrackRenames};
     let index = match repo.open_index() {
@@ -403,7 +405,11 @@ fn gather_events(
     let platform = repo
         .status(gix::progress::Discard)
         .map_err(gix_err)?
-        .untracked_files(UntrackedFiles::Files)
+        .untracked_files(if with_untracked {
+            UntrackedFiles::Files
+        } else {
+            UntrackedFiles::None
+        })
         .index_worktree_rewrites(None)
         .index_worktree_submodules(Submodule::AsConfigured { check_dirty: true })
         .tree_index_track_renames(TrackRenames::Given(rename_rewrites()))
@@ -438,7 +444,7 @@ fn compute_status(h: &RepoHandle) -> AppResult<StatusSnapshot> {
     let _span = tracing::info_span!("status").entered();
     let repo = fresh_repo(h)?;
     let head = crate::repo::head_info(&repo);
-    let (events, untracked_dropped) = gather_events(&repo, Some(UNTRACKED_COLLECT_CAP))?;
+    let (events, untracked_dropped) = gather_events(&repo, Some(UNTRACKED_COLLECT_CAP), true)?;
     let (files, truncated) = assemble(events, STATUS_CAP);
     let truncated = truncated || untracked_dropped;
 
@@ -457,16 +463,18 @@ fn compute_status(h: &RepoHandle) -> AppResult<StatusSnapshot> {
 /// All paths that have a change **unindexed** (followed modified, deleted or changed type, intent-
 /// to-add, not followed one by one), sorted by bytes, **without ceiling**: it is not a `StatusSnapshot` truncated to
 /// 10,000 entries. Excludes submodules, conflicts and non-UTF-8 paths (never written by the app, ).
-/// Serves `discard_paths "all"` (05: "Cancell All Applies to the Set"). Blocking.
-pub fn all_unstaged_paths_blocking(h: &RepoHandle) -> AppResult<Vec<String>> {
+/// Serves `discard_paths "all"` (05: "Cancell All Applies to the Set") and the conflict case of `stage_all`.
+/// `with_untracked: false` leaves out the unfollowed files (`stage_all` scope `tracked`). Blocking.
+pub fn all_unstaged_paths_blocking(h: &RepoHandle, with_untracked: bool) -> AppResult<Vec<String>> {
     let _span = tracing::info_span!("status.all_unstaged").entered();
     let repo = fresh_repo(h)?;
-    let (events, _) = gather_events(&repo, None)?;
+    let (events, _) = gather_events(&repo, None, with_untracked)?;
     let (files, _) = assemble(events, usize::MAX);
     Ok(files
         .into_iter()
         .filter(|f| {
             f.unstaged.is_some()
+                && (with_untracked || f.unstaged != Some(ChangeKind::Untracked))
                 && f.conflict.is_none()
                 && f.submodule != Some(true)
                 && f.non_utf8 != Some(true)
@@ -477,10 +485,13 @@ pub fn all_unstaged_paths_blocking(h: &RepoHandle) -> AppResult<Vec<String>> {
 
 /// Asynchronous version of [`all_unstaged_paths_blocking`] (calculated in `spawn_blocking`, without coalescence: the
 /// result must reflect the state of the disk at that time).
-pub async fn all_unstaged_paths(repo: &Arc<RepoHandle>) -> AppResult<Vec<String>> {
+pub async fn all_unstaged_paths(
+    repo: &Arc<RepoHandle>,
+    with_untracked: bool,
+) -> AppResult<Vec<String>> {
     repo.ensure_present()?;
     let repo = repo.clone();
-    tokio::task::spawn_blocking(move || all_unstaged_paths_blocking(&repo)).await?
+    tokio::task::spawn_blocking(move || all_unstaged_paths_blocking(&repo, with_untracked)).await?
 }
 
 /// Paths of modifications **followed** (index or worktree), without unfollowed or gitlinks (: pre-checks

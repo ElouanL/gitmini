@@ -707,7 +707,7 @@ async fn stage_05_all_unstaged_paths_is_not_capped_like_the_status() {
     assert!(snap.truncated, "the status is capped at 10,000 entries");
     assert_eq!(snap.files.len(), STATUS_CAP);
 
-    let all = all_unstaged_paths(&o.repo).await.unwrap();
+    let all = all_unstaged_paths(&o.repo, true).await.unwrap();
     // 10 050 not followed + 2 followed unstaged
     assert_eq!(all.len(), 10_050 + 2);
     assert!(all.contains(&"tracked.txt".to_string()));
@@ -723,6 +723,11 @@ async fn stage_05_all_unstaged_paths_is_not_capped_like_the_status() {
     // the same set as `git status`: not tracked + modified unstaged
     let git_unstaged: usize = porcelain_at(&t.path).iter().filter(|e| e.y != '.').count();
     assert_eq!(all.len(), git_unstaged);
+    // Without the untracked files (`stage_all` scope `tracked`): the 2 tracked changes only.
+    assert_eq!(
+        all_unstaged_paths(&o.repo, false).await.unwrap(),
+        vec!["tracked.txt".to_string(), "zz-deleted.txt".into()]
+    );
 }
 
 #[tokio::test]
@@ -730,7 +735,7 @@ async fn stage_05_all_unstaged_paths_excludes_submodules_and_conflicts() {
     // submodule staggered (fixed): Excluded
     let fx = Fixture::load("submodule");
     let o = open_at(fx.repo()).await;
-    assert!(all_unstaged_paths(&o.repo).await.unwrap().is_empty());
+    assert!(all_unstaged_paths(&o.repo, true).await.unwrap().is_empty());
 
     // conflict: excluded; ordinary modified file: included
     let t = TestRepo::init();
@@ -744,7 +749,7 @@ async fn stage_05_all_unstaged_paths_excludes_submodules_and_conflicts() {
     t.write("plain.txt", "modified\n");
     let o = open_at(&t.path).await;
     assert_eq!(
-        all_unstaged_paths(&o.repo).await.unwrap(),
+        all_unstaged_paths(&o.repo, true).await.unwrap(),
         vec!["plain.txt".to_string()]
     );
 }
@@ -771,7 +776,7 @@ async fn stage_05_all_unstaged_paths_excludes_non_utf8() {
         .unwrap();
     assert!(out.status.success());
     let o = open_at(&u.path).await;
-    let all = all_unstaged_paths(&o.repo).await.unwrap();
+    let all = all_unstaged_paths(&o.repo, true).await.unwrap();
     // `bad-\xff.txt` is "deleted in worktree" (absent from disk) but not UTF-8: never listed
     assert!(all.iter().all(|p| !p.contains('\u{FFFD}')), "{all:?}");
 }

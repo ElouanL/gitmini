@@ -108,4 +108,23 @@ export default {
   'rebase.squash.disabled.merge': 'Squashing is not available when the range up to HEAD contains a merge commit.',
   'rebase.squash.disabled.not-in-head': 'The selected commits do not belong to the current branch.',
   'rebase.squash.disabled.detached': 'Squashing requires being on a branch.',
+
+  // ── Edit the message of one commit (reword)
+  'reword.menu': 'Edit message...',
+  'reword.action': 'Edit the message of the selected commit',
+  'reword.op': 'Edit commit message',
+  'reword.title': 'Edit commit message',
+  'reword.summary': 'Summary',
+  'reword.description': 'Description',
+  'reword.confirm': 'Save',
+  'reword.unchanged': 'The message is unchanged.',
+  'reword.rewriteNote.one': "{n} later commit will be rewritten as well.",
+  'reword.rewriteNote.other': "{n} later commits will be rewritten as well.",
+  'reword.pushedWarning.one': "{n} of the rewritten commits is already on a remote. A force push (with lease) will be required and may affect your collaborators.",
+  'reword.pushedWarning.other': "{n} of the rewritten commits are already on a remote. A force push (with lease) will be required and may affect your collaborators.",
+  'reword.stale': "The branch changed since the dialog opened: the message was not changed. Try again.",
+  'reword.loadFailed': 'Could not read the commit.',
+  'reword.done': 'Commit message updated',
+  'reword.disabled.merge': 'Editing the message is not available when the range up to HEAD contains a merge commit.',
+  'reword.disabled.not-in-head': "This commit is not on the current branch's history.",
 } satisfies Record<string, string>;

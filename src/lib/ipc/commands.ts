@@ -1,4 +1,4 @@
-// A wrapper typed by common IPC command (78 of ). The desktop adds updater.ts .
+// A wrapper typed by common IPC command (79 of ). The desktop adds updater.ts .
 //
 // Conventions :
 // - `commands.<camelCase>` for the `snake_case` command of the contract (`stage_paths` → `commands.stagePaths`);
@@ -42,6 +42,8 @@ export type PullMode = 'ff-only' | 'rebase';
 export type MergeMode = 'ff' | 'no-ff' | 'ff-only';
 /** Side kept by `resolve_paths`, with git's meaning: `ours` = HEAD (the branch rebased onto during a rebase), `theirs` = incoming. */
 export type ConflictSide = 'ours' | 'theirs';
+/** Scope of `stage_all`: `all` = `git add -A` (untracked files included), `tracked` = `git add -u`. Conflicts are never touched. */
+export type StageScope = 'all' | 'tracked';
 
 /**
  * Arguments of `stage_hunk`, `unstage_hunk` and `discard_hunk`. `lines` narrows the action to some lines of the hunk:
@@ -91,7 +93,7 @@ async function call<T>(command: string, args: object = {}): Promise<T> {
   }
 }
 
-// "The 78 joint orders
+// "The 79 joint orders
 export const commands = {
   // Application, repository, settings
   appInfo: () => call<AppInfo>('app_info'),
@@ -145,6 +147,8 @@ export const commands = {
 
   // Index and commit [W]
   stagePaths: (a: { repoId: RepoId; paths: PathsOrAll }) => call<StatusSnapshot>('stage_paths', a),
+  /** "Stage all" / "stage tracked", not capped by the status; `stagePaths({ paths: 'all' })` is scope `all`. */
+  stageAll: (a: { repoId: RepoId; scope: StageScope }) => call<StatusSnapshot>('stage_all', a),
   unstagePaths: (a: { repoId: RepoId; paths: PathsOrAll }) => call<StatusSnapshot>('unstage_paths', a),
   discardPaths: (a: { repoId: RepoId; paths: PathsOrAll }) => call<StatusSnapshot>('discard_paths', a),
   resolvePaths: (a: { repoId: RepoId; paths: string[]; side: ConflictSide }) => call<StatusSnapshot>('resolve_paths', a),
@@ -249,7 +253,7 @@ export const COMMAND_NAMES = {
   fileLog: 'file_log', fileBlame: 'file_blame', diffFile: 'diff_file', refsList: 'refs_list', reflogList: 'reflog_list', branchCompare: 'branch_compare',
   rebaseTodoPreview: 'rebase_todo_preview', stashList: 'stash_list', stashShow: 'stash_show',
   remoteList: 'remote_list', undoPeek: 'undo_peek', discardList: 'discard_list',
-  stagePaths: 'stage_paths', unstagePaths: 'unstage_paths', discardPaths: 'discard_paths', discardRestore: 'discard_restore', resolvePaths: 'resolve_paths',
+  stagePaths: 'stage_paths', stageAll: 'stage_all', unstagePaths: 'unstage_paths', discardPaths: 'discard_paths', discardRestore: 'discard_restore', resolvePaths: 'resolve_paths',
   stageHunk: 'stage_hunk', unstageHunk: 'unstage_hunk', discardHunk: 'discard_hunk',
   commitCreate: 'commit_create', configSetIdentity: 'config_set_identity',
   branchCreate: 'branch_create', branchCheckout: 'branch_checkout', branchRename: 'branch_rename',

@@ -177,7 +177,7 @@ describe("hook that refuses (STAGE-07)", () => {
 
   it("another GIT_FAILED (excluding commit) keeps the toast of the base", async () => {
     fake = setup({}, [file('a', { unstaged: 'modified' })]);
-    fake.reject('stage_paths', { code: 'GIT_FAILED', message: "git failed", details: { exitCode: 1, stderr: 'boom' } });
+    fake.reject('stage_all', { code: 'GIT_FAILED', message: "git failed", details: { exitCode: 1, stderr: 'boom' } });
     mountWithDialogs(WtPanel);
     await userEvent.click(tid('wt-stage-all-btn'));
     await whenIdle();

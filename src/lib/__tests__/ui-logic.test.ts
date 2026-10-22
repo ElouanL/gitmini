@@ -160,7 +160,7 @@ describe('palette', () => {
 
 describe('context menus (03)', () => {
   it("input identifiers follow the closed list of 01 §5.7; a single reset entry", () => {
-    expect(MENU_ITEM_IDS).toHaveLength(37);
+    expect(MENU_ITEM_IDS).toHaveLength(40);
     expect(MENU_ITEM_IDS.filter((i) => i.startsWith('reset'))).toEqual(['reset']);
     expect(MENU_IDS).toEqual(['commit', 'branch', 'remote-branch', 'remote', 'tag', 'stash', 'wip', 'wt-file', 'commit-file']);
     for (const m of MENU_IDS) for (const id of menuItemIds(m)) expect(MENU_ITEM_IDS).toContain(id);
@@ -237,6 +237,8 @@ describe("operation banner: 07 / 09 labels and buttons", () => {
     expect(bannerButtons({ ...base, kind: 'merge' })).toEqual({ continue: true, skip: false, abort: true });
     expect(bannerButtons({ ...base, kind: 'am' })).toEqual({ continue: false, skip: false, abort: true });
     expect(bannerButtons({ ...base, phase: 'stopped', stopReason: 'empty' })).toEqual({ continue: false, skip: true, abort: true });
+    // `edit` stop (the backend reports it `blocked`): Continue is offered next to Skip
+    expect(bannerButtons({ ...base, phase: 'stopped', stopReason: 'blocked', conflictedPaths: [] })).toEqual({ continue: true, skip: true, abort: true });
     expect(bannerButtons({ ...base, kind: 'cherry-pick', phase: 'stopped', stopReason: 'stale' })).toEqual({ continue: false, skip: false, abort: true });
     expect(bannerButtons({ ...base, kind: 'cherry-pick', phase: 'stopped', stopReason: 'empty' })).toEqual({ continue: false, skip: true, abort: true });
   });

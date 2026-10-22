@@ -1,7 +1,8 @@
 import { activeSession, type Session } from '$lib/stores/session.svelte';
 import { captureStores } from '$lib/stores/context';
 // Operations banner actions: `op.continue`, `op.skip`, `op.abort` (03 "Operation Banner", table by `data-kind`).
-// A domain can replace (even id) to refine a message; the banner always passes through these identifiers.
+// A domain can replace (even id) to refine a message; the banner always passes through these identifiers. `op.skip` has
+// a single implementation, in the rebase flow (banner-actions.ts): it confirms where needed and announces the backup.
 import { commands } from '../ipc/commands';
 import type { RepoOpState } from '../ipc/types';
 import { confirmAction } from '../dialogs/confirm';
@@ -48,21 +49,6 @@ export async function opContinue(ctx: ActionContext): Promise<void> {
     }
     case 'am':
       return;
-  }
-}
-
-export async function opSkip(ctx: ActionContext): Promise<void> {
-  const owner = ctx.session;
-  const { runWrite } = captureStores(owner);
-  const st = state(ctx);
-  const repoId = ctx.repoId;
-  if (!st || repoId === null) return;
-  if (st.kind === 'rebase') {
-    const r = await runWrite(t('banner.skip'), ({ opId }) => commands.rebaseSkip({ repoId, opId: opId! }), { long: true, command: 'rebase_skip' });
-    if (r.ok) await finished('rebase', owner);
-  } else if (st.kind === 'cherry-pick' || st.kind === 'revert') {
-    const r = await runWrite(t('banner.skip'), () => commands.sequencerSkip({ repoId }), { command: 'sequencer_skip' });
-    if (r.ok) await finished(st.kind, owner);
   }
 }
 
@@ -118,6 +104,5 @@ const inflight = (ctx: ActionContext): string | null => ctx.op.blockReason('cont
 
 export const opActions: ActionDef[] = [
   { id: 'op.continue', label: () => t('banner.continue'), palette: false, disabledReason: inflight, run: opContinue },
-  { id: 'op.skip', label: () => t('banner.skip'), palette: false, disabledReason: inflight, run: opSkip },
   { id: 'op.abort', label: () => t('banner.abort'), palette: false, disabledReason: inflight, run: opAbort },
 ];

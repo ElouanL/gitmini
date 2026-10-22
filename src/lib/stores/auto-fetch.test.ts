@@ -1,4 +1,4 @@
-// Auto-fetch (store): when it fetches, what it leaves alone, the "Pull" toast and the back-off. Fake backend, real stores,
+// Auto-fetch (store): when it fetches, what it leaves alone, the "Pull" toast and the failure toast. Fake backend, real stores,
 // toasts and actions; the clock is moved with `autoFetch.advance` (the same hook the e2e bridge uses), never waited for.
 import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
@@ -15,16 +15,14 @@ import { makeBranch, makeRefs, makeRemotes, makeRepoInfo, oid } from '$lib/test/
 import { resetAll } from '$lib/test/reset';
 import { openTestRepo } from '../components/flows/test-support';
 import { app } from './app.svelte';
-import { autoFetch, PULL_ACTION_TESTID, TICK_MS } from './auto-fetch';
+import { autoFetch, FETCH_RETRY_TESTID, PULL_ACTION_TESTID, TICK_MS } from './auto-fetch';
 import { FIRST_FETCH_DELAY, MINUTE } from './auto-fetch-logic';
 import { fetchClock, fetchStateFor } from './fetch-state.svelte';
-import { github } from './github.svelte';
 import { op } from './op.svelte';
 import { refs } from './refs.svelte';
 import { repo } from './repo.svelte';
 import { activeSession } from './session.svelte';
 import { toast } from './toast.svelte';
-import { ui } from './ui.svelte';
 
 let snapshot: RefsSnapshot;
 let fake: FakeTransport;
@@ -42,6 +40,7 @@ function snapshotAt(behind: number, tip: number): RefsSnapshot {
 const err = (code: AppError['code'], message: string = code): AppError => ({ code, message, details: {} });
 const fetches = () => fake.callsOf('remote_fetch');
 const pullToast = () => toast.items.find((x) => x.actions.some((a) => a.testid === PULL_ACTION_TESTID));
+const failureToasts = () => toast.items.filter((x) => x.actions.some((a) => a.testid === FETCH_RETRY_TESTID));
 
 async function setup(minutes: number | null = 5, handlers: Record<string, () => unknown> = {}): Promise<void> {
   snapshot = snapshotAt(0, 58);
@@ -53,7 +52,7 @@ async function setup(minutes: number | null = 5, handlers: Record<string, () => 
     ...handlers,
   });
   app.ready = true;
-  app.load(minutes === null ? {} : { 'fetch.auto': minutes as 5 });
+  app.load(minutes === null ? {} : { 'fetch.auto': minutes as 2 });
   render(ToastContainer);
   await whenIdle();
 }
@@ -75,9 +74,17 @@ afterEach(() => {
 });
 
 describe('when it fetches', () => {
-  it('does nothing while the setting is off (the default)', async () => {
+  it('fetches every 2 minutes by default', async () => {
     await setup(null);
-    expect(app.get('fetch.auto')).toBe(0);
+    expect(app.get('fetch.auto')).toBe(2);
+    await pass(FIRST_FETCH_DELAY);
+    expect(fetches()).toHaveLength(1);
+    await pass(2 * MINUTE);
+    expect(fetches()).toHaveLength(2);
+  });
+
+  it('does nothing while the setting is off', async () => {
+    await setup(0);
     await pass(10 * 60 * MINUTE);
     expect(fetches()).toHaveLength(0);
   });
@@ -97,7 +104,7 @@ describe('when it fetches', () => {
   });
 
   it('fetches as soon as the setting is switched on in a repository that has been open for a while', async () => {
-    await setup(null);
+    await setup(0);
     await pass(60 * MINUTE);
     expect(fetches()).toHaveLength(0);
     await app.set('fetch.auto', 15);
@@ -144,12 +151,10 @@ describe('when it fetches', () => {
 
 describe('what it leaves alone', () => {
   it.each([
-    ['an open dialog', () => { dialogStack.push({ id: 'x', component: {} as never, props: {}, resolve: () => {} }); }, () => dialogStack.closeAll()],
-    ['the command palette', () => { ui.paletteOpen = true; }, () => { ui.paletteOpen = false; }],
     ['an operation in flight', () => { releaseOp = op.begin('Commit'); }, () => releaseOp()],
     ['a rebase waiting for the user', () => { op.setState({ kind: 'rebase' } as never); }, () => op.setState(null)],
-    ['a window in the background', () => { vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden'); }, () => vi.restoreAllMocks()],
     ['a repository being opened', () => { repo.opening = true; }, () => { repo.opening = false; }],
+    ['a window in the background', () => { vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden'); }, () => vi.restoreAllMocks()],
   ])('waits for %s', async (_name, block, unblock) => {
     await setup(5);
     block();
@@ -162,6 +167,13 @@ describe('what it leaves alone', () => {
     expect(fetches()).toHaveLength(1);
   });
   let releaseOp: () => void;
+
+  it('does not wait for an open dialog', async () => {
+    await setup(5);
+    dialogStack.push({ id: 'x', component: {} as never, props: {}, resolve: () => {} });
+    await pass(FIRST_FETCH_DELAY);
+    expect(fetches()).toHaveLength(1);
+  });
 
   it('fetches only the active tab, and another one after it has been in view for the first delay', async () => {
     await setup(5);
@@ -271,102 +283,54 @@ describe('the Pull toast', () => {
 });
 
 describe('failures', () => {
-  it('stay silent: no toast, no sign-in dialog, and the lock is released', async () => {
+  it('are told once with a toast, never a sign-in dialog, and the lock is released', async () => {
     await setup(5);
     fake.reject('remote_fetch', err('AUTH_REQUIRED', 'Authentication refused by example.org.'));
     await pass(FIRST_FETCH_DELAY);
     expect(fetches()).toHaveLength(1);
-    expect(toast.items).toEqual([]);
+    const item = failureToasts()[0]!;
+    expect(item).toMatchObject({ kind: 'error', title: 'Automatic fetch failed', message: 'Authentication refused by example.org.' });
     expect(dialogStack.top).toBeNull();
     expect(op.inflight).toBeNull();
     expect(autoFetch.state().entries[0]).toMatchObject({ repoId: 1, failures: 1, code: 'AUTH_REQUIRED' });
   });
 
-  it('back off for an hour after an authentication error, then try again', async () => {
+  it('are retried every interval without another toast, and a success ends the streak', async () => {
     await setup(5);
-    fake.reject('remote_fetch', err('AUTH_REQUIRED'));
+    fake.reject('remote_fetch', err('NETWORK')).reject('remote_fetch', err('AUTH_REQUIRED'));
     await pass(FIRST_FETCH_DELAY);
-    await pass(59 * MINUTE);
-    expect(fetches()).toHaveLength(1);
-    await pass(MINUTE);
+    await pass(5 * MINUTE);
     expect(fetches()).toHaveLength(2);
+    expect(failureToasts()).toHaveLength(1);
+    await pass(5 * MINUTE);
+    expect(fetches()).toHaveLength(3);
+    expect(autoFetch.state().entries[0]).toMatchObject({ failures: 0, code: null });
+    expect(failureToasts(), 'the success takes the toast back').toHaveLength(0);
+
+    fake.reject('remote_fetch', err('NETWORK'));
+    await pass(5 * MINUTE); // a new streak is told again
+    expect(failureToasts()).toHaveLength(1);
+  });
+
+  it('offer to fetch by hand, which goes through the ordinary fetch', async () => {
+    await setup(5);
+    fake.reject('remote_fetch', err('NETWORK'));
+    await pass(FIRST_FETCH_DELAY);
+    await userEvent.click(await screen.findByTestId(FETCH_RETRY_TESTID));
+    await whenIdle();
+    expect(fetches()).toHaveLength(2);
+    expect(fetches()[1]!.args).not.toHaveProperty('background');
+    expect(failureToasts()).toHaveLength(0);
     expect(autoFetch.state().entries[0]).toMatchObject({ failures: 0 });
   });
 
-  it('back off gradually after a network error and recover on the first success', async () => {
+  it('name the repository when several are open', async () => {
     await setup(5);
-    fake.reject('remote_fetch', err('NETWORK')).reject('remote_fetch', err('NETWORK'));
+    repo.adopt(makeRepoInfo({ id: 2, workdir: '/b', name: 'b' }), false);
+    await whenIdle();
+    fake.reject('remote_fetch', err('NETWORK'));
     await pass(FIRST_FETCH_DELAY);
-    await pass(5 * MINUTE); // retry after one interval
-    expect(fetches()).toHaveLength(2);
-    await pass(9 * MINUTE);
-    expect(fetches()).toHaveLength(2);
-    await pass(MINUTE); // second failure doubled the wait
-    expect(fetches()).toHaveLength(3);
-    expect(autoFetch.state().entries[0]).toMatchObject({ failures: 0, code: null });
-  });
-
-  it('are forgiven when the setting changes', async () => {
-    await setup(5);
-    fake.reject('remote_fetch', err('AUTH_REQUIRED'));
-    await pass(FIRST_FETCH_DELAY);
-    expect(autoFetch.state().entries[0]!.failures).toBe(1);
-    await app.set('fetch.auto', 15);
-    await pass(15 * MINUTE);
-    expect(fetches()).toHaveLength(2);
-  });
-
-  describe('are forgiven when what they depended on changes', () => {
-    /** One refused fetch: the next try is an hour away (authentication), until something changes. */
-    async function afterARefusedFetch(): Promise<void> {
-      await setup(5);
-      fake.reject('remote_fetch', err('AUTH_REQUIRED'));
-      await pass(FIRST_FETCH_DELAY);
-      expect(autoFetch.state().entries[0]).toMatchObject({ failures: 1, code: 'AUTH_REQUIRED' });
-      await pass(5 * MINUTE);
-      expect(fetches(), 'still backing off').toHaveLength(1);
-    }
-
-    it.each([
-      ['the proxy mode', () => app.set('network.proxy.mode', 'none')],
-      ['the proxy URL', () => app.set('network.proxy.url', 'http://proxy.example:8080', { optimistic: false })],
-      ['the GitHub sign-in', () => { github.setLoggedIn('octocat'); }],
-    ])('%s', async (_what, change) => {
-      await afterARefusedFetch();
-      await change();
-      autoFetch.evaluate();
-      expect(autoFetch.state().entries[0]).toMatchObject({ failures: 0, code: null });
-      await pass(5 * MINUTE);
-      expect(fetches()).toHaveLength(2);
-    });
-
-    it('the GitHub account (signing in as someone else) and the sign-out too', async () => {
-      await setup(5);
-      github.setLoggedIn('octocat');
-      fake.reject('remote_fetch', err('AUTH_REQUIRED'));
-      await pass(FIRST_FETCH_DELAY);
-      expect(autoFetch.state().entries[0]!.failures).toBe(1);
-      github.setLoggedIn('hubot');
-      autoFetch.evaluate();
-      expect(autoFetch.state().entries[0]!.failures).toBe(0);
-      fake.reject('remote_fetch', err('AUTH_REQUIRED'));
-      await pass(5 * MINUTE);
-      expect(autoFetch.state().entries[0]!.failures).toBe(1);
-      github.setLoggedOut();
-      autoFetch.evaluate();
-      expect(autoFetch.state().entries[0]!.failures).toBe(0);
-    });
-
-    it('but not when something unrelated is written or the same state is read again', async () => {
-      await afterARefusedFetch();
-      await app.set('graph.dimUnreachable', false);
-      await app.set('network.proxy.mode', 'system'); // the value it already has
-      github.setLoggedOut(); // not signed in before, not signed in after
-      autoFetch.evaluate();
-      expect(autoFetch.state().entries[0]).toMatchObject({ failures: 1, code: 'AUTH_REQUIRED' });
-      await pass(5 * MINUTE);
-      expect(fetches()).toHaveLength(1);
-    });
+    expect(failureToasts()[0]!.title).toBe('gitmini-demo: automatic fetch failed');
   });
 
   it('count neither a busy backend nor a cancel as a failure', async () => {

@@ -97,6 +97,19 @@ impl Group {
     }
 }
 
+/// `exec` line that sets the message file `quoted` (already escaped for `sh`) on the commit just played.
+///
+/// Only `commit-msg` runs on the message (its refusal stops the rebase, IRB-06); `--no-verify` keeps `pre-commit` off
+/// the historical trees, where it could fail or fold its own changes into a commit that only gets a new message.
+/// `git hook run` needs git 2.36, so the hook is resolved by `rev-parse --git-path` (honours `core.hooksPath`) and,
+/// like `git commit` does, skipped when it is not executable.
+fn amend_exec(quoted: &str) -> String {
+    format!(
+        "exec h=\"$(git rev-parse --git-path hooks/commit-msg)\" && {{ test ! -x \"$h\" || \"$h\" {quoted}; }} \
+         && git commit --amend --only --no-verify --cleanup=whitespace -F {quoted}\n"
+    )
+}
+
 /// Translates the list into todo (one line per item, complete oids, selected order) according to the table of
 ///
 /// `dir` is the temporary folder `$TMP/gitmini-<opId>/`: it is not affected, only cited in the `exec`.
@@ -138,10 +151,7 @@ pub fn build(items: &[TodoItem], dir: &Path) -> TodoPlan {
     let mut messages: Vec<MessageFile> = Vec::new();
     let mut exec_for = |content: &str, todo: &mut String| {
         let name = format!("msg-{}", messages.len() + 1);
-        todo.push_str(&format!(
-            "exec git commit --amend --only --cleanup=whitespace -F {}\n",
-            sh_quote(&format!("{dir}/{name}"))
-        ));
+        todo.push_str(&amend_exec(&sh_quote(&format!("{dir}/{name}"))));
         messages.push(MessageFile {
             name,
             content: content.to_string(),
@@ -236,15 +246,15 @@ mod tests {
             item(1, TodoAction::Pick, None),
             item(2, TodoAction::Reword, Some("C: renamed\n\nbody")),
         ]);
-        insta::assert_snapshot!(s, @r"
+        insta::assert_snapshot!(s, @r#"
         pick <1>
         pick <2>
-        exec git commit --amend --only --cleanup=whitespace -F '/tmp/gitmini-op-1/msg-1'
+        exec h="$(git rev-parse --git-path hooks/commit-msg)" && { test ! -x "$h" || "$h" '/tmp/gitmini-op-1/msg-1'; } && git commit --amend --only --no-verify --cleanup=whitespace -F '/tmp/gitmini-op-1/msg-1'
         --- msg-1 ---
         C: renamed
 
         body
-        ");
+        "#);
     }
 
     #[test]
@@ -261,21 +271,21 @@ mod tests {
             item(4, TodoAction::Pick, None),
             item(5, TodoAction::Reword, Some("C: adds c.txt (renamed)")),
         ]);
-        insta::assert_snapshot!(s, @r"
+        insta::assert_snapshot!(s, @r#"
         pick <1>
         fixup <2>
         fixup <3>
-        exec git commit --amend --only --cleanup=whitespace -F '/tmp/gitmini-op-1/msg-1'
+        exec h="$(git rev-parse --git-path hooks/commit-msg)" && { test ! -x "$h" || "$h" '/tmp/gitmini-op-1/msg-1'; } && git commit --amend --only --no-verify --cleanup=whitespace -F '/tmp/gitmini-op-1/msg-1'
         pick <4>
         pick <5>
-        exec git commit --amend --only --cleanup=whitespace -F '/tmp/gitmini-op-1/msg-2'
+        exec h="$(git rev-parse --git-path hooks/commit-msg)" && { test ! -x "$h" || "$h" '/tmp/gitmini-op-1/msg-2'; } && git commit --amend --only --no-verify --cleanup=whitespace -F '/tmp/gitmini-op-1/msg-2'
         --- msg-1 ---
         A: adds a.txt
 
         Includes correction B.
         --- msg-2 ---
         C: adds c.txt (renamed)
-        ");
+        "#);
     }
 
     #[test]
@@ -326,13 +336,13 @@ mod tests {
             item(1, TodoAction::Reword, Some("head")),
             item(2, TodoAction::Squash, Some("final")),
         ]);
-        insta::assert_snapshot!(s, @r"
+        insta::assert_snapshot!(s, @r#"
         pick <1>
         fixup <2>
-        exec git commit --amend --only --cleanup=whitespace -F '/tmp/gitmini-op-1/msg-1'
+        exec h="$(git rev-parse --git-path hooks/commit-msg)" && { test ! -x "$h" || "$h" '/tmp/gitmini-op-1/msg-1'; } && git commit --amend --only --no-verify --cleanup=whitespace -F '/tmp/gitmini-op-1/msg-1'
         --- msg-1 ---
         final
-        ");
+        "#);
     }
 
     #[test]
@@ -341,13 +351,13 @@ mod tests {
             item(1, TodoAction::Reword, Some("head")),
             item(2, TodoAction::Squash, None),
         ]);
-        insta::assert_snapshot!(s, @r"
+        insta::assert_snapshot!(s, @r#"
         pick <1>
-        exec git commit --amend --only --cleanup=whitespace -F '/tmp/gitmini-op-1/msg-1'
+        exec h="$(git rev-parse --git-path hooks/commit-msg)" && { test ! -x "$h" || "$h" '/tmp/gitmini-op-1/msg-1'; } && git commit --amend --only --no-verify --cleanup=whitespace -F '/tmp/gitmini-op-1/msg-1'
         squash <2>
         --- msg-1 ---
         head
-        ");
+        "#);
     }
 
     #[test]
@@ -358,15 +368,15 @@ mod tests {
             item(3, TodoAction::Squash, Some("fin")),
             item(4, TodoAction::Drop, None),
         ]);
-        insta::assert_snapshot!(s, @r"
+        insta::assert_snapshot!(s, @r#"
         pick <1>
         drop <2>
         fixup <3>
-        exec git commit --amend --only --cleanup=whitespace -F '/tmp/gitmini-op-1/msg-1'
+        exec h="$(git rev-parse --git-path hooks/commit-msg)" && { test ! -x "$h" || "$h" '/tmp/gitmini-op-1/msg-1'; } && git commit --amend --only --no-verify --cleanup=whitespace -F '/tmp/gitmini-op-1/msg-1'
         drop <4>
         --- msg-1 ---
         fin
-        ");
+        "#);
     }
 
     #[test]

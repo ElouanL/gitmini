@@ -772,7 +772,10 @@ async fn pull_locked(
     }
 
     let head = read(repo, |r| Ok(crate::repo::head_info(r))).await?;
-    Ok(WriteResult { head })
+    Ok(WriteResult {
+        head,
+        backed_up: None,
+    })
 }
 
 fn plural(n: usize) -> &'static str {

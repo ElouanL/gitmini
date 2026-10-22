@@ -12,11 +12,12 @@
 // Specs are parallel-safe by construction: nothing is shared between tests, so `fullyParallel` is on.
 
 import { test as base, type TestInfo } from '@playwright/test';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { App, type BridgeHandle, type RestartOptions } from './app';
 import { sessionId } from './naming';
 import { makeRepo, type Repo } from './repo';
+import { writeSettings } from './settings';
 import {
   BridgeRunner, checkRepoIntegrity, createSession, disposeSession, liveMocks, onSessionEnd, scrub,
   type GithubMock, type Session, type SetupContext, type SetupFn,
@@ -65,6 +66,26 @@ async function applySetup(session: Session, setup: SetupFn): Promise<void> {
   for (const mock of liveMocks()) if (!before.has(mock) && !session.mocks.includes(mock)) session.mocks.push(mock);
 }
 
+/**
+ * `fetch.auto` is on by default (every 2 minutes, the first fetch 30 s after the repository is seen, in real time): a test that
+ * lasts long enough would see a fetch it did not ask for (the toolbar busy, remote-tracking refs moved, a toast). Every scenario
+ * therefore starts with `'fetch.auto': 0` unless its setup chose a value; the AF-* specs choose theirs in Settings, and the one
+ * that checks the default removes the key (`useDefaultInterval`). A settings file that is not a JSON object (a corrupt-file
+ * scenario) is left as the setup wrote it.
+ */
+function seedAutoFetchOff(settingsPath: string): void {
+  let settings: unknown = {};
+  if (existsSync(settingsPath)) {
+    try {
+      settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+    } catch {
+      return;
+    }
+  }
+  if (typeof settings !== 'object' || settings === null || Array.isArray(settings) || 'fetch.auto' in settings) return;
+  writeSettings(settingsPath, { ...settings, 'fetch.auto': 0 });
+}
+
 const hasFailed = (testInfo: TestInfo): boolean => testInfo.status !== testInfo.expectedStatus;
 
 export const test = base.extend<Fixtures & Options>({
@@ -77,6 +98,7 @@ export const test = base.extend<Fixtures & Options>({
     session.currentTest = testInfo.title;
     try {
       if (setup) await applySetup(session, setup);
+      seedAutoFetchOff(session.settingsPath);
     } catch (error) {
       await disposeSession(session, { failed: true, error: `setup: ${String(error)}` });
       throw error;

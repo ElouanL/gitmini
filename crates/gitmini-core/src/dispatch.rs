@@ -1,15 +1,15 @@
 //! Generic IPC command splitter: `invoke(state, "stage_paths", json)`.
 //!
 //! Serves at the HTTP (`gitmini-bridge`) and contract tests. `src-tauri` displays the same
-//! 78 commands via `#[tauri::command]`. The list [`COMMANDS`] is that of
+//! 79 commands via `#[tauri::command]`. The list [`COMMANDS`] is that of
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::error::{AppError, AppResult};
 use crate::state::AppState;
 
-/// The 78 orders in the contract.
-pub const COMMANDS: [&str; 78] = [
+/// The 79 orders in the contract.
+pub const COMMANDS: [&str; 79] = [
     "app_info",
     "repo_open",
     "repo_close",
@@ -34,6 +34,7 @@ pub const COMMANDS: [&str; 78] = [
     "remote_list",
     "undo_peek",
     "stage_paths",
+    "stage_all",
     "unstage_paths",
     "discard_paths",
     "discard_list",
@@ -135,6 +136,7 @@ pub async fn invoke(state: &AppState, command: &str, args: Value) -> AppResult<V
         "remote_list" => ser(crate::read::refs::remote_list(state, de(args)?).await?),
         "undo_peek" => ser(crate::undo::undo_peek(state, de(args)?).await?),
         "stage_paths" => ser(crate::write::index::stage_paths(state, de(args)?).await?),
+        "stage_all" => ser(crate::write::index::stage_all(state, de(args)?).await?),
         "unstage_paths" => ser(crate::write::index::unstage_paths(state, de(args)?).await?),
         "discard_paths" => ser(crate::write::index::discard_paths(state, de(args)?).await?),
         "discard_list" => ser(crate::trash::discard_list(state, de(args)?).await?),
@@ -207,10 +209,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn seventy_eight_unique_commands() {
+    fn seventy_nine_unique_commands() {
         let mut v = COMMANDS.to_vec();
         v.sort_unstable();
         v.dedup();
-        assert_eq!(v.len(), 78);
+        assert_eq!(v.len(), 79);
     }
 }

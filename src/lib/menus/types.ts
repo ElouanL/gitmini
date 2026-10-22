@@ -10,8 +10,8 @@ export const MENU_ITEM_IDS = [
   'checkout', 'checkout-detached', 'create-branch', 'cherry-pick', 'revert', 'rebase-onto', 'interactive-rebase',
   'interactive-rebase-onto', 'merge', 'push', 'pull', 'fetch', 'open-pr', 'rename', 'delete', 'copy-sha',
   'copy-message', 'copy-name', 'copy-url', 'copy-path', 'stash-apply', 'stash-pop', 'stash-drop', 'stash-branch',
-  'stash-show', 'stash-save', 'stash-paths', 'open-external', 'discard-all', 'squash', 'reset', 'resolve-ours', 'resolve-theirs',
-  'create-tag', 'file-history', 'file-blame', 'delete-remote',
+  'stash-show', 'stash-save', 'stash-paths', 'open-external', 'stage-tracked', 'stage-all', 'discard-all', 'squash', 'reset', 'resolve-ours', 'resolve-theirs',
+  'create-tag', 'file-history', 'file-blame', 'delete-remote', 'reword',
 ] as const;
 
 export type MenuItemId = (typeof MENU_ITEM_IDS)[number];

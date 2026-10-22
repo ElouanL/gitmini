@@ -73,7 +73,7 @@ describe('listes (STAGE-01)', () => {
 
   it("Unstage and \"All stage\" / \"All unstage\" : paths and \"all\"", async () => {
     fake = setup(
-      { stage_paths: () => snapshot([]), unstage_paths: () => snapshot([]) },
+      { stage_all: () => snapshot([]), unstage_paths: () => snapshot([]) },
       [unstaged('a.txt'), unstaged('b.txt', 'untracked'), staged('c.txt')],
     );
     mountWithDialogs(WtPanel);
@@ -82,11 +82,56 @@ describe('listes (STAGE-01)', () => {
     await whenIdle();
     status.apply(snapshot([unstaged('a.txt'), unstaged('b.txt', 'untracked'), staged('c.txt')]));
     await userEvent.click(screen.getByTestId('wt-stage-all-btn'));
-    expect(fake.callsOf('stage_paths')[0]!.args).toEqual({ repoId: 1, paths: 'all' });
+    expect(fake.callsOf('stage_all')[0]!.args).toEqual({ repoId: 1, scope: 'all' });
     await whenIdle();
     status.apply(snapshot([staged('c.txt')]));
     await userEvent.click(screen.getByTestId('wt-unstage-all-btn'));
     expect(fake.callsOf('unstage_paths')[1]!.args).toEqual({ repoId: 1, paths: 'all' });
+  });
+
+  it("\"Stage tracked\" sends scope \"tracked\"; disabled with only untracked files, unless the status is truncated", async () => {
+    fake = setup({ stage_all: () => snapshot([unstaged('b.txt', 'untracked'), staged('a.txt')]) }, [unstaged('a.txt'), unstaged('b.txt', 'untracked')]);
+    mountWithDialogs(WtPanel);
+    expect(screen.getByTestId('wt-stage-all-btn')).toHaveAttribute('title', 'Stage all, including untracked files');
+    await userEvent.click(screen.getByTestId('wt-stage-tracked-btn'));
+    expect(fake.callsOf('stage_all')[0]!.args).toEqual({ repoId: 1, scope: 'tracked' });
+    await whenIdle();
+    expect(paths('wt-unstaged-item')).toEqual(['b.txt']);
+    expect(screen.getByTestId('wt-stage-tracked-btn')).toBeDisabled();
+    expect(screen.getByTestId('wt-stage-all-btn')).toBeEnabled();
+
+    status.apply(snapshot([unstaged('b.txt', 'untracked')], { truncated: true }));
+    await waitFor(() => expect(screen.getByTestId('wt-stage-tracked-btn')).toBeEnabled());
+  });
+
+  it("bulk staging during a conflict: the conflicted files are left alone and a toast says how many", async () => {
+    const conflicts = [file('c1.txt', { conflict: 'both-modified' }), file('c2.txt', { conflict: 'both-added' })];
+    fake = setup({ stage_all: () => snapshot([...conflicts, staged('a.txt')]) }, [...conflicts, unstaged('a.txt')]);
+    op.setState(opState({ conflictedPaths: ['c1.txt', 'c2.txt'] }));
+    mountWithDialogs(WtPanel);
+    await userEvent.click(screen.getByTestId('wt-stage-all-btn'));
+    await whenIdle();
+    expect(fake.callsOf('stage_all')[0]!.args).toEqual({ repoId: 1, scope: 'all' });
+    expect(screen.getByTestId('wt-conflict-list')).toHaveAttribute('data-count', '2');
+    expect(toast.items.at(-1)?.message).toBe('2 conflicted files left untouched: mark each one as resolved.');
+  });
+
+  it("menu wip: \"Stage tracked\" and \"Stage all\" before \"Discard all\"", async () => {
+    fake = setup({ stage_all: () => snapshot([]) }, [unstaged('a.txt'), unstaged('b.txt', 'untracked')]);
+    const menu = resolveMenu({ menu: 'wip' });
+    const ids = menu.map((i) => i.id);
+    expect(ids.indexOf('stage-tracked')).toBeLessThan(ids.indexOf('stage-all'));
+    expect(ids.indexOf('stage-all')).toBeLessThan(ids.indexOf('discard-all'));
+    const item = (id: string) => menu.find((i) => i.id === id)!;
+    expect(item('stage-tracked').label).toBe('Stage tracked changes');
+    expect(item('stage-all').label).toBe('Stage all, including untracked files');
+    await item('stage-tracked').run();
+    await whenIdle();
+    expect(fake.callsOf('stage_all')[0]!.args).toEqual({ repoId: 1, scope: 'tracked' });
+
+    // Only untracked files: "Stage tracked" is not offered.
+    setup({}, [unstaged('b.txt', 'untracked')]);
+    expect(resolveMenu({ menu: 'wip' }).map((i) => i.id)).not.toContain('stage-tracked');
   });
 
   it("submodule and path no UTF-8: reading alone, no internship or discard", () => {

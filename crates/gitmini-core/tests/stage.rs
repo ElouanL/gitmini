@@ -10,8 +10,8 @@ use gitmini_core::state::WriteSpec;
 use gitmini_core::types::{ChangeKind, ConflictKind, DiffSource};
 use gitmini_core::write::PathsOrAll;
 use gitmini_core::write::index::{
-    HunkArgs, PathsArgs, discard_hunk, discard_paths, stage_hunk, stage_paths, unstage_hunk,
-    unstage_paths,
+    HunkArgs, PathsArgs, StageAllArgs, StageScope, discard_hunk, discard_paths, stage_all,
+    stage_hunk, stage_paths, unstage_hunk, unstage_paths,
 };
 use index_support::{Fx, code, detail_str, detail_strs, file, split_hunks};
 
@@ -1335,6 +1335,443 @@ async fn br_10_stage_unstage_and_discard_are_allowed_during_an_operation() {
     assert_eq!(detail_str(&e, "reason").as_deref(), Some("conflicted"));
 }
 
+// - - STAGE-01 (bulk actions during an operation): conflicts and the operation state survive
+
+/// `rebase-conflict` on `main`, then `git merge feature`: `conflict.txt` is unmerged, `feature2.txt` is staged.
+fn conflicted_merge() -> Fx {
+    let fx = Fx::load("rebase-conflict");
+    fx.git(&["switch", "-q", "main"]);
+    assert!(!fx.git_raw(&["merge", "feature"]).status.success());
+    fx
+}
+
+/// Commits `file`, changes it on both HEAD and a `side` branch, then merges `side`: `file` is left both-modified.
+fn conflict_on(fx: &Fx, file: &str) {
+    fx.write(file, "base\n");
+    fx.git(&["add", "--", file]);
+    fx.git(&["commit", "-q", "-m", "base of the conflict"]);
+    fx.branch_with_commit("conflict-side", file, "side\n");
+    fx.write(file, "ours\n");
+    fx.git(&["add", "--", file]);
+    fx.git(&["commit", "-q", "-m", "ours"]);
+    assert!(!fx.git_raw(&["merge", "conflict-side"]).status.success());
+}
+
+/// `path` is still unmerged: listed by `git ls-files -u` and `git diff --diff-filter=U`.
+fn assert_unmerged(fx: &Fx, path: &str) {
+    assert!(
+        fx.git(&["ls-files", "-u", "--", path]).contains(path),
+        "{path} has lost its conflict stages"
+    );
+    assert!(
+        fx.git(&["diff", "--name-only", "--diff-filter=U"])
+            .lines()
+            .any(|l| l == path),
+        "{path} is no longer listed as unmerged"
+    );
+}
+
+#[tokio::test]
+async fn stage_01_stage_all_leaves_conflicts_unmerged() {
+    let fx = conflicted_merge();
+    fx.write("README.md", "# changed during the merge\n");
+    fx.write("brand-new.txt", "x\n");
+    let before = fx.read("conflict.txt");
+    let o = fx.open().await;
+
+    let snap = stage_paths(&o.state, all(&o)).await.unwrap();
+
+    assert_unmerged(&fx, "conflict.txt");
+    assert_eq!(fx.read("conflict.txt"), before, "markers left as they are");
+    assert_eq!(fx.xy("README.md").as_deref(), Some("M."));
+    assert_eq!(fx.xy("brand-new.txt").as_deref(), Some("A."));
+    assert!(fx.git_dir().join("MERGE_HEAD").exists());
+    assert!(file(&snap, "conflict.txt").unwrap().conflict.is_some());
+}
+
+#[tokio::test]
+async fn stage_01_stage_all_leaves_a_conflict_next_to_a_changed_sibling_alone() {
+    let fx = Fx::load("linear");
+    fx.write("d/x.txt", "x\n");
+    fx.git(&["add", "d/x.txt"]);
+    fx.git(&["commit", "-q", "-m", "d/x.txt"]);
+    conflict_on(&fx, "d/k.txt");
+    fx.write("d/x.txt", "x changed\n");
+    fx.write("d/new.txt", "new\n");
+    let o = fx.open().await;
+
+    stage_paths(&o.state, all(&o)).await.unwrap();
+
+    assert_unmerged(&fx, "d/k.txt");
+    assert_eq!(fx.xy("d/x.txt").as_deref(), Some("M."));
+    assert_eq!(fx.xy("d/new.txt").as_deref(), Some("A."));
+}
+
+#[tokio::test]
+async fn stage_01_stage_all_leaves_conflicts_alone_next_to_a_submodule() {
+    let fx = Fx::load("submodule");
+    conflict_on(&fx, "c.txt");
+    fx.write("nouveau.txt", "x\n");
+    let o = fx.open().await;
+    assert_eq!(fx.xy("lib").as_deref(), Some(".M"));
+
+    stage_paths(&o.state, all(&o)).await.unwrap();
+
+    assert_unmerged(&fx, "c.txt");
+    assert_eq!(
+        fx.xy("lib").as_deref(),
+        Some(".M"),
+        "the submodule stays unstaged"
+    );
+    assert_eq!(fx.xy("nouveau.txt").as_deref(), Some("A."));
+}
+
+/// With nothing else to stage, the explicit list is empty: no git command may run (an empty
+/// `--pathspec-from-file` means the whole tree, conflicts included).
+#[tokio::test]
+async fn stage_01_stage_all_with_only_conflicts_left_runs_nothing() {
+    let fx = conflicted_merge();
+    let o = fx.open().await;
+    stage_paths(&o.state, all(&o)).await.unwrap();
+    assert_unmerged(&fx, "conflict.txt");
+}
+
+#[tokio::test]
+async fn stage_01_stage_all_with_conflicts_beyond_status_cap() {
+    let fx = Fx::load("rebase-conflict");
+    fx.git(&["switch", "-q", "main"]);
+    let bulk = |i: usize| fx.path.join(format!("bulk/d{}/f{i}.txt", i % 50));
+    for i in 0..4000 {
+        std::fs::create_dir_all(bulk(i).parent().unwrap()).unwrap();
+        std::fs::write(bulk(i), format!("original {i}\n")).unwrap();
+    }
+    fx.git(&["add", "bulk"]);
+    fx.git(&["commit", "-q", "-m", "4000 tracked files"]);
+    assert!(!fx.git_raw(&["merge", "feature"]).status.success());
+    for i in 0..4000 {
+        std::fs::write(bulk(i), format!("modified {i}\n")).unwrap();
+    }
+    for i in 0..6050 {
+        let p = fx.path.join(format!("loose/d{}/u{i}.txt", i % 50));
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, format!("untracked {i}\n")).unwrap();
+    }
+    let o = fx.open().await;
+
+    let snap = stage_paths(&o.state, all(&o)).await.unwrap();
+
+    assert_unmerged(&fx, "conflict.txt");
+    let left: Vec<String> = fx
+        .status_v2()
+        .into_iter()
+        .filter(|l| !l.starts_with("u "))
+        .filter(|l| l.starts_with("? ") || l.split(' ').nth(1).is_some_and(|xy| !xy.ends_with('.')))
+        .collect();
+    assert!(
+        left.is_empty(),
+        "{} entries left unstaged: {:?}",
+        left.len(),
+        &left[..left.len().min(5)]
+    );
+    assert!(snap.files.iter().any(|f| f.conflict.is_some()));
+}
+
+#[tokio::test]
+async fn stage_01_unstage_all_keeps_the_merge_in_progress() {
+    let fx = conflicted_merge();
+    fx.write("README.md", "# changed during the merge\n");
+    fx.git(&["add", "README.md"]);
+    let o = fx.open().await;
+
+    unstage_paths(&o.state, all(&o)).await.unwrap();
+
+    assert!(
+        fx.git_dir().join("MERGE_HEAD").exists(),
+        "the merge is still in progress"
+    );
+    assert_unmerged(&fx, "conflict.txt");
+    assert_eq!(fx.xy("README.md").as_deref(), Some(".M"));
+
+    // Every conflict resolved, merge not committed yet: "unstage all" still keeps MERGE_HEAD.
+    fx.write("conflict.txt", "resolved\n");
+    fx.git(&["add", "conflict.txt", "README.md"]);
+    assert!(fx.git(&["ls-files", "-u"]).is_empty());
+    unstage_paths(&o.state, all(&o)).await.unwrap();
+    assert!(
+        fx.git_dir().join("MERGE_HEAD").exists(),
+        "the merge is still in progress"
+    );
+    assert_eq!(fx.xy("README.md").as_deref(), Some(".M"));
+}
+
+#[tokio::test]
+async fn stage_01_unstage_all_keeps_the_cherry_pick_in_progress() {
+    let fx = Fx::load("rebase-conflict");
+    fx.git(&["switch", "-q", "main"]);
+    assert!(!fx.git_raw(&["cherry-pick", "feature~1"]).status.success());
+    fx.write("README.md", "# changed during the pick\n");
+    fx.git(&["add", "README.md"]);
+    let o = fx.open().await;
+
+    unstage_paths(&o.state, all(&o)).await.unwrap();
+
+    assert!(
+        fx.git_dir().join("CHERRY_PICK_HEAD").exists(),
+        "the pick is still in progress"
+    );
+    assert_unmerged(&fx, "conflict.txt");
+    assert_eq!(fx.xy("README.md").as_deref(), Some(".M"));
+}
+
+// - - STAGE-01 "stage tracked" (`stage_all` scope `tracked`, `git add -u`)
+
+fn tracked(o: &index_support::Opened) -> StageAllArgs {
+    StageAllArgs {
+        repo_id: o.id,
+        scope: StageScope::Tracked,
+    }
+}
+
+#[tokio::test]
+async fn stage_01_stage_tracked_leaves_untracked_files_alone() {
+    let fx = Fx::load("dirty-worktree");
+    let o = fx.open().await;
+    let snap = stage_all(&o.state, tracked(&o)).await.unwrap();
+    for (path, xy) in [
+        ("mod.txt", "M."),
+        ("crlf.txt", "M."),
+        ("image.png", "M."),
+        ("del.txt", "D."),
+        ("staged.txt", "M."),
+        ("untracked.txt", "??"),
+    ] {
+        assert_eq!(fx.xy(path).as_deref(), Some(xy), "{path}");
+    }
+    assert!(!cached_names(&fx).contains(&"dir avec espace/é.txt".to_string()));
+    assert!(
+        fx.git(&["diff", "--name-only"]).is_empty(),
+        "no tracked change left unstaged"
+    );
+    assert_eq!(
+        file(&snap, "untracked.txt").unwrap().unstaged,
+        Some(ChangeKind::Untracked)
+    );
+    // "all" through the same command stages the untracked files too.
+    stage_all(
+        &o.state,
+        StageAllArgs {
+            repo_id: o.id,
+            scope: StageScope::All,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(fx.xy("untracked.txt").as_deref(), Some("A."));
+}
+
+#[tokio::test]
+async fn stage_01_stage_tracked_handles_intent_to_add_partly_staged_and_moved_files() {
+    let fx = Fx::load("dirty-worktree");
+    fx.write("ita.txt", "x\n");
+    fx.git(&["add", "-N", "ita.txt"]);
+    fx.write("staged.txt", "changed again\n");
+    std::fs::rename(fx.path.join("mod.txt"), fx.path.join("moved.txt")).unwrap();
+    let o = fx.open().await;
+    assert_eq!(fx.xy("staged.txt").as_deref(), Some("MM"));
+
+    stage_all(&o.state, tracked(&o)).await.unwrap();
+
+    assert_eq!(fx.xy("ita.txt").as_deref(), Some("A."));
+    assert_eq!(fx.xy("staged.txt").as_deref(), Some("M."));
+    assert_eq!(
+        fx.xy("mod.txt").as_deref(),
+        Some("D."),
+        "a move stages only the deletion"
+    );
+    assert_eq!(fx.xy("moved.txt").as_deref(), Some("??"));
+}
+
+#[tokio::test]
+async fn stage_01_stage_tracked_leaves_conflicts_unmerged() {
+    let fx = conflicted_merge();
+    fx.write("README.md", "# changed during the merge\n");
+    fx.write("brand-new.txt", "x\n");
+    let before = fx.read("conflict.txt");
+    let o = fx.open().await;
+
+    stage_all(&o.state, tracked(&o)).await.unwrap();
+
+    assert_unmerged(&fx, "conflict.txt");
+    assert_eq!(fx.read("conflict.txt"), before);
+    assert_eq!(fx.xy("README.md").as_deref(), Some("M."));
+    assert_eq!(fx.xy("brand-new.txt").as_deref(), Some("??"));
+    assert!(fx.git_dir().join("MERGE_HEAD").exists());
+}
+
+#[tokio::test]
+async fn stage_01_stage_tracked_skips_submodules_next_to_a_conflict() {
+    let fx = Fx::load("submodule");
+    let o = fx.open().await;
+    fx.write("nouveau.txt", "x\n");
+    stage_all(&o.state, tracked(&o)).await.unwrap();
+    assert_eq!(
+        fx.xy("lib").as_deref(),
+        Some(".M"),
+        "the submodule stays unstaged"
+    );
+    assert_eq!(fx.xy("nouveau.txt").as_deref(), Some("??"));
+
+    conflict_on(&fx, "c.txt");
+    fx.write("README.md", "changed\n");
+    stage_all(&o.state, tracked(&o)).await.unwrap();
+    assert_unmerged(&fx, "c.txt");
+    assert_eq!(fx.xy("lib").as_deref(), Some(".M"));
+    assert_eq!(fx.xy("README.md").as_deref(), Some("M."));
+    assert_eq!(fx.xy("nouveau.txt").as_deref(), Some("??"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn stage_01_bulk_stage_with_a_conflict_stages_a_file_gone_behind_a_symlink() {
+    let fx = Fx::load("linear");
+    fx.write("real/y.txt", "y\n");
+    fx.git(&["add", "real"]);
+    fx.git(&["commit", "-q", "-m", "real/y.txt"]);
+    conflict_on(&fx, "c.txt");
+    std::fs::remove_dir_all(fx.path.join("real")).unwrap();
+    fx.write("other/y.txt", "y\n");
+    std::os::unix::fs::symlink("other", fx.path.join("real")).unwrap();
+    let o = fx.open().await;
+
+    stage_all(&o.state, tracked(&o)).await.unwrap();
+
+    assert_unmerged(&fx, "c.txt");
+    assert_eq!(fx.xy("real/y.txt").as_deref(), Some("D."));
+    assert_eq!(fx.xy("real").as_deref(), Some("??"));
+
+    fx.git(&["reset", "-q", "--", "real"]);
+    assert_eq!(fx.xy("real/y.txt").as_deref(), Some(".D"));
+    stage_paths(&o.state, all(&o)).await.unwrap();
+    assert_unmerged(&fx, "c.txt");
+    assert!(
+        !fx.git(&["ls-files"]).lines().any(|l| l == "real/y.txt"),
+        "{:?}",
+        fx.status_v2()
+    );
+    assert_eq!(
+        fx.xy("real").as_deref(),
+        Some("A."),
+        "the link itself is added"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn stage_01_stage_tracked_skips_a_non_utf8_index_entry() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let fx = Fx::load("linear");
+    let blob = fx.hash_stdin(b"x\n");
+    let git = || fx.fixture().command(index_support::git_program());
+    let mut child = git()
+        .args(["hash-object", "-w", "--stdin"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(&mut child.stdin.take().unwrap(), b"x\n").unwrap();
+    assert!(child.wait().unwrap().success());
+    let cacheinfo = [format!("100644,{blob},").as_bytes(), b"bad-\xff.txt"].concat();
+    assert!(
+        git()
+            .args(["update-index", "--add", "--cacheinfo"])
+            .arg(OsStr::from_bytes(&cacheinfo))
+            .status()
+            .unwrap()
+            .success()
+    );
+    fx.write("file-1.txt", "modified\n");
+    let o = fx.open().await;
+
+    stage_all(&o.state, tracked(&o)).await.unwrap();
+
+    assert_eq!(fx.xy("file-1.txt").as_deref(), Some("M."));
+    let raw = b"bad-\xff.txt";
+    assert!(
+        fx.git_raw(&["ls-files", "-z"])
+            .stdout
+            .windows(raw.len())
+            .any(|w| w == raw),
+        "the non-UTF-8 entry is left in the index"
+    );
+}
+
+#[tokio::test]
+async fn stage_01_stage_tracked_on_unborn_head() {
+    let fx = Fx::empty_repo();
+    fx.write("a.txt", "a\n");
+    let o = fx.open().await;
+    // Empty index: nothing to stage, no error.
+    stage_all(&o.state, tracked(&o)).await.unwrap();
+    assert_eq!(fx.xy("a.txt").as_deref(), Some("??"));
+
+    fx.git(&["add", "a.txt"]);
+    fx.write("a.txt", "a changed\n");
+    fx.write("b.txt", "b\n");
+    stage_all(&o.state, tracked(&o)).await.unwrap();
+    assert_eq!(fx.xy("a.txt").as_deref(), Some("A."));
+    assert!(fx.git(&["diff", "--", "a.txt"]).is_empty());
+    assert_eq!(fx.xy("b.txt").as_deref(), Some("??"));
+}
+
+#[tokio::test]
+async fn stage_01_stage_tracked_is_not_capped_at_10000_entries() {
+    let fx = Fx::load("linear");
+    let bulk = |i: usize| fx.path.join(format!("bulk/d{}/f{i}.txt", i % 50));
+    for i in 0..10_050 {
+        std::fs::create_dir_all(bulk(i).parent().unwrap()).unwrap();
+        std::fs::write(bulk(i), format!("original {i}\n")).unwrap();
+    }
+    fx.git(&["add", "bulk"]);
+    fx.git(&["commit", "-q", "-m", "10050 tracked files"]);
+    for i in 0..10_050 {
+        std::fs::write(bulk(i), format!("modified {i}\n")).unwrap();
+    }
+    fx.write("loose.txt", "x\n");
+    let o = fx.open().await;
+
+    let snap = stage_all(&o.state, tracked(&o)).await.unwrap();
+
+    assert!(
+        fx.git(&["diff", "--name-only"]).is_empty(),
+        "nothing left unstaged"
+    );
+    assert_eq!(fx.xy("loose.txt").as_deref(), Some("??"));
+    assert!(snap.truncated);
+}
+
+#[tokio::test]
+async fn stage_01_stage_all_rejects_an_unknown_scope() {
+    let fx = Fx::load("dirty-worktree");
+    let o = fx.open().await;
+    let e = gitmini_core::dispatch::invoke(
+        &o.state,
+        "stage_all",
+        serde_json::json!({ "repoId": o.id, "scope": "everything" }),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(code(&e), "INVALID_ARGUMENT");
+    gitmini_core::dispatch::invoke(
+        &o.state,
+        "stage_all",
+        serde_json::json!({ "repoId": o.id, "scope": "tracked" }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(fx.xy("mod.txt").as_deref(), Some("M."));
+    assert_eq!(fx.xy("untracked.txt").as_deref(), Some("??"));
+}
+
 // "No reset orders
 /// `dir` files (recursive) whose extension is in `exts`, excluding `node_modules` and `target` folders.
 fn source_files(dir: &std::path::Path, exts: &[&str]) -> Vec<std::path::PathBuf> {
@@ -1433,4 +1870,30 @@ fn reset_is_confined() {
     names.sort_unstable();
     names.dedup();
     assert_eq!(names, ["branch_reset"], "dispatch.rs: reset commands");
+}
+
+/// With a conflict, the explicit list names an untracked nested repository `nested/`: it is staged as a gitlink, as
+/// `git add -A` does without a conflict. One without a commit is left untracked instead of failing the batch.
+#[tokio::test]
+async fn stage_01_stage_all_with_a_conflict_stages_a_nested_repository_as_a_gitlink() {
+    let fx = Fx::load("linear");
+    conflict_on(&fx, "c.txt");
+    fx.git(&["init", "-q", "nested"]);
+    fx.git(&["-C", "nested", "commit", "-q", "--allow-empty", "-m", "n"]);
+    fx.git(&["init", "-q", "emptynested"]);
+    fx.write("u.txt", "u\n");
+    let o = fx.open().await;
+
+    let snap = stage_paths(&o.state, all(&o)).await.unwrap();
+
+    assert_unmerged(&fx, "c.txt");
+    assert!(
+        fx.git(&["ls-files", "-s", "--", "nested"])
+            .starts_with("160000 "),
+        "{:?}",
+        fx.status_v2()
+    );
+    assert_eq!(fx.xy("u.txt").as_deref(), Some("A."));
+    assert_eq!(fx.xy("emptynested/").as_deref(), Some("??"));
+    assert!(file(&snap, "nested/").is_none());
 }

@@ -1,5 +1,6 @@
 // Domaine « rebase » (07) : `rebase-confirm-dialog` (rebase simple), `rebase-todo-panel` (rebase interactif, vue centrale),
 // `squash-dialog` (action `rebase.squash`, menu entry `squash`: squash consecutive selected commits),
+// `reword-dialog` (action `commit.reword`, menu entry `reword`: edit the message of one commit of HEAD's history),
 // menu entries `rebase-onto` / `interactive-rebase` / `interactive-rebase-onto`, and operations banner actions
 // `op.continue` / `op.skip` / `op.abort` for rebase, merge, cherry-pick and revert (see banner-actions.ts).
 // Contract inter-agents: `openDialog('rebase-confirm-dialog', { branch, target })` (slide and drop graph).
@@ -13,10 +14,12 @@ import { headBranchName, headOnBranch, loadedRowIndex } from '../branches/common
 import { bannerActions } from './banner-actions';
 import { openInteractiveRebase, parentOfCommit } from './interactive';
 import { reachableFromHead } from './reachability';
+import { rewordDisabledReason, rewordEligible, rewordTargetOid } from './reword';
 import { checkSquashSelection, squashDisabledReason, squashTargetOids } from './squash';
 
 registerDialog('rebase-confirm-dialog', () => import('./RebaseConfirmDialog.svelte'));
 registerDialog('squash-dialog', () => import('./SquashDialog.svelte'));
+registerDialog('reword-dialog', () => import('./RewordDialog.svelte'));
 registerCenterView('rebase-todo-panel', () => import('./RebaseTodoPanel.svelte'));
 registerActions(bannerActions);
 
@@ -46,9 +49,33 @@ registerAction({
   },
 });
 
+// "Edit message…": the `reword` menu entry, the palette (single selected commit) and the button of `commit-details-panel`.
+// `enabled` false = target not eligible (hidden from the palette and the panel); `disabledReason` = an operation blocks writes.
+registerAction({
+  id: 'commit.reword',
+  label: () => t('reword.action'),
+  enabled: rewordEligible,
+  disabledReason: rewordDisabledReason,
+  run: (ctx) => {
+    const oid = rewordTargetOid(ctx);
+    if (oid) void openDialog('reword-dialog', { oid });
+  },
+});
+
 const head = () => headBranchName() ?? t('rebase.target.head');
 
 registerMenuItems('commit', [
+  {
+    id: 'reword',
+    label: () => t('reword.menu'),
+    order: 49,
+    // One single commit of HEAD's first-parent history without merge up to HEAD (a line not loaded leaves it to the backend).
+    visible: rewordEligible,
+    enabled: (ctx) => ctx.op.blockReason('write') === null,
+    run: async (ctx) => {
+      await openDialog('reword-dialog', { oid: ctx.target.oid });
+    },
+  },
   {
     id: 'rebase-onto',
     label: () => t('rebase.menu.rebaseOntoCommit', { head: head() }),

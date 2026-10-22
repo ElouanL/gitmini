@@ -518,7 +518,10 @@ async fn merge_abort_locked(repo: &Arc<RepoHandle>) -> AppResult<WriteResult> {
         let repo = repo.clone();
         tokio::task::spawn_blocking(move || crate::repo::head_info(&repo.thread_repo())).await?
     };
-    Ok(WriteResult { head })
+    Ok(WriteResult {
+        head,
+        backed_up: None,
+    })
 }
 
 #[cfg(test)]

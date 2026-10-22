@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { FileStatus } from '$lib/ipc/types';
-import { discardable, isReadonly, isWritable, offersSides, partition, resolvable, rowLabel, splitPath, stageable, unstageable } from './list-model';
+import { discardable, isReadonly, isWritable, offersSides, partition, resolvable, rowLabel, splitPath, stageable, stageableTracked, unstageable } from './list-model';
 
 function f(path: string, over: Partial<FileStatus> = {}): FileStatus {
   return { path, oldPath: null, staged: null, unstaged: null, conflict: null, oldMode: null, newMode: null, submodule: null, nonUtf8: null, ...over };
@@ -54,6 +54,19 @@ describe("read only", () => {
     expect(stageable(files).map((x) => x.path)).toEqual(['a']);
     expect(discardable(files).map((x) => x.path)).toEqual(['a']);
     expect(unstageable(files).map((x) => x.path)).toEqual(['s']);
+  });
+
+  it("stage tracked: \"stage all\" without the untracked files", () => {
+    const files = [
+      f('m', { unstaged: 'modified' }),
+      f('d', { unstaged: 'deleted' }),
+      f('u', { unstaged: 'untracked' }),
+      f('c', { unstaged: 'modified', conflict: 'both-modified' }),
+      f('sub', { unstaged: 'modified', submodule: true }),
+      f('s', { staged: 'added' }),
+    ];
+    expect(stageableTracked(files).map((x) => x.path)).toEqual(['m', 'd']);
+    expect(stageable(files).map((x) => x.path)).toEqual(['m', 'd', 'u']);
   });
 });
 

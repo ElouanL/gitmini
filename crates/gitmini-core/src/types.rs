@@ -90,6 +90,11 @@ pub struct RecentRepo {
 #[serde(rename_all = "camelCase")]
 pub struct WriteResult {
     pub head: HeadInfo,
+    /// `rebase_skip` / `sequencer_skip`: how many files the skip saved to the trash before throwing them away (`null`
+    /// when none, and for every other command).
+    #[serde(default)]
+    #[specta(optional)]
+    pub backed_up: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]

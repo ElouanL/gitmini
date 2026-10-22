@@ -4,8 +4,9 @@ import { captureStores } from '$lib/stores/context';
 // `op.skip`, `op.abort`. They REMPLACENT those of the base (same id) to add flow-specific returns (07 "Returns",
 // 09 "Returns" and "Abort"): end-undo toast ("hand-based feature (7 commits)"), a CANCELLED twist
 // ("Stopped step: the rebase remains on pause"), cleaning without a rearward return of a sequencer of which HEAD has moved.
-// Unchanged base contract: `rebase_*` [L] with `runWrite({ long: true })`, `sequencer_*`, `merge_*`; only Abort confirms
-// (`confirm-dialog[data-action=op-abort]`).
+// Unchanged base contract: `rebase_*` [L] with `runWrite({ long: true })`, `sequencer_*`, `merge_*`; Abort confirms
+// (`confirm-dialog[data-action=op-abort]`), Skip only at a rebase stop without conflicted paths that would reset tracked changes
+// (`op-skip`). A Skip that saved files to the trash says so with a Recover toast.
 import { abortMessage } from '$lib/actions/op-actions';
 import type { ActionContext, ActionDef } from '$lib/actions/registry';
 import { getMergeMessage } from '$lib/banner/merge-message';
@@ -13,8 +14,9 @@ import { confirmAction } from '$lib/dialogs/confirm';
 import { t, tp } from '$i18n/index';
 import { offerUndo } from '$lib/components/flows/undo/offer-undo';
 import { commands } from '$lib/ipc/commands';
-import type { RepoOpState } from '$lib/ipc/types';
+import type { FileStatus, RepoOpState } from '$lib/ipc/types';
 import { shortOid } from '$lib/format';
+import { announceDiscard } from '$lib/components/flows/trash/announce';
 
 import { toast } from '$lib/stores/toast.svelte';
 import { headBranchName, shortRefName } from '../branches/common';
@@ -75,27 +77,65 @@ export async function opContinue(ctx: ActionContext): Promise<void> {
   }
 }
 
+/**
+ * Skip asks first only where it would throw away work with no conflict left to skip: a rebase stop without conflicted
+ * paths (`edit`, also with a staged amendment, which git reports as `conflict`; `break`, failed `exec`, empty commit,
+ * conflicts all resolved) while tracked files have changes. Skip resets them; Continue is what keeps them. Stops with
+ * conflicts keep one-click Skip: the backend saves what it throws away to the trash either way.
+ */
+export function skipNeedsConfirm(st: RepoOpState, files: readonly FileStatus[]): boolean {
+  if (st.kind !== 'rebase' || st.phase === 'running' || st.conflictedPaths.length > 0) return false;
+  return files.some((f) => !f.submodule && (f.staged !== null || f.conflict !== null || (f.unstaged !== null && f.unstaged !== 'untracked')));
+}
+
+/** The Recover toast when the skip saved files to the trash (`backedUp` of the answer, or of the error on a new stop). */
+function announceBackedUp(n: unknown, owner: Session): void {
+  if (typeof n === 'number' && n > 0) announceDiscard({ kind: 'skip', count: n }, owner);
+}
+
 export async function opSkip(ctx: ActionContext): Promise<void> {
   const owner = ctx.session;
-  const { runWrite, refs } = captureStores(owner);
+  const { runWrite, refs, status } = captureStores(owner);
   const st = ctx.op.state;
   const repoId = ctx.repoId;
   if (!st || repoId === null) return;
   if (st.kind === 'rebase') {
+    if (skipNeedsConfirm(st, status.files)) {
+      const ok = await confirmAction({
+        action: 'op-skip',
+        danger: true,
+        title: t('banner.skip.confirm.title'),
+        message: t('banner.skip.confirm.message'),
+        confirmLabel: t('banner.skip.confirm'),
+      }, owner);
+      if (!ok) return;
+    }
     const stashesBefore = refs.stashes.length;
     const r = await runWrite(t('rebase.op.skip'), ({ opId }) => commands.rebaseSkip({ repoId, opId: opId! }), {
       long: true,
       command: 'rebase_skip',
       onError: (e) => {
+        // A new stop (CONFLICT) or a cancellation after git reset the files: the backup was made all the same.
+        announceBackedUp(e.details?.backedUp, owner);
         if (e.code !== 'CANCELLED') return false;
         toast.info(t('rebase.cancelled.step'));
         return true;
       },
     });
-    if (r.ok) await rebaseFinished(st, stashesBefore, owner);
+    if (!r.ok) return;
+    announceBackedUp(r.value.backedUp, owner);
+    await rebaseFinished(st, stashesBefore, owner);
   } else if (st.kind === 'cherry-pick' || st.kind === 'revert') {
-    const r = await runWrite(t('banner.skip'), () => commands.sequencerSkip({ repoId }), { command: 'sequencer_skip' });
-    if (r.ok) await offerUndo(t(`banner.done.${st.kind}`), st.kind, owner);
+    const r = await runWrite(t('banner.skip'), () => commands.sequencerSkip({ repoId }), {
+      command: 'sequencer_skip',
+      onError: (e) => {
+        announceBackedUp(e.details?.backedUp, owner);
+        return false;
+      },
+    });
+    if (!r.ok) return;
+    announceBackedUp(r.value.backedUp, owner);
+    await offerUndo(t(`banner.done.${st.kind}`), st.kind, owner);
   }
 }
 

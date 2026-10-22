@@ -221,6 +221,44 @@ describe('commit-details-panel (GRAPH-02)', () => {
     await settle();
     expect(reveal).toHaveBeenCalledWith(head);
   });
+
+  it("reword button next to the title: hidden without commit.reword or when not applicable, reason in its tooltip, runs with the target", async () => {
+    graph.selectCommit(hex(21));
+    const { getByTestId, queryByTestId } = render(CommitDetailsPanel);
+    await new Promise((r) => setTimeout(r, 120));
+    await settle();
+    expect(queryByTestId('commit-details-reword-btn')).toBeNull();
+
+    const got: unknown[] = [];
+    let applicable = false;
+    let blocked: string | null = 'An operation is in progress.';
+    const off = registerAction({
+      id: 'commit.reword', label: 'Edit', enabled: () => applicable, disabledReason: () => (applicable ? blocked : null), run: (ctx) => void got.push(ctx.target),
+    });
+    try {
+      // The registry is not reactive: a new selection re-reads it.
+      graph.selectCommit(hex(22));
+      await new Promise((r) => setTimeout(r, 120));
+      await settle();
+      expect(queryByTestId('commit-details-reword-btn')).toBeNull();
+      applicable = true;
+      graph.selectCommit(hex(21));
+      await new Promise((r) => setTimeout(r, 120));
+      await settle();
+      expect(getByTestId('commit-details-reword-btn')).toBeDisabled();
+      expect(getByTestId('commit-details-reword-btn')).toHaveAttribute('title', 'An operation is in progress.');
+      blocked = null;
+      graph.selectCommit(hex(22));
+      await new Promise((r) => setTimeout(r, 120));
+      await settle();
+      expect(getByTestId('commit-details-reword-btn')).toBeEnabled();
+      await fireEvent.click(getByTestId('commit-details-reword-btn'));
+      await settle();
+      expect(got).toEqual([{ menu: 'commit', oid: hex(22), oids: [hex(22)] }]);
+    } finally {
+      off();
+    }
+  });
 });
 
 describe('multi-commit-panel', () => {

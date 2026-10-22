@@ -3,11 +3,12 @@ import { captureStores } from '$lib/stores/context';
 // Writings of the working tree: internship, unstage, discard, mark as solved, open in the editor (05).
 // No optimistic updates: the command response (`StatusSnapshot`) is applied to the store `status`; the `repo:changed`
 // which follows restarts `status_get` (B14: the click is perceived at the time of the answer).
-import { commands, type ConflictSide } from '$lib/ipc/commands';
+import { commands, type ConflictSide, type StageScope } from '$lib/ipc/commands';
 import type { AppError, DiffSource, FileStatus } from '$lib/ipc/types';
 import { confirmAction } from '$lib/dialogs/confirm';
 
 import { status } from '$lib/stores/status.svelte';
+import { toast } from '$lib/stores/toast.svelte';
 
 import { t, tp } from '$i18n/index';
 import { openDiff } from '../diff/open-diff';
@@ -27,8 +28,8 @@ async function indexWrite(label: string, command: IndexCommand, paths: string[] 
   const { runWrite, session, status, wt } = captureStores(owner);
   const repoId = session.repoId;
   if (repoId === null) return false;
-  if (paths !== 'all' && paths.length === 0) return false;
-  const done = paths === 'all' ? () => {} : wt.markPending(paths);
+  if (Array.isArray(paths) && paths.length === 0) return false;
+  const done = Array.isArray(paths) ? wt.markPending(paths) : () => {};
   try {
     const res = await runWrite(
       label,
@@ -51,9 +52,32 @@ async function indexWrite(label: string, command: IndexCommand, paths: string[] 
   }
 }
 
-/** `stage_paths`: files, or `"all"` (not tracked included, submodules excluded). Also used to "mark as resolved". */
+/** `stage_paths`: files, or `"all"` (= `stageAll("all")`, without its toast). Also used to "mark as resolved". */
 export function stagePaths(paths: string[] | 'all'): Promise<boolean> {
   return indexWrite(t('wt.op.stage'), 'stage_paths', paths);
+}
+
+/**
+ * "Stage tracked" (`tracked`, `git add -u`) or "Stage all" (`all`, untracked files included): every change, beyond the
+ * 10,000 listed ones too. Conflicts are left alone (each one is marked as resolved on its own): a toast says how many.
+ */
+export async function stageAll(scope: StageScope, owner: Session = activeSession.current): Promise<boolean> {
+  const { runWrite, session, status } = captureStores(owner);
+  const repoId = session.repoId;
+  if (repoId === null) return false;
+  const res = await runWrite(
+    t(scope === 'tracked' ? 'wt.op.stageTracked' : 'wt.op.stage'),
+    async () => {
+      const snap = await commands.stageAll({ repoId, scope });
+      status.apply(snap);
+      return snap;
+    },
+    { command: 'stage_all', onError: (e) => refreshOnNotFound(e, owner) },
+  );
+  if (!res.ok) return false;
+  const conflicts = res.value.files.filter((f) => f.conflict !== null && f.conflict !== undefined).length;
+  if (conflicts > 0) toast.info(tp('wt.stageAll.conflictsSkipped', conflicts));
+  return true;
 }
 
 export function unstagePaths(paths: string[] | 'all'): Promise<boolean> {

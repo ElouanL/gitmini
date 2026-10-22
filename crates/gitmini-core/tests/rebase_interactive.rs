@@ -317,6 +317,55 @@ async fn irb_01_reword_with_unchanged_message_is_a_plain_pick() {
     assert_eq!(fx.subjects("main..feature")[3], "C: adds c.txt");
 }
 
+/// 07 — the `exec` of a reword runs `commit-msg` only: a `pre-commit` that would fail on the historical tree, or fold its
+/// own changes into it, never runs; the trees are unchanged and a `commit-msg` that edits the message is honoured.
+#[tokio::test]
+async fn irb_01_reword_runs_commit_msg_but_not_pre_commit() {
+    let fx = Fx::load("rebase-interactive");
+    fx.install_hook(
+        "pre-commit",
+        "echo 'formatted' >> c.txt && git add c.txt\necho 'pre-commit refuse' >&2\nexit 1",
+    );
+    fx.install_hook("commit-msg", "printf '\\nChecked-by: hook\\n' >> \"$1\"");
+    let o = fx.open().await;
+    let c = commits(&fx);
+    let head = fx.rev("HEAD");
+    let tree_before = fx.rev("feature^{tree}");
+    let c_tree = fx.rev(&format!("{}^{{tree}}", c.c));
+
+    rebase_interactive_start(
+        &o.state,
+        args(
+            &o,
+            Some("main"),
+            &head,
+            vec![
+                item(&c.a, TodoAction::Pick, None),
+                item(&c.b, TodoAction::Pick, None),
+                item(&c.c, TodoAction::Reword, Some("C: renamed")),
+                item(&c.fix, TodoAction::Pick, None),
+                item(&c.d, TodoAction::Pick, None),
+            ],
+            false,
+        ),
+    )
+    .await
+    .expect("pre-commit is not called");
+
+    assert!(!fx.rebase_merge_exists());
+    assert_eq!(
+        fx.raw_message("feature~2"),
+        "C: renamed\nChecked-by: hook\n"
+    );
+    assert_eq!(
+        fx.rev("feature~2^{tree}"),
+        c_tree,
+        "reworded commit: same tree"
+    );
+    assert_eq!(fx.rev("feature^{tree}"), tree_before);
+    assert_eq!(fx.git(&["status", "--porcelain"]), "");
+}
+
 // ── IRB-02
 
 /// IRB-02 — D drop: `d.txt` absent from `feature`, the other 4 commits are replayed.

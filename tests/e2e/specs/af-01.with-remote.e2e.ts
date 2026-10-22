@@ -13,6 +13,7 @@ import { readSettings } from './ui-support';
 const MINUTE = 60_000;
 
 interface AutoFetchState {
+  intervalMs: number | null;
   fetching: number | null;
   entries: { repoId: number; failures: number; code: string | null }[];
 }
@@ -39,6 +40,10 @@ async function closePullToast(): Promise<void> {
   });
   await waitForGone('toast-pull-btn');
 }
+/** Error toasts on screen (the one of a failed background fetch carries `toast-autofetch-retry-btn`). */
+async function errorToastCount(): Promise<number> {
+  return browser.execute(() => document.querySelectorAll('[data-testid="toast"][data-kind="error"]').length);
+}
 async function chooseInterval(minutes: number): Promise<void> {
   await click('toolbar-settings-btn');
   const select = await waitForTestId('settings-fetch-auto-select');
@@ -52,7 +57,7 @@ async function chooseInterval(minutes: number): Promise<void> {
 const fetchAllCount = (): number => gitSpawnLines().filter((l) => l.includes('"fetch"') && l.includes('"--all"')).length;
 
 describe('AF-01 — Auto-fetch', () => {
-  it('AF-01 — fetches on the chosen interval, offers Pull, stays silent when it fails and stops when switched off', async () => {
+  it('AF-01 — on by default, fetches on the chosen interval, offers Pull, tells a failure once and stops when switched off', async () => {
     const { repo, fx } = currentSession();
     await appReady();
     const fetches = fetchAllCount;
@@ -61,17 +66,13 @@ describe('AF-01 — Auto-fetch', () => {
     const mainBefore = revParse(repo, 'main');
     expect(revParse(repo, 'origin/main')).not.toBe(originMain());
 
-    // Off by default: a whole day goes by and gitmini never touches the network by itself.
-    await advance(24 * 60 * MINUTE);
-    await idle();
-    expect(fetches()).toBe(base);
-
-    // Settings → every 5 minutes. The repository has been open for a while, so the first fetch is due at once.
+    // On by default (no `fetch.auto` in settings.json): every 2 minutes, the first fetch 30 seconds after the repository was seen.
+    expect((await autoFetchState()).intervalMs).toBe(2 * MINUTE);
     await click('toolbar-settings-btn');
-    expect(await (await waitForTestId('settings-fetch-auto-select')).getValue()).toBe('0');
+    expect(await (await waitForTestId('settings-fetch-auto-select')).getValue()).toBe('2');
     await click('settings-close-btn');
-    await chooseInterval(5);
-    await advance(MINUTE);
+    await waitForGone('settings-fetch-auto-select');
+    await advance(31_000);
     expect(await pullToastText()).toContain('main is 3 commits behind origin/main.');
     await idle();
     expect(fetches()).toBe(base + 1);
@@ -86,7 +87,8 @@ describe('AF-01 — Auto-fetch', () => {
     expect(revParse(repo, 'main')).toBe(originMain());
     await waitForGone('toast-pull-btn');
 
-    // A fetch that brings nothing says nothing.
+    // Settings → every 5 minutes. A fetch that brings nothing says nothing.
+    await chooseInterval(5);
     await advance(5 * MINUTE + 1000);
     await until(() => fetches() === base + 2, { message: 'second automatic fetch not started' });
     await idle();
@@ -102,31 +104,31 @@ describe('AF-01 — Auto-fetch', () => {
     await closePullToast();
     expect(fetches()).toBe(base + 3);
 
-    // An unreachable server: no toast, no dialog, nothing left locked; the next tries are spaced out.
+    // An unreachable server: one error toast with a Fetch button, no dialog, nothing left locked.
     const url = git(repo, 'remote', 'get-url', 'origin');
     git(repo, 'remote', 'set-url', 'origin', 'http://127.0.0.1:1/unreachable.git');
     await advance(5 * MINUTE + 1000);
     await until(() => fetches() === base + 4, { message: 'automatic fetch against the broken remote not started' });
     await idle();
-    expect(await isShown('toast[data-kind=error]')).toBe(false);
+    await waitForTestId('toast-autofetch-retry-btn');
+    expect(await errorToastCount()).toBe(1);
     expect(await isShown('auth-required-dialog')).toBe(false);
     expect(await isEnabled('toolbar-fetch-btn')).toBe(true);
     expect((await autoFetchState()).entries[0]).toMatchObject({ failures: 1, code: 'NETWORK' });
-    await advance(5 * MINUTE + 1000); // one failure: the next try waits one interval
+    // No back-off: the next try is one interval later, and the same streak is not told twice.
+    await advance(5 * MINUTE + 1000);
     await until(() => fetches() === base + 5, { message: 'retry after the first failure not started' });
     await idle();
     expect((await autoFetchState()).entries[0]).toMatchObject({ failures: 2 });
-    await advance(6 * MINUTE); // two failures: ten minutes
-    await idle();
-    expect(fetches()).toBe(base + 5);
+    expect(await errorToastCount()).toBe(1);
 
-    // The server is back: the next try succeeds and the penalty is forgotten.
+    // The server is back: the next try succeeds and the streak is over and its toast goes away.
     git(repo, 'remote', 'set-url', 'origin', url);
-    await advance(5 * MINUTE);
+    await advance(5 * MINUTE + 1000);
     await until(() => fetches() === base + 6, { message: 'fetch after the server came back not started' });
     await idle();
     expect((await autoFetchState()).entries[0]).toMatchObject({ failures: 0, code: null });
-    await waitForGone('toast[data-kind=error]');
+    expect(await errorToastCount()).toBe(0);
 
     // Back to never: another day passes and nothing happens.
     await chooseInterval(0);

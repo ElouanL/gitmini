@@ -1,7 +1,8 @@
 //! Trash of discarded work: the journal behind `discard_list` and `discard_restore`.
 //!
-//! Every command that throws away the content of a worktree file (`discard_paths`, `discard_hunk`, `resolve_paths`, and
-//! `discard_restore` when it overwrites a file) first stores that content as a blob (`write::index::backup_files`). The
+//! Every command that throws away the content of a worktree file (`discard_paths`, `discard_hunk`, `resolve_paths`,
+//! `rebase_skip`, `sequencer_skip`, and `discard_restore` when it overwrites a file) first stores that content as a blob
+//! (`write::index::backup_files`, or `write::index::backup_index_blobs` for content that only the index holds). The
 //! blob is unreachable, so on its own only `git fsck --lost-found` can find it again. This module keeps what is needed to
 //! find it by name: the path, the blob and when it happened, one JSON object per line in
 //! `<git_dir>/gitmini/discarded.jsonl`, oldest first.
@@ -52,6 +53,8 @@ pub enum DiscardSource {
     Resolve,
     /// `discard_restore`: the file a restore overwrote.
     Restore,
+    /// `rebase_skip` / `sequencer_skip`: uncommitted content that skipping the stopped commit throws away.
+    Skip,
 }
 
 /// One file saved before it was thrown away.
@@ -127,9 +130,6 @@ fn retained(entries: Vec<DiscardedFile>, now: i64) -> Vec<DiscardedFile> {
 /// Appends `new` to the journal and drops what is too old or too many. The file is replaced atomically, so a crash
 /// leaves either the old or the new journal.
 fn append(git_dir: &Path, new: Vec<DiscardedFile>, now: i64) -> std::io::Result<()> {
-    let path = journal_path(git_dir);
-    let dir = path.parent().expect("the journal is inside a folder");
-    std::fs::create_dir_all(dir)?;
     let mut all = load(git_dir);
     all.extend(new);
     let mut out = Vec::new();
@@ -137,9 +137,17 @@ fn append(git_dir: &Path, new: Vec<DiscardedFile>, now: i64) -> std::io::Result<
         serde_json::to_writer(&mut out, &entry)?;
         out.push(b'\n');
     }
+    replace(git_dir, &out)
+}
+
+/// Replaces the journal with `out`, atomically.
+fn replace(git_dir: &Path, out: &[u8]) -> std::io::Result<()> {
+    let path = journal_path(git_dir);
+    let dir = path.parent().expect("the journal is inside a folder");
+    std::fs::create_dir_all(dir)?;
     let tmp = dir.join(format!("discarded.jsonl.{}.tmp", std::process::id()));
     let mut file = std::fs::File::create(&tmp)?;
-    file.write_all(&out)?;
+    file.write_all(out)?;
     file.sync_all()?;
     drop(file);
     std::fs::rename(&tmp, &path).inspect_err(|_| {
@@ -147,14 +155,38 @@ fn append(git_dir: &Path, new: Vec<DiscardedFile>, now: i64) -> std::io::Result<
     })
 }
 
-/// Records entries after their blobs were written. Best effort: a journal that cannot be written is logged and
-/// ignored, since the blobs (the safety net itself) exist.
-pub(crate) fn record(repo: &RepoHandle, new: Vec<DiscardedFile>) {
+/// Records entries after their blobs were written, and returns how many of them the journal now lists: at most
+/// [`MAX_ENTRIES`], the last ones of a larger batch. Best effort: a journal that cannot be written is logged and
+/// ignored (0 listed), since the blobs (the safety net itself) exist.
+pub(crate) fn record(repo: &RepoHandle, new: Vec<DiscardedFile>) -> usize {
     if new.is_empty() {
-        return;
+        return 0;
     }
+    let n = new.len().min(MAX_ENTRIES);
     if let Err(e) = append(&repo.git_dir, new, now_secs()) {
         tracing::warn!("discard journal not written: {e}");
+        return 0;
+    }
+    n
+}
+
+/// The journal as it is on disk (`None`: none yet), for [`put_back`].
+pub(crate) fn snapshot(repo: &RepoHandle) -> Option<Vec<u8>> {
+    std::fs::read(journal_path(&repo.git_dir)).ok()
+}
+
+/// Puts the journal back as [`snapshot`] read it: what was recorded since is forgotten, and what it pushed out is
+/// listed again. Best effort, like [`record`].
+pub(crate) fn put_back(repo: &RepoHandle, before: Option<Vec<u8>>) {
+    let res = match before {
+        Some(bytes) => replace(&repo.git_dir, &bytes),
+        None => match std::fs::remove_file(journal_path(&repo.git_dir)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        },
+    };
+    if let Err(e) = res {
+        tracing::warn!("discard journal not put back: {e}");
     }
 }
 
@@ -275,5 +307,18 @@ mod tests {
         assert_eq!(v["kind"], "executable");
         assert_eq!(v["oid"], "a".repeat(40));
         assert!(v.get("time").is_some() && v.get("size").is_some());
+    }
+
+    #[test]
+    fn a_skip_entry_round_trips_through_the_journal() {
+        let dir = tempfile::tempdir().unwrap();
+        let now = now_secs();
+        let e = DiscardedFile {
+            source: DiscardSource::Skip,
+            ..entry(1, 0, now)
+        };
+        assert_eq!(serde_json::to_value(&e).unwrap()["source"], "skip");
+        append(dir.path(), vec![e.clone()], now).unwrap();
+        assert_eq!(load(dir.path()), vec![e]);
     }
 }

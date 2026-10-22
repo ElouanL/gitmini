@@ -4,7 +4,10 @@
   // Right panel of a selected commit (03): header (SHA copyable, author, dates, clickable parents), full message,
   // file list (`commit_details`). Clicking on a file opens `diff_file` in the central view `diff` (component of the
   // domain working tree): `ui.openCenter('diff', { path, source })`. For a merge, `commit-details-parent-select` chooses the parent.
+  // `commit-details-reword-btn` (next to the title) runs the registry action `commit.reword` (domain flows): shown when the
+  // commit can be reworded, disabled with the reason in its tooltip while an operation blocks writes.
   import { untrack } from 'svelte';
+  import { actionContext, actionDisabledReason, getAction, runAction } from '$lib/actions/registry';
   import { copyText } from '$lib/clipboard';
   import { formatDate, shortOid } from '$lib/format';
 
@@ -65,6 +68,16 @@
     ui.openCenter('diff', { path: f.path, source: { kind: 'commit', oid: data.oid, parent: parentN > 1 ? parentN : null } });
   }
 
+  const rewordTarget = $derived(data ? { menu: 'commit' as const, oid: data.oid, oids: [data.oid] } : undefined);
+  /** `null` = enabled, `''` = not applicable to this commit (hidden), otherwise the reason it is disabled. */
+  const rewordOff = $derived.by(() => {
+    // `rewordTarget` read first: a new commit re-reads the registry (not reactive), even if the action was missing before.
+    const target = rewordTarget;
+    const def = getAction('commit.reword');
+    if (!def || !target) return '';
+    return actionDisabledReason(def, actionContext(target));
+  });
+
   const author = $derived(data?.author);
   const committer = $derived(data?.committer);
   const sameSignature = $derived(!!author && !!committer && author.name === committer.name && author.email === committer.email && author.time === committer.time);
@@ -86,7 +99,14 @@
     <div class="state muted" data-testid="commit-details-loading"><Spinner size={14} /> <span>{t('graph.details.loading')}</span></div>
   {:else}
     <header class="head">
-      <h2 class="title" data-testid="commit-details-title">{lines.title || t('graph.details.noMessage')}</h2>
+      <div class="title-row">
+        <h2 class="title" data-testid="commit-details-title">{lines.title || t('graph.details.noMessage')}</h2>
+        {#if rewordOff !== ''}
+          <button type="button" class="icon-btn" data-testid="commit-details-reword-btn" disabled={rewordOff !== null} title={rewordOff ?? t('reword.action')} aria-label={t('reword.action')} onclick={() => void runAction('commit.reword', rewordTarget)}>
+            <Icon name="edit" size={14} />
+          </button>
+        {/if}
+      </div>
       <div class="sha-row">
         <code class="sha" data-testid="commit-details-sha">{data.oid}</code>
         <button type="button" class="icon-btn" data-testid="commit-details-copy-sha-btn" title={t('graph.details.copySha')} aria-label={t('graph.details.copySha')} onclick={() => void copyText(data.oid)}>
@@ -140,7 +160,9 @@
   .panel.loading { opacity: 0.6; }
   .state { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 24px 16px; text-align: center; }
   .head { padding: 12px 12px 8px; border-bottom: 1px solid var(--border); }
-  .title { margin: 0 0 6px; font-size: 14px; line-height: 1.35; word-break: break-word; }
+  .title-row { display: flex; align-items: flex-start; gap: 4px; }
+  .title-row .icon-btn { flex: none; }
+  .title { flex: 1; min-width: 0; margin: 0 0 6px; font-size: 14px; line-height: 1.35; word-break: break-word; }
   .sha-row { display: flex; align-items: center; gap: 4px; margin-bottom: 8px; }
   .sha { font-family: var(--font-mono); font-size: 11px; color: var(--fg-muted); word-break: break-all; }
   .meta { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 0; }
