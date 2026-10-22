@@ -405,8 +405,24 @@ fn block_the_reset(fx: &Fx) {
     fx.write("u.txt", "precious\n");
 }
 
+/// `rebase --skip` refuses to reset over an untracked file since git 2.35; an older git overwrites it, so the test that
+/// relies on the refusal skips there, as the other version-gated tests do.
+fn rebase_skip_refuses_over_untracked() -> bool {
+    let (major, minor, _) = common::git_version();
+    let ok = (major, minor) >= (2, 35);
+    if !ok {
+        eprintln!(
+            "SKIP rebase_skip refusal (git < 2.35): git overwrites the untracked file, test git is {major}.{minor}"
+        );
+    }
+    ok
+}
+
 #[tokio::test]
 async fn rebase_skip_refused_by_git_reports_nothing_and_leaves_the_trash_as_it_was() {
+    if !rebase_skip_refuses_over_untracked() {
+        return;
+    }
     let fx = conflict_with_clean_changes();
     let o = fx.open().await;
     rebase_onto_main(&o).await;

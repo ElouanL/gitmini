@@ -5,13 +5,14 @@
 //! stop nothing is skipped at all, only the edits are. `git cherry-pick|revert --skip` uses `reset --merge`: the
 //! conflicted files and the staged changes are gone, unstaged edits stay, and git refuses when a path has both.
 //!
-//! Only what cannot be rebuilt is saved. The stopped commit's own clean changes are staged by git too, but they are
-//! in the commit (`REBASE_HEAD`, `CHERRY_PICK_HEAD`, the parent of `REVERT_HEAD`), and a staged version equal to HEAD
-//! is in HEAD: neither goes to the trash, so a skip does not push the user's earlier discards out of it. Untracked
-//! files and gitlinks are left alone (git does not touch them), but a file added with `git add -N` is in the index and
-//! `reset --hard` deletes it: it is saved. The trash cannot name a non-UTF-8 path, so a skip that would throw away
-//! such a file's changes is refused before anything is written. The plan is computed under
-//! the write lock, from the index on disk.
+//! Only what cannot be rebuilt is saved. The stopped commit's own clean changes are staged by git too, but they are in
+//! the commit (`REBASE_HEAD`, `CHERRY_PICK_HEAD`, the parent of `REVERT_HEAD`), and a staged version equal to HEAD is
+//! in HEAD: neither goes to the trash, so a skip does not push the user's earlier discards out of it. Untracked files
+//! and gitlinks are left alone (git does not touch them; before 2.35, `rebase --skip` overwrites an untracked file that
+//! is in HEAD instead of refusing, and that file is not saved), but a file added with `git add -N` is in the index and
+//! `reset --hard` deletes it: it is saved. The trash cannot name a non-UTF-8 path, so a skip that would throw away such
+//! a file's changes is refused before anything is written. The plan is computed under the write lock, from the index on
+//! disk.
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
