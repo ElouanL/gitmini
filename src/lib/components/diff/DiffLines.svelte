@@ -19,6 +19,8 @@
     layout: DiffLayout;
     /** `DiffSource.kind`: decides the hunk buttons. */
     sourceKind: string;
+    /** Conflict view in use for a conflict source, otherwise `undefined`: only `markers` tints the sides. */
+    conflictView?: string;
     /** hunk enabled buttons (text, no conflict, no submodule, no UTF-8). */
     canHunk: boolean;
     /** A handwriting is in flight: the buttons are disabled. */
@@ -36,7 +38,7 @@
     resetKey: unknown;
   }
 
-  let { layout, sourceKind, canHunk, locked, focusedHunk, onfocushunk, onhunk, selection, onpick, onlines, onclear, resetKey }: Props = $props();
+  let { layout, sourceKind, conflictView, canHunk, locked, focusedHunk, onfocushunk, onhunk, selection, onpick, onlines, onclear, resetKey }: Props = $props();
 
   let scroller = $state<HTMLDivElement>();
   let scrollTop = $state(0);
@@ -46,6 +48,22 @@
     layout.virtual ? windowFromTops({ tops: layout.tops, scrollTop, viewport }) : { first: 0, end: layout.rows.length },
   );
   const rows = $derived(layout.rows.slice(win.first, win.end));
+  // Side of each row in the markers view: `ours` between `<<<<<<<` and `=======`, `theirs` between `=======` and `>>>>>>>`.
+  const sides = $derived.by(() => {
+    if (sourceKind !== 'conflict' || conflictView !== 'markers') return null;
+    const out: (string | undefined)[] = [];
+    let side: string | undefined;
+    for (const r of layout.rows) {
+      if (r.type !== 'line') {
+        side = undefined;
+        out.push(undefined);
+      } else if (r.marker) {
+        side = r.text.startsWith('<<<<<<<') ? 'ours' : r.text.startsWith('=======') ? 'theirs' : undefined;
+        out.push(undefined);
+      } else out.push(side);
+    }
+    return out;
+  });
   const offset = $derived(layout.virtual && layout.rows.length > 0 ? (layout.tops[win.first] ?? 0) : 0);
 
   // Another file (or another view): back to the top.
@@ -168,6 +186,7 @@
             class:picked={isPicked(row)}
             data-testid="diff-line"
             data-kind={row.kind}
+            data-side={sides?.[win.first + k]}
             data-old-no={row.oldNo ?? undefined}
             data-new-no={row.newNo ?? undefined}
             data-crlf={row.crlf ? 'true' : undefined}
@@ -276,6 +295,12 @@
     background: var(--diff-add-bg);
   }
   .line[data-kind='del'] {
+    background: var(--diff-del-bg);
+  }
+  .line[data-side='ours'] {
+    background: var(--diff-add-bg);
+  }
+  .line[data-side='theirs'] {
     background: var(--diff-del-bg);
   }
   .chg {

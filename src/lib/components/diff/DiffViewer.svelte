@@ -402,6 +402,8 @@
           <button
             type="button"
             class="hbtn"
+            class:ours={s === 'ours'}
+            class:theirs={s === 'theirs'}
             data-testid="diff-conflict-take-{s}-btn"
             data-outcome={sideOutcome(conflictKind, s)}
             title={resolveSideTitle(conflictKind, s, op.state)}
@@ -468,6 +470,7 @@
       bind:this={rows}
       {layout}
       {sourceKind}
+      conflictView={effective.kind === 'conflict' ? view : undefined}
       {canHunk}
       locked={op.busy}
       {focusedHunk}
@@ -561,6 +564,12 @@
     border-radius: var(--radius-sm);
     background: var(--bg);
     font-size: 12px;
+  }
+  .hbtn.ours {
+    background: var(--diff-add-word-bg);
+  }
+  .hbtn.theirs {
+    background: var(--diff-del-word-bg);
   }
   .hbtn:hover:not(:disabled) {
     background: var(--row-hover);
