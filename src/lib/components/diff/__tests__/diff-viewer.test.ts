@@ -435,6 +435,9 @@ describe('conflits (RBC-01, RBC-02)', () => {
     expect(tid('diff-conflict-banner')).toHaveTextContent("File in conflict — resolve it in your editor, then mark it as resolved, or take one side.");
     expect(screen.queryAllByTestId('diff-hunk-stage-btn')).toHaveLength(0);
     expect(tid('diff-viewer')).toHaveAttribute('data-source', 'conflict');
+    expect(lines().map((l) => l.getAttribute('data-side'))).toEqual([null, null, 'ours', null, 'theirs', null]);
+    expect(tid('diff-conflict-take-ours-btn')).toHaveClass('ours');
+    expect(tid('diff-conflict-take-theirs-btn')).toHaveClass('theirs');
   });
 
   it("Marketers tabs / bear / their; change tab charging with the right view", async () => {
